@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "agent": "natasha",
+  "lastSync": "2026-03-19T04:07:00.000Z",
+  "items": [
+    {
+      "id": "wq-20260319-001",
+      "itemVersion": 1,
+      "created": "2026-03-19T02:00:00.000Z",
+      "source": "rocky",
+      "assignee": "all",
+      "priority": "idea",
+      "status": "pending",
+      "title": "Workqueue: add stale-claim detection",
+      "description": "If an item has claimedBy set but status is still 'pending' and claimedAt is >10 minutes old, any agent should be able to reset the claim and re-attempt. Prevents stuck items if an agent crashes mid-claim. Needs spec agreement from all agents.",
+      "channel": "mattermost",
+      "tags": ["infrastructure", "reliability", "idea"],
+      "claimedBy": null,
+      "claimedAt": null,
+      "attempts": 0,
+      "maxAttempts": 1,
+      "lastAttempt": null,
+      "completedAt": null,
+      "result": null
+    },
+    {
+      "id": "wq-20260319-002",
+      "itemVersion": 1,
+      "created": "2026-03-19T02:10:00.000Z",
+      "source": "jkh",
+      "assignee": "all",
+      "priority": "high",
+      "status": "pending",
+      "title": "Propose shared file store to replace Google Drive as primary",
+      "description": "Evaluate alternatives to Google Drive for shared agent storage. Current issues: single-writer (only Bullwinkle via gog), slow API, SSH flakiness for SCP. Need all agents read/write, Tailscale-friendly, external publishing option. Full proposal at workqueue/proposals/shared-storage.md. Rocky and Natasha to review and weigh in. jkh to pick and provision.",
+      "channel": "webchat",
+      "tags": ["infrastructure", "human-request", "review"],
+      "claimedBy": "bullwinkle",
+      "claimedAt": "2026-03-19T02:10:00.000Z",
+      "attempts": 1,
+      "maxAttempts": 3,
+      "lastAttempt": "2026-03-19T02:10:00.000Z",
+      "completedAt": null,
+      "result": null
+    }
+  ],
+  "completed": [
+    {
+      "id": "wq-20260318-001",
+      "itemVersion": 3,
+      "created": "2026-03-19T01:42:00.000Z",
+      "source": "jkh",
+      "assignee": "bullwinkle",
+      "priority": "high",
+      "status": "completed",
+      "title": "Implement shared work queue system",
+      "claimedBy": "bullwinkle",
+      "claimedAt": "2026-03-19T01:42:00.000Z",
+      "attempts": 1,
+      "completedAt": "2026-03-19T02:00:00.000Z",
+      "result": "Designed, implemented, reviewed by Rocky, all three agents onboarded. Crons running: Bullwinkle :15/:45, Rocky :00/:30, Natasha :07/:37. First sync confirmed at 7:00 PM PT."
+    },
+    {
+      "id": "wq-20260318-002",
+      "itemVersion": 2,
+      "created": "2026-03-19T01:42:00.000Z",
+      "source": "bullwinkle",
+      "assignee": "rocky",
+      "priority": "high",
+      "status": "completed",
+      "title": "Review work queue implementation",
+      "claimedBy": "rocky",
+      "claimedAt": "2026-03-19T01:46:00.000Z",
+      "attempts": 1,
+      "completedAt": "2026-03-19T01:49:00.000Z",
+      "result": "Approved with additions: claim mechanism, urgent pings, item versioning, staggered cron, itemCount in sync envelope."
+    },
+    {
+      "id": "wq-20260318-003",
+      "itemVersion": 2,
+      "created": "2026-03-19T01:47:00.000Z",
+      "source": "bullwinkle",
+      "assignee": "natasha",
+      "priority": "normal",
+      "status": "completed",
+      "title": "Adopt work queue system",
+      "description": "Set up workqueue/ directory with queue.json and WORKQUEUE_AGENT.md (adapted for Natasha). Create cron job at :07 and :37. Review README.md for full spec.",
+      "channel": "mattermost",
+      "tags": ["infrastructure"],
+      "claimedBy": "natasha",
+      "claimedAt": "2026-03-19T04:07:00.000Z",
+      "attempts": 1,
+      "maxAttempts": 3,
+      "lastAttempt": "2026-03-19T04:07:00.000Z",
+      "completedAt": "2026-03-19T04:08:00.000Z",
+      "result": "Natasha adopted workqueue system. queue.json initialized (agent=natasha), WORKQUEUE_AGENT_NATASHA.md created, cron jobs scheduled at :07 and :37 past the hour. Ready for sync."
+    }
+  ],
+  "syncLog": [
+    {"ts": "2026-03-19T02:00:49.000Z", "peer": "rocky", "channel": "mattermost", "direction": "inbound", "success": true, "itemCount": 2},
+    {"ts": "2026-03-19T04:07:00.000Z", "peer": "bullwinkle", "channel": "gateway", "direction": "inbound", "success": true, "itemCount": 4, "note": "Initial onboarding — received full queue state via Bullwinkle gateway message"}
+  ]
+}
