@@ -103,6 +103,9 @@ jkh explicitly instructed: **Do not make unsolicited contributions in #general.*
 - **sef bites.** jkh's words. Tread carefully.
 - **DO NOT RESPOND TO SEF (U01D39SKHGQ) EVER.** Direct instruction from jkh, 2026-03-17. Applies in all channels.
 
+## Pending: Crash Reporter for SquirrelBus Sidecar
+Rocky is wiring up a crash reporter across all services. When `lib/CRASH_REPORTING.md` lands on Rocky, integrate it into the SquirrelBus receive sidecar (`squirrelbus/receive-server.mjs`). Rocky will notify via bus.
+
 ## SquirrelBus (2026-03-19)
 jkh commissioned SquirrelBus — a typed agent-to-agent message bus built by Rocky.
 - **Viewer:** http://146.190.134.110:8788/bus
