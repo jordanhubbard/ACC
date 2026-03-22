@@ -10,6 +10,8 @@ BOOTSTRAP.md
 openclaw.json
 *.env
 .env.*
+.env
+rcc/api/agents.json
 
 # Queue state (runtime data, not source)
 workqueue/queue.json
