@@ -208,8 +208,17 @@ async function handleRequest(req, res) {
         return (b.assignee && b.assignee !== 'all') ? 'claude_cli' : 'inference_key';
       };
 
+      // Prevent ID collisions — if a caller supplies an ID that already exists
+      // (in either active items or completed), generate a fresh one instead.
+      const allIds = new Set([...(q.items||[]), ...(q.completed||[])].map(i => i.id));
+      let itemId = body.id || `wq-API-${Date.now()}`;
+      if (body.id && allIds.has(body.id)) {
+        itemId = `wq-API-${Date.now()}`;
+        console.warn(`[rcc-api] ID collision on "${body.id}" — reassigned to "${itemId}"`);
+      }
+
       const item = {
-        id: body.id || `wq-API-${Date.now()}`,
+        id: itemId,
         itemVersion: 1,
         created: new Date().toISOString(),
         source: body.source || 'api',
