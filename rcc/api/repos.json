@@ -8,12 +8,20 @@
     "ownership": {
       "model": "sole",
       "owner": "jkh",
-      "contributors": ["jordanhubbard"],
+      "contributors": [
+        "jordanhubbard"
+      ],
       "slack_channel": null,
       "triaging_agent": "rocky"
     },
     "issue_tracker": "github",
-    "scouts": ["issues", "prs", "ci", "deps", "analysis"],
+    "scouts": [
+      "issues",
+      "prs",
+      "ci",
+      "deps",
+      "analysis"
+    ],
     "enabled": true,
     "registeredAt": "2026-03-22T04:08:30.072Z",
     "notes": "Rocky's own workspace. Rocky is de-facto maintainer."
@@ -27,12 +35,24 @@
     "ownership": {
       "model": "sole",
       "owner": "jkh",
-      "contributors": ["jordanhubbard", "Copilot", "pgollucci", "mbrukman", "popey"],
+      "contributors": [
+        "jordanhubbard",
+        "Copilot",
+        "pgollucci",
+        "mbrukman",
+        "popey"
+      ],
       "slack_channel": null,
       "triaging_agent": "rocky"
     },
     "issue_tracker": "github",
-    "scouts": ["issues", "prs", "ci", "deps", "analysis"],
+    "scouts": [
+      "issues",
+      "prs",
+      "ci",
+      "deps",
+      "analysis"
+    ],
     "enabled": true,
     "registeredAt": "2026-03-22T04:08:30.263Z",
     "notes": "jkh personal project. Loom has its own internal agent org — agents work beads inside Loom, RCC scouts CI/deps/PRs from outside."
@@ -46,12 +66,20 @@
     "ownership": {
       "model": "sole",
       "owner": "jkh",
-      "contributors": ["jordanhubbard"],
+      "contributors": [
+        "jordanhubbard"
+      ],
       "slack_channel": null,
       "triaging_agent": "rocky"
     },
     "issue_tracker": "github",
-    "scouts": ["issues", "prs", "ci", "deps", "analysis"],
+    "scouts": [
+      "issues",
+      "prs",
+      "ci",
+      "deps",
+      "analysis"
+    ],
     "enabled": true,
     "registeredAt": "2026-03-22T04:08:30.595Z",
     "notes": "jkh personal project. Public repo. Natasha has wq item for AI sidebar (webmux #9)."
@@ -65,12 +93,20 @@
     "ownership": {
       "model": "sole",
       "owner": "jkh",
-      "contributors": ["jordanhubbard"],
+      "contributors": [
+        "jordanhubbard"
+      ],
       "slack_channel": null,
       "triaging_agent": "rocky"
     },
     "issue_tracker": "github",
-    "scouts": ["issues", "prs", "ci", "deps", "analysis"],
+    "scouts": [
+      "issues",
+      "prs",
+      "ci",
+      "deps",
+      "analysis"
+    ],
     "enabled": true,
     "registeredAt": "2026-03-22T04:08:31.015Z",
     "notes": "jkh personal project. CI fixed 2026-03-22 (tsconfig test exclusions). Dependabot PRs merged. AI explanation layer filed as issue #176."
@@ -85,23 +121,62 @@
       "model": "team",
       "owner": null,
       "contributors": [
-        { "github": "jordanhubbard",  "commits": 2698, "role": "lead" },
-        { "github": "weitchen-nv",    "commits": 681,  "role": "contributor" },
-        { "github": "huaying",        "commits": 277,  "role": "contributor" },
-        { "github": "NVShawn",        "commits": 122,  "role": "contributor" },
-        { "github": "vpogu-nvidia",   "commits": 17,   "role": "contributor" },
-        { "github": "jasongorski",    "commits": 3,    "role": "contributor" },
-        { "github": "JasonGreenNV",   "commits": 1,    "role": "contributor" },
-        { "github": "nv-wwei",        "commits": 1,    "role": "contributor" }
+        {
+          "github": "jordanhubbard",
+          "commits": 2698,
+          "role": "lead"
+        },
+        {
+          "github": "weitchen-nv",
+          "commits": 681,
+          "role": "contributor"
+        },
+        {
+          "github": "huaying",
+          "commits": 277,
+          "role": "contributor"
+        },
+        {
+          "github": "NVShawn",
+          "commits": 122,
+          "role": "contributor"
+        },
+        {
+          "github": "vpogu-nvidia",
+          "commits": 17,
+          "role": "contributor"
+        },
+        {
+          "github": "jasongorski",
+          "commits": 3,
+          "role": "contributor"
+        },
+        {
+          "github": "JasonGreenNV",
+          "commits": 1,
+          "role": "contributor"
+        },
+        {
+          "github": "nv-wwei",
+          "commits": 1,
+          "role": "contributor"
+        }
       ],
       "slack_channel": null,
       "triaging_agent": "rocky"
     },
-    "issue_tracker": "beads",
+    "issue_tracker": "github",
     "issue_tracker_url": "beads.horde.nvidia.com",
-    "scouts": ["ci", "deps"],
+    "scouts": [
+      "issues",
+      "prs",
+      "ci",
+      "deps",
+      "analysis"
+    ],
     "enabled": true,
     "registeredAt": "2026-03-22T06:13:32.264Z",
-    "notes": "NVIDIA team project. Issue tracking via internal beads server — GitHub issues are empty. Scout CI+deps only. NemoClaw integration target: HORDE provisions agent environments. Slack: need to identify channel — contributors are likely in omgjkh.slack.com."
+    "notes": "HORDE 4.0 — NVIDIA multi-cloud GPU/compute orchestration. Python/FastAPI/Temporal/React. 32MB. MOVED TO GITHUB ISSUES 2026-03-20 — was beads-only before that, expect issue volume to ramp. NemoClaw integration target.",
+    "updatedAt": "2026-03-22T06:19:10.537Z"
   }
 ]
