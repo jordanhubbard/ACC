@@ -351,6 +351,12 @@ async function handleRequest(req, res) {
         if (!item.journal) item.journal = [];
         item.journal.push({ ts: now, author: body._author || 'api', type: 'status-change', text: `Updated: ${changed.join('; ')}` });
         item.itemVersion = (item.itemVersion || 0) + 1;
+        // Auto-archive: move completed/cancelled items from items[] to completed[]
+        if (item.status === 'completed' || item.status === 'cancelled') {
+          q.items = q.items.filter(i => i.id !== item.id);
+          if (!q.completed) q.completed = [];
+          q.completed.push(item);
+        }
         await writeQueue(q);
       }
       return json(res, 200, { ok: true, item });
