@@ -54,5 +54,16 @@
     "enabled": true,
     "registeredAt": "2026-03-22T04:08:31.015Z",
     "notes": ""
+  },
+  {
+    "full_name": "NVIDIA-dev/horde",
+    "platform": "github",
+    "scouts": [
+      "ci",
+      "deps"
+    ],
+    "enabled": true,
+    "registeredAt": "2026-03-22T06:13:32.264Z",
+    "notes": "HORDE 4.0 — Hosted Remote Development Environments. NVIDIA internal multi-cloud GPU/compute orchestration. Python/Temporal/FastAPI/React. Issue tracking: internal beads at beads.horde.nvidia.com (not GitHub issues). Scout: CI+deps only (issues are in beads). NemoClaw integration target. preferred_executor: claude_cli. Size: 32MB."
   }
 ]
