@@ -23,6 +23,17 @@ const REPOS_PATH   = process.env.REPOS_PATH  || './repos.json';
 const AUTH_TOKENS  = new Set((process.env.RCC_AUTH_TOKENS || '').split(',').map(t => t.trim()).filter(Boolean));
 const START_TIME   = Date.now();
 
+// ── Stale claim thresholds (ms) by executor type ───────────────────────────
+// claude_cli: real coding agents, can run 60-90min on complex tasks
+// gpu: render jobs, can run hours
+// inference_key: fast LLM calls, should finish in minutes
+const STALE_THRESHOLDS = {
+  claude_cli:    parseInt(process.env.STALE_CLAUDE_MS    || String(120 * 60 * 1000), 10), // 2h
+  gpu:           parseInt(process.env.STALE_GPU_MS       || String(6  * 60 * 60 * 1000), 10), // 6h
+  inference_key: parseInt(process.env.STALE_INFERENCE_MS || String(30 * 60 * 1000), 10), // 30min
+  default:       parseInt(process.env.STALE_DEFAULT_MS   || String(60 * 60 * 1000), 10), // 1h
+};
+
 // ── In-memory heartbeats ───────────────────────────────────────────────────
 const heartbeats = {};
 
@@ -225,6 +236,50 @@ async function handleRequest(req, res) {
       q.items.push(item);
       await writeQueue(q);
       return json(res, 201, { ok: true, item });
+    }
+
+    // ── GET /api/queue/stale — list stale claims ──────────────────────────
+    if (method === 'GET' && path === '/api/queue/stale') {
+      const q = await readQueue();
+      const now = Date.now();
+      const stale = (q.items || []).filter(item => {
+        if (item.status !== 'in-progress' || !item.claimedAt) return false;
+        const threshold = STALE_THRESHOLDS[item.preferred_executor] || STALE_THRESHOLDS.default;
+        return (now - new Date(item.claimedAt).getTime()) > threshold;
+      }).map(item => {
+        const threshold = STALE_THRESHOLDS[item.preferred_executor] || STALE_THRESHOLDS.default;
+        const age = now - new Date(item.claimedAt).getTime();
+        return { ...item, staleMs: age, thresholdMs: threshold, staleMin: Math.round(age / 60000) };
+      });
+      return json(res, 200, { stale, count: stale.length, thresholds: STALE_THRESHOLDS });
+    }
+
+    // ── POST /api/queue/expire-stale — server-side stale reset ───────────
+    if (method === 'POST' && path === '/api/queue/expire-stale') {
+      const q = await readQueue();
+      const now = Date.now();
+      let reset = 0;
+      for (const item of (q.items || [])) {
+        if (item.status !== 'in-progress' || !item.claimedAt) continue;
+        const threshold = STALE_THRESHOLDS[item.preferred_executor] || STALE_THRESHOLDS.default;
+        if ((now - new Date(item.claimedAt).getTime()) > threshold) {
+          const prevAgent = item.claimedBy;
+          item.status = 'pending';
+          item.claimedBy = null;
+          item.claimedAt = null;
+          item.attempts = (item.attempts || 0) + 1;
+          if (!item.journal) item.journal = [];
+          item.journal.push({
+            ts: new Date().toISOString(),
+            author: 'rcc-api',
+            type: 'stale-reset',
+            text: `Stale claim reset (was ${prevAgent}, threshold: ${threshold/60000}min for ${item.preferred_executor || 'default'})`,
+          });
+          reset++;
+        }
+      }
+      if (reset > 0) await writeQueue(q);
+      return json(res, 200, { ok: true, reset });
     }
 
     // ── PATCH /api/item/:id ───────────────────────────────────────────────
