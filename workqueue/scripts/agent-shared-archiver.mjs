@@ -23,7 +23,7 @@ const MINIO_ALIAS = 'do-host1';
 const SHARED_PREFIX = `${MINIO_ALIAS}/agents/shared`;
 
 const MM_SERVER = 'https://chat.yourmom.photos';
-const MM_TOKEN  = 'ROCKY_MM_TOKEN_REMOVED';
+const MM_TOKEN  = process.env.MATTERMOST_TOKEN || '';
 const CHANNEL_ID = 'sjkptm1ot3naijobynuqdcexyh';
 const PER_PAGE = 100;
 

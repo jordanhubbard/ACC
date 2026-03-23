@@ -26,17 +26,17 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 const REPOS_PATH = process.env.REPOS_PATH || resolve(__dir, '../api/repos.json');
 const RCC_API    = process.env.RCC_API    || 'http://localhost:8789';
 const RCC_TOKEN  = process.env.RCC_TOKEN  || 'RCC_AUTH_TOKEN_REMOVED';
-const RCC_PUBLIC = process.env.RCC_PUBLIC || 'http://YOUR_PUBLIC_IP:8789';
+const RCC_PUBLIC = process.env.RCC_PUBLIC || 'http://YOUR_PUBLIC_IP:8788';
 
 // Slack tokens per workspace
 const SLACK_TOKENS = {
   offtera: {
-    bot:  process.env.OFFTERA_BOT  || 'OFFTERA_BOT_TOKEN_REMOVED',
+    bot:  process.env.OFFTERA_BOT  || '',
     team: 'THJ9A47K3',
     url:  'https://offtera.slack.com',
   },
   omgjkh: {
-    bot:  process.env.OMGJKH_BOT   || 'OMGJKH_BOT_TOKEN_REMOVED',
+    bot:  process.env.OMGJKH_BOT   || '',
     team: 'TE0V8MBEJ',
     url:  'https://omgjkh.slack.com',
   },
