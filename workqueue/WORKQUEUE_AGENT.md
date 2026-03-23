@@ -40,7 +40,7 @@ Try channels in this order (stop at first success for each peer):
 
 ### Natasha
 1. **Mattermost DM** — send to `user:k8qtua6dbjfmfjk76o9bgaepua` (channel=mattermost)
-2. **Peer-to-peer** — `POST https://sparky.tail407856.ts.net/v1/chat/completions` (auth: `Bearer $NATASHA_TOKEN`)
+2. **Peer-to-peer** — `POST $PEER_GATEWAY_URL/v1/chat/completions` (auth: `Bearer $PEER_TOKEN`)
 
 ### Sync Message Format
 

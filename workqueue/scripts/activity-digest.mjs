@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-const MINIO_PATH = 'do-host1/agents/shared/agent-activity-digest.jsonl';
+const MINIO_PATH = (process.env.MINIO_ALIAS || 'local') + '/agents/shared/agent-activity-digest.jsonl';
 const LOCAL_TMP = join(tmpdir(), 'agent-activity-digest.jsonl');
 const AGENT_NAME = process.env.AGENT_NAME || 'rocky';
 

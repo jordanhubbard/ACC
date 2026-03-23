@@ -20,7 +20,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKSPACE   = join(__dirname, '../../');
 const ALERTS_FILE = join(WORKSPACE, 'workqueue/alerts.jsonl');
 const MC          = process.env.MC_BIN || '/home/jkh/.local/bin/mc';
-const MINIO_ALIAS = 'do-host1';
+const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
 const SHARED_PATH = `${MINIO_ALIAS}/agents/shared`;
 
 const SILENCE_THRESHOLD_MS = 35 * 60 * 1000; // 35 minutes

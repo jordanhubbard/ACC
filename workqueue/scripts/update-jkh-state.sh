@@ -15,7 +15,7 @@
 set -e
 
 MC=/home/jkh/.local/bin/mc
-ALIAS="do-host1"
+ALIAS="${MINIO_ALIAS:-local}"
 BUCKET="agents/shared/jkh-state.json"
 TMPFILE=$(mktemp /tmp/jkh-state-XXXXXX.json)
 AGENT="${JKH_STATE_AGENT:-rocky}"

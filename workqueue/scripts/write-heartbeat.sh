@@ -22,7 +22,7 @@ cat > /tmp/rocky-heartbeat.json << JSON
   "agent": "rocky",
   "ts": "$TS",
   "status": "online",
-  "host": "do-host1",
+  "host": "${AGENT_HOST:-localhost}",
   "queue_depth": $PENDING,
   "last_error": null,
   "services": {
@@ -31,12 +31,12 @@ cat > /tmp/rocky-heartbeat.json << JSON
   }
 }
 JSON
-$MC cp /tmp/rocky-heartbeat.json do-host1/agents/shared/agent-heartbeat-rocky.json 2>/dev/null
+$MC cp /tmp/rocky-heartbeat.json ${MINIO_ALIAS:-local}/agents/shared/agent-heartbeat-${AGENT_NAME:-agent}.json 2>/dev/null
 
 # Read all heartbeats from MinIO
 ROCKY=$(cat /tmp/rocky-heartbeat.json)
-NATASHA=$($MC cat do-host1/agents/shared/agent-heartbeat-natasha.json 2>/dev/null || echo "null")
-BULLWINKLE=$($MC cat do-host1/agents/shared/agent-heartbeat-bullwinkle.json 2>/dev/null || echo "null")
+NATASHA=$($MC cat ${MINIO_ALIAS:-local}/agents/shared/agent-heartbeat-natasha.json 2>/dev/null || echo "null")
+BULLWINKLE=$($MC cat ${MINIO_ALIAS:-local}/agents/shared/agent-heartbeat-bullwinkle.json 2>/dev/null || echo "null")
 
 # Regenerate dashboard HTML with embedded data
 QUEUE=$(cat "$QUEUE_FILE" 2>/dev/null || echo "null")

@@ -26,7 +26,7 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 const REPOS_PATH = process.env.REPOS_PATH || resolve(__dir, '../api/repos.json');
 const RCC_API    = process.env.RCC_API    || 'http://localhost:8789';
 const RCC_TOKEN  = process.env.RCC_TOKEN  || 'RCC_AUTH_TOKEN_REMOVED';
-const RCC_PUBLIC = process.env.RCC_PUBLIC || 'http://146.190.134.110:8788';
+const RCC_PUBLIC = process.env.RCC_PUBLIC || 'http://localhost:8788';
 
 // Slack tokens per workspace
 const SLACK_TOKENS = {

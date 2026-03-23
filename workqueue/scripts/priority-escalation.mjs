@@ -19,7 +19,7 @@ const WORKSPACE = process.env.WORKSPACE || '/home/jkh/.openclaw/workspace';
 const QUEUE_FILE = path.join(WORKSPACE, 'workqueue', 'queue.json');
 const DRY_RUN = process.argv.includes('--dry-run');
 const MC = process.env.MC_BIN || '/home/jkh/.local/bin/mc';
-const MINIO_ALIAS = 'do-host1';
+const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
 
 const PRIORITY_LADDER = ['idea', 'low', 'normal', 'high', 'urgent'];
 

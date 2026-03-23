@@ -12,7 +12,7 @@ import { promisify } from 'util';
 const execFileP = promisify(execFile);
 
 const MC_PATH     = process.env.MC_PATH     || '/home/jkh/.local/bin/mc';
-const MINIO_ALIAS = process.env.MINIO_ALIAS || 'do-host1';
+const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
 const QUEUE_PATH  = process.env.QUEUE_PATH  || '/home/jkh/.openclaw/workspace/workqueue/queue.json';
 
 const AGENTS = [

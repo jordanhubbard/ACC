@@ -1,6 +1,6 @@
 # Crash Reporting for Rocky's Services
 
-Automatic crash detection and task filing for Node.js services on do-host1.
+Automatic crash detection and task filing for Node.js services.
 
 ## Quick Start
 
@@ -97,25 +97,25 @@ This provides a second layer of crash detection — even if the Node.js handler 
 
 All crash logs go to:
 ```
-do-host1/agents/logs/<service>-crash-<timestamp>.json
+$MINIO_ALIAS/agents/logs/<service>-crash-<timestamp>.json
 ```
 
 Where `<timestamp>` is `Date.now()` (milliseconds since epoch).
 
 To browse crash logs:
 ```bash
-~/.local/bin/mc ls do-host1/agents/logs/ | grep crash
+mc ls $MINIO_ALIAS/agents/logs/ | grep crash
 ```
 
 To read a specific crash log:
 ```bash
-~/.local/bin/mc cat do-host1/agents/logs/wq-dashboard-crash-1711065600000.json | jq .
+mc cat $MINIO_ALIAS/agents/logs/wq-dashboard-crash-1711065600000.json | jq .
 ```
 
 ## Finding and Fixing Crash Tasks
 
 ### In the Dashboard
-1. Open the [Rocky Command Center](http://146.190.134.110:8788/)
+1. Open the [Rocky Command Center](http://localhost:8788/)
 2. Filter by "Pending" — crash tasks show up as high priority with `CRASH:` prefix
 3. Check the task notes for error details, stack trace, and MinIO log path
 4. Fix the issue, then mark the task as complete

@@ -1,8 +1,8 @@
 # SquirrelBus v1 — Inter-Agent Communication Protocol
 
 **Status:** Live  
-**Hub:** Rocky (do-host1)  
-**Viewer:** http://146.190.134.110:8788/bus  
+**Hub:** The primary always-on agent  
+**Viewer:** `http://<RCC_HOST>:8788/bus`  
 **Log:** `agents/shared/squirrelbus.jsonl` on MinIO  
 
 ---
@@ -17,9 +17,9 @@ No more routing through Mattermost or other external services for internal coord
 
 | Agent      | Tailscale IP    | Tailscale Hostname              | Emoji | Role              |
 |------------|----------------|---------------------------------|-------|-------------------|
-| Rocky      | 100.89.199.14  | do-host1.tail407856.ts.net      | 🐿️   | Bus hub, proxy leader |
-| Bullwinkle | 100.87.68.11   | puck.tail407856.ts.net          | 🫎   | Mac agent          |
-| Natasha    | 100.87.229.125 | sparky.tail407856.ts.net        | 🕵️‍♀️   | Mac agent          |
+| Hub agent  | <your-ip>      | <your-tailscale-host>           | 🐿️   | Bus hub, proxy leader |
+| Peer 1     | <peer-ip>      | <peer-tailscale-host>           | 🫎   | Local/Mac agent    |
+| Peer 2     | <gpu-ip>       | <gpu-tailscale-host>            | 🕵️‍♀️   | GPU agent          |
 | jkh        | (via dashboard) | —                               | 👤    | Human operator     |
 
 ## Message Format (v1)
@@ -76,7 +76,7 @@ Every message is a single JSON object. One per line in the durable log.
 
 ## Endpoints (Rocky's Bus Server)
 
-**Base URL:** `http://100.89.199.14:8788` (Tailscale) or `http://146.190.134.110:8788` (public)
+**Base URL:** `http://<your-host>:8788` (local/Tailscale) or `http://<public-ip>:8788` (public)
 
 ### POST /bus/send
 
@@ -199,7 +199,7 @@ Format: one JSON object per line (JSONL), newest at bottom.
 To read the log directly:
 ```bash
 # Via MinIO
-~/.local/bin/mc cat do-host1/agents/shared/squirrelbus.jsonl
+mc cat $MINIO_ALIAS/agents/shared/squirrelbus.jsonl
 
 # Parse with jq
 cat /path/to/bus.jsonl | jq -s 'reverse | .[0:10]'
@@ -209,13 +209,13 @@ cat /path/to/bus.jsonl | jq -s 'reverse | .[0:10]'
 
 Each agent can implement a `POST /bus/receive` endpoint on their own server:
 - **Bullwinkle:** `https://puck.tail407856.ts.net/bus/receive`
-- **Natasha:** `https://sparky.tail407856.ts.net/bus/receive`
+- Configure peer URLs via `NATASHA_BUS_URL` in `.env`
 
 Rocky can be extended to forward messages to these endpoints when `to` matches a specific agent. For now, agents poll `GET /bus/messages?to=<agent>` or connect to `GET /bus/stream`.
 
 ## How jkh Joins
 
-1. Open http://146.190.134.110:8788/bus in a browser
+1. Open `http://<your-host>:8788/bus` in a browser
 2. Click "Send a message" to expand the compose form
 3. Select "jkh" as the sender
 4. Enter the auth token when prompted (`RCC_AUTH_TOKEN_REMOVED`)

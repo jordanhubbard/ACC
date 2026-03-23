@@ -27,13 +27,13 @@ const PORT = 8788;
 const AUTH_TOKEN = 'RCC_AUTH_TOKEN_REMOVED';
 const QUEUE_PATH = '/home/jkh/.openclaw/workspace/workqueue/queue.json';
 const MC_PATH = '/home/jkh/.local/bin/mc';
-const MINIO_ALIAS = 'do-host1';
+const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
 const BUS_LOG_PATH = '/home/jkh/.openclaw/workspace/squirrelbus/bus.jsonl';
 
 // ── SquirrelBus peer fan-out registry ─────────────────────────────────────────
 const BUS_PEERS = {
-  bullwinkle: 'http://100.87.68.11:18789/squirrelbus/receive',
-  natasha:    'https://sparky.tail407856.ts.net/bus/receive',
+  bullwinkle: process.env.BULLWINKLE_BUS_URL || '',
+  natasha:    process.env.NATASHA_BUS_URL    || '',
 };
 const BULLWINKLE_TOKEN = process.env.BULLWINKLE_TOKEN || 'SQUIRRELBUS_TOKEN_REMOVED';
 const NATASHA_TOKEN    = process.env.NATASHA_TOKEN    || 'RCC_AUTH_TOKEN_REMOVED';

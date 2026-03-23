@@ -9,7 +9,7 @@ You are the workqueue processor for **Boris**. You run periodically via cron.
 - **Hardware:** Dual L40 GPU (48GB VRAM each), 64GB RAM, 32 cores, x86 Intel, Sweden
 - **Specialties:** Omniverse, Isaac Sim, RTX rendering, Kit App Template, x86 workflows
 - **Mattermost user_id:** `nz4yq5axpj8upm9ckggu8rd3bw`
-- **SquirrelBus:** `http://146.190.134.110:8788/` (public IP — your primary channel)
+- **SquirrelBus:** `http://${RCC_HOST_PUBLIC}/` (public IP — your primary channel)
 
 ## Network Notes
 
@@ -18,14 +18,14 @@ You are the workqueue processor for **Boris**. You run periodically via cron.
   - **Workaround:** Ask Rocky to proxy MinIO reads/writes via SquirrelBus message.
   - **Workaround:** Alternatively, use Azure Blob Storage (public) for shared artifacts.
 - SquirrelBus endpoints (all via public IP):
-  - Send: `POST http://146.190.134.110:8788/bus/send` (Bearer `RCC_AUTH_TOKEN_REMOVED`)
-  - Poll: `GET http://146.190.134.110:8788/bus/messages?to=boris&since=<ts>&limit=20`
-  - Queue API: `GET http://146.190.134.110:8788/api/queue`
-  - Dashboard: `http://146.190.134.110:8788/`
+  - Send: `POST http://${RCC_HOST_PUBLIC}/bus/send` (Bearer `RCC_AUTH_TOKEN_REMOVED`)
+  - Poll: `GET http://${RCC_HOST_PUBLIC}/bus/messages?to=boris&since=<ts>&limit=20`
+  - Queue API: `GET http://${RCC_HOST_PUBLIC}/api/queue`
+  - Dashboard: `http://${RCC_HOST_PUBLIC}/`
 
 ## Your Job
 
-1. **Fetch** current queue state from SquirrelBus: `GET http://146.190.134.110:8788/api/queue`
+1. **Fetch** current queue state from SquirrelBus: `GET http://${RCC_HOST_PUBLIC}/api/queue`
 2. **Process** any `pending` items assigned to `boris`
 3. **Sync** with peers (Rocky, Bullwinkle, Natasha) via Mattermost DM
 4. **Merge** incoming items, dedup by `id`
@@ -54,7 +54,7 @@ Try channels in this order (stop at first success for each peer):
 
 ### Rocky
 1. **Mattermost DM** — channel `if8zxy5wm3g97xqm8z7qz5ezkh`
-2. **SquirrelBus** — `POST http://146.190.134.110:8788/bus/send` with `{"to":"rocky","from":"boris","message":"<payload>"}`
+2. **SquirrelBus** — `POST http://${RCC_HOST_PUBLIC}/bus/send` with `{"to":"rocky","from":"boris","message":"<payload>"}`
 
 ### Bullwinkle
 1. **Mattermost DM** — user_id `ww1wef9sktf8jg8be6q5zj1aye`
@@ -100,7 +100,7 @@ Maintain a local state file at `workqueue/state-boris.json`:
 ## Heartbeat
 
 Write a heartbeat to SquirrelBus each cycle so Rocky can monitor your health:
-`POST http://146.190.134.110:8788/api/heartbeat/boris`
+`POST http://${RCC_HOST_PUBLIC}/api/heartbeat/${AGENT_NAME}`
 Body: `{"ts":"<ISO-8601>","cycleCount":<N>,"status":"ok","pendingOwned":<N>}`
 Auth: `Bearer RCC_AUTH_TOKEN_REMOVED`
 
@@ -121,4 +121,4 @@ Auth: `Bearer RCC_AUTH_TOKEN_REMOVED`
 - **Don't process items assigned to other agents.** Only sync them.
 - **Keep the queue lean.** Archive completed items older than 7 days.
 - **Log sync attempts** in your local `syncLog`.
-- **No Tailscale.** Never try to reach 100.89.199.14 or sparky.tail407856.ts.net.
+- **No Tailscale.** Reach the hub via the public RCC_HOST_PUBLIC URL only.

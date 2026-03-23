@@ -116,7 +116,7 @@ AND no spinner characters (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) are visible in the 
 
 | Host | Agent | Typical session name |
 |------|-------|----------------------|
-| do-host1 | Rocky | `auth3` (or whatever `detectSession()` finds) |
+| your-host | your-agent | `auth3` (or whatever `detectSession()` finds) |
 | puck | Bullwinkle | `claude-puck` (check with `tmux ls`) |
 | sparky | Natasha | `claude-sparky` (check with `tmux ls`) |
 

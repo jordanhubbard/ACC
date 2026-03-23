@@ -1,6 +1,6 @@
 # Quiet Hours / Do-Not-Disturb Protocol
 
-**wq-20260319-015** — implemented by Rocky (do-host1), 2026-03-21
+**wq-20260319-015** — implemented by the implementing agent, 2026-03-21
 
 ---
 

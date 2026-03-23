@@ -54,3 +54,18 @@ scratch/
 # OS
 .DS_Store
 Thumbs.db
+
+# Personal identity/config files (machine-specific)
+IDENTITY.md
+TOOLS.md
+deck_review_rocky.md
+
+# Work results (historical output, not source)
+workqueue/results/
+
+# Historical proposals (internal design docs)
+workqueue/proposals/
+
+# Internal session files
+suraj_songs.txt
+grievances/

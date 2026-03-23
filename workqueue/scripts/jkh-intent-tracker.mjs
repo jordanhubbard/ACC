@@ -31,7 +31,7 @@ import crypto from 'crypto';
 const __dir        = dirname(fileURLToPath(import.meta.url));
 const QUEUE_PATH   = resolve(__dir, '../queue.json');
 const LOCAL_CACHE  = resolve(__dir, '../jkh-intents-cache.json');
-const MINIO_PATH   = 'do-host1/agents/shared/jkh-intents.json';
+const MINIO_PATH   = (process.env.MINIO_ALIAS || 'local') + '/agents/shared/jkh-intents.json';
 const AGENT_NAME   = process.env.AGENT_NAME || 'rocky';
 
 // ── MinIO helpers ──────────────────────────────────────────────────────────────

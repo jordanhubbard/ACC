@@ -10,7 +10,7 @@
 SERVICE="${1:-unknown}"
 TS=$(date +%s%3N)
 MC="/home/jkh/.local/bin/mc"
-MINIO_ALIAS="do-host1"
+MINIO_ALIAS="${MINIO_ALIAS:-local}"
 QUEUE_PATH="/home/jkh/.openclaw/workspace/workqueue/queue.json"
 DASHBOARD_URL="http://localhost:8788/api/crash-report"
 AUTH_TOKEN="RCC_AUTH_TOKEN_REMOVED"

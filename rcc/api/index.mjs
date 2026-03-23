@@ -21,7 +21,7 @@ const QUEUE_PATH      = process.env.QUEUE_PATH    || '../../workqueue/queue.json
 const AGENTS_PATH     = process.env.AGENTS_PATH   || './agents.json';
 const REPOS_PATH      = process.env.REPOS_PATH    || './repos.json';
 const PROJECTS_PATH   = process.env.PROJECTS_PATH || './projects.json';
-const RCC_PUBLIC_URL  = process.env.RCC_PUBLIC_URL || 'http://146.190.134.110:8789';
+const RCC_PUBLIC_URL  = process.env.RCC_PUBLIC_URL || 'http://localhost:8789';
 const AUTH_TOKENS  = new Set((process.env.RCC_AUTH_TOKENS || '').split(',').map(t => t.trim()).filter(Boolean));
 const START_TIME   = Date.now();
 

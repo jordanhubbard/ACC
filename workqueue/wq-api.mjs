@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Workqueue API server — Rocky (do-host1)
+ * Workqueue API server
  * Port 8787, Tailscale-only
  *
  * POST /complete/:id   — mark item complete, unblock dependents, republish dashboard
@@ -17,7 +17,9 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE = path.resolve(__dirname, '..');
 const QUEUE_FILE = path.join(WORKSPACE, 'workqueue', 'queue.json');
-const MC = '/home/jkh/.local/bin/mc';
+const MC = process.env.MC_PATH || '/usr/local/bin/mc';
+const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
+const AGENT_NAME  = process.env.AGENT_NAME  || 'agent';
 const GEN_SCRIPT = path.join(WORKSPACE, 'workqueue', 'scripts', 'gen-dashboard.py');
 const AZURE_SAS = 'https://loomdd566f62.blob.core.windows.net/assets/agent-dashboard.html?se=2029-03-19T02%3A25Z&sp=rwdlcu&spr=https&sv=2026-02-06&ss=b&srt=sco&sig=Dn4faVsJCz0ufWyHmiKCFCrgiLQkSIRtp7MLmqXKiUA%3D';
 
@@ -69,7 +71,7 @@ function saveQueue(q) {
   fs.writeFileSync(QUEUE_FILE, JSON.stringify(q, null, 2));
   // Also push to MinIO
   try {
-    execSync(`${MC} cp ${QUEUE_FILE} do-host1/agents/rocky/queue.json`, { timeout: 10000, stdio: 'pipe' });
+    execSync(`${MC} cp ${QUEUE_FILE} /agents//queue.json`, { timeout: 10000, stdio: 'pipe' });
   } catch (e) {
     console.error('[minio sync error]', e.message);
   }
@@ -77,9 +79,9 @@ function saveQueue(q) {
 
 function republishDashboard() {
   try {
-    const rocky    = execSync(`${MC} cat do-host1/agents/shared/agent-heartbeat-rocky.json 2>/dev/null || echo null`, { timeout: 8000 }).toString().trim();
-    const natasha  = execSync(`${MC} cat do-host1/agents/shared/agent-heartbeat-natasha.json 2>/dev/null || echo null`, { timeout: 8000 }).toString().trim();
-    const bull     = execSync(`${MC} cat do-host1/agents/shared/agent-heartbeat-bullwinkle.json 2>/dev/null || echo null`, { timeout: 8000 }).toString().trim();
+    const rocky    = execSync(`${MC} cat ${MINIO_ALIAS}/agents/shared/agent-heartbeat-rocky.json 2>/dev/null || echo null`, { timeout: 8000 }).toString().trim();
+    const natasha  = execSync(`${MC} cat ${MINIO_ALIAS}/agents/shared/agent-heartbeat-natasha.json 2>/dev/null || echo null`, { timeout: 8000 }).toString().trim();
+    const bull     = execSync(`${MC} cat ${MINIO_ALIAS}/agents/shared/agent-heartbeat-bullwinkle.json 2>/dev/null || echo null`, { timeout: 8000 }).toString().trim();
     const queueJson = fs.readFileSync(QUEUE_FILE, 'utf8');
     const html = execSync(
       `python3 ${GEN_SCRIPT} '${rocky.replace(/'/g,"'\\''")}'  '${natasha.replace(/'/g,"'\\''")}'  '${bull.replace(/'/g,"'\\''")}'  '${queueJson.replace(/'/g,"'\\''")}'`,
@@ -143,7 +145,7 @@ const server = http.createServer((req, res) => {
   // GET /status
   if (req.method === 'GET' && url.pathname === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, service: 'wq-api', host: 'do-host1', port: PORT }));
+    res.end(JSON.stringify({ ok: true, service: 'wq-api', host: process.env.AGENT_HOST || 'localhost', port: PORT }));
     return;
   }
 

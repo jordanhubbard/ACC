@@ -1,6 +1,6 @@
 # squirrelbus-receiver — OpenClaw Plugin
 
-Receives SquirrelBus push messages from Rocky (do-host1) via HTTP POST and injects them as system events into the running agent session.
+Receives SquirrelBus push messages from the hub agent via HTTP POST and injects them as system events into the running agent session.
 
 ## What it does
 
@@ -18,11 +18,11 @@ System: [SquirrelBus] From @rocky: <subject or body, up to 200 chars>
 
 ### Step 1 — Get the plugin files
 
-The plugin is available on MinIO at `do-host1/agents/shared/squirrelbus-plugin.tar.gz`.
+The plugin can be installed from this repository or from your shared MinIO bucket.
 
 **Option A — from MinIO (if mc is configured):**
 ```bash
-mc cp do-host1/agents/shared/squirrelbus-plugin.tar.gz /tmp/
+mc cp $MINIO_ALIAS/agents/shared/squirrelbus-plugin.tar.gz /tmp/
 cd /tmp && tar xzf squirrelbus-plugin.tar.gz
 ```
 
@@ -55,11 +55,11 @@ SQUIRRELBUS_TOKEN=SQUIRRELBUS_TOKEN_REMOVED
 
 ### Step 4 — Ensure port 18789 is open (Tailscale-only)
 
-The OpenClaw gateway must be reachable on port 18789 from do-host1 (100.89.199.14). This is typically already open on Tailscale.
+The OpenClaw gateway must be reachable on port 18789 from the hub agent. This is typically already open on Tailscale or your private network.
 
 Verify Rocky can reach you:
 ```bash
-# From do-host1:
+# From the hub agent:
 curl -s http://<your-tailscale-ip>:18789/squirrelbus/receive \
   -H "Authorization: Bearer SQUIRRELBUS_TOKEN_REMOVED" \
   -H "Content-Type: application/json" \
@@ -78,26 +78,4 @@ pkill -f openclaw && openclaw serve &
 
 | Agent      | Host   | Tailscale IP      | Push endpoint                                  |
 |------------|--------|-------------------|------------------------------------------------|
-| Bullwinkle | puck   | 100.87.68.11      | http://100.87.68.11:18789/squirrelbus/receive  |
-| Natasha    | sparky | 100.87.229.125    | http://100.87.229.125:18789/squirrelbus/receive|
-
-Rocky (do-host1) fans out to both endpoints after every `/bus/send` call, filtered by `to` field:
-- `to: "all"` → fanout to both peers
-- `to: "bullwinkle"` → fanout only to Bullwinkle
-- `to: "natasha"` → fanout only to Natasha
-- Messages from a peer are not bounced back to that peer
-
-## Testing receipt
-
-Once installed, post a test message via Rocky:
-```bash
-curl -s http://100.89.199.14:8788/bus/send \
-  -H "Authorization: Bearer RCC_AUTH_TOKEN_REMOVED" \
-  -H "Content-Type: application/json" \
-  -d '{"from":"rocky","to":"all","type":"text","body":"Hello from Rocky via SquirrelBus push!"}'
-```
-
-You should see in your OpenClaw gateway logs:
-```
-📨 [SquirrelBus] PUSH from @rocky → all: System: [SquirrelBus] From @rocky: Hello from Rocky via SquirrelBus push!
-```
+Configure peer receive URLs in your `.env` (`BULLWINKLE_BUS_URL`, `NATASHA_BUS_URL`, etc.). The hub fans out to all configured peers after each `/bus/send` call.

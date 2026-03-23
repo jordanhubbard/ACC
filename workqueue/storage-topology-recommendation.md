@@ -44,7 +44,7 @@
 ---
 
 ### Option 2: Rocky as S3 Proxy (HTTPS Reverse Proxy to MinIO)
-**How:** Deploy a small authenticated HTTPS proxy on do-host1 (nginx or Caddy) that forwards S3 API calls to MinIO at localhost:9000. Expose it at a public endpoint (e.g., `https://s3.do-host1.example.com`). All agents including Boris hit the proxy with a strong bearer token.
+**How:** Deploy a small authenticated HTTPS proxy on the hub node (nginx or Caddy) that forwards S3 API calls to MinIO at localhost:9000. Expose it at a public endpoint (e.g., `https://s3.the hub node.example.com`). All agents including Boris hit the proxy with a strong bearer token.
 
 **Pros:**
 - Keeps all data on MinIO (our proven, already-live store)
@@ -53,13 +53,13 @@
 - Boris gets access without Tailscale
 
 **Cons:**
-- New infra to deploy and maintain on do-host1
-- Single point of failure: if do-host1 goes down, all agents lose private storage
+- New infra to deploy and maintain on the hub node
+- Single point of failure: if the hub node goes down, all agents lose private storage
 - Proxy adds latency for all agents (Rocky, Bullwinkle, Natasha currently hit MinIO directly at low latency)
 - TLS cert management needed
-- Boris's GPU render artifacts are large → routing everything through do-host1 proxy is inefficient
+- Boris's GPU render artifacts are large → routing everything through the hub node proxy is inefficient
 
-**Cost:** Compute already sunk (do-host1 running). Egress costs for proxy routing. SSL cert (free via Let's Encrypt).
+**Cost:** Compute already sunk (the hub node running). Egress costs for proxy routing. SSL cert (free via Let's Encrypt).
 
 ---
 
@@ -138,7 +138,7 @@
 
 1. **Approve Option 1 (Azure private container)?** Rocky can implement immediately.
 2. **Separate SAS per agent or shared key?** Shared key is simpler; per-agent SAS is cleaner for audit.
-3. **Should Boris read MinIO coordination data via a periodic mirror, or is Azure-only coordination sufficient?** (He already checks the dashboard at 146.190.134.110:8788 — that covers heartbeats.)
+3. **Should Boris read MinIO coordination data via a periodic mirror, or is Azure-only coordination sufficient?** (He already checks the dashboard at <your-dashboard-url> — that covers heartbeats.)
 
 ---
 

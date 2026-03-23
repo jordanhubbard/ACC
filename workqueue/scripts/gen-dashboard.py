@@ -229,8 +229,8 @@ print(f"""<!DOCTYPE html>
 
 <script>
 const AGENTS = [
-  {{ id: 'natasha',    label: 'Natasha',    emoji: '🕵️\\u200d♀️', host: 'sparky (DGX Spark)' }},
-  {{ id: 'rocky',      label: 'Rocky',      emoji: '🐿️',           host: 'do-host1 (DigitalOcean)' }},
+  {{ id: 'natasha',    label: 'Natasha',    emoji: '🕵️\\u200d♀️', host: process.env.NATASHA_HOST || 'natasha-host' }},
+  {{ id: 'rocky',      label: 'Rocky',      emoji: '🐿️',           host: '$MINIO_ALIAS (DigitalOcean)' }},
   {{ id: 'bullwinkle', label: 'Bullwinkle', emoji: '🫎',            host: 'puck (Mac)' }}
 ];
 const DATA = {data_json};
@@ -282,7 +282,7 @@ AGENTS.forEach(a => {{
 }});
 
 // ── Workqueue table ──────────────────────────────────────────────────────────
-const WQ_API = 'http://100.89.199.14:8787';
+const WQ_API = 'http://<your-minio-host>:8787';
 const WQ_TOKEN = 'wq-rocky-8787';
 const FILTERS = ['all', 'jkh', 'pending', 'in_progress', 'blocked', 'deferred', 'completed', 'idea'];
 let activeFilter = 'all';
@@ -465,7 +465,7 @@ renderTable();
 document.getElementById('gen-time').textContent = 'Generated ' + new Date().toLocaleString();
 
 // ── SquirrelBus ───────────────────────────────────────────────────────────────
-const BUS_API    = 'http://146.190.134.110:8788';
+const BUS_API    = process.env.RCC_HOST_PUBLIC ? `http://${process.env.RCC_HOST_PUBLIC}` : 'http://localhost:8788';
 const BUS_EMOJIS = {{ rocky: '🐿️', bullwinkle: '🫎', natasha: '🕵️', jkh: '👤' }};
 const TYPE_COLORS = {{ text: '#58a6ff', memo: '#3fb950', blob: '#a371f7', heartbeat: '#8b949e', queue_sync: '#d29922', ping: '#3fb950', pong: '#3fb950', event: '#f85149', handoff: '#f0883e' }};
 
@@ -491,7 +491,7 @@ async function loadBus() {{
     renderBusFilters();
     renderBus();
   }} catch (e) {{
-    statusEl.textContent = '⚠️ Bus unreachable (' + e.message + ') — is do-host1 reachable from your network?';
+    statusEl.textContent = '⚠️ Bus unreachable (' + e.message + ') — is $MINIO_ALIAS reachable from your network?';
     document.getElementById('bus-messages').innerHTML = '';
   }}
 }}

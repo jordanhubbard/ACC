@@ -19,7 +19,7 @@ import https from 'https';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKSPACE = join(__dirname, '../../');
 const MC = process.env.MC_BIN || '/home/jkh/.local/bin/mc';
-const MINIO_ALIAS = 'do-host1';
+const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
 const SHARED_PREFIX = `${MINIO_ALIAS}/agents/shared`;
 
 const MM_SERVER = 'https://chat.yourmom.photos';

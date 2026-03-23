@@ -15,7 +15,7 @@ import { execSync } from 'child_process';
 import { readFileSync, writeFileSync } from 'fs';
 
 const MC = process.env.MC_BIN || '/home/jkh/.local/bin/mc';
-const MINIO_ALIAS = 'do-host1';
+const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
 const SHARED_PREFIX = `${MINIO_ALIAS}/agents/shared`;
 const AGENT_NAME = process.env.AGENT_NAME || 'rocky';
 const OFFLINE_THRESHOLD_MIN = 240;  // 4 hours

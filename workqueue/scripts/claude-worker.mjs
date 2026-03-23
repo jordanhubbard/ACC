@@ -3,7 +3,7 @@
  * claude-worker.mjs
  * Reusable module for delegating tasks to a local Claude Code tmux session.
  *
- * Usable by any OpenClaw agent (Rocky on do-host1, Bullwinkle on puck, Natasha on sparky).
+ * Usable by any OpenClaw agent (any OpenClaw agent).
  *
  * Exports:
  *   sendTask(sessionName, task, opts)      — send task, wait for prompt, return output

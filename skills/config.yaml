@@ -1,5 +1,5 @@
 # Rocky's Skills Configuration
-# do-host1 (Digital Ocean, Linux x64)
+# local (Digital Ocean, Linux x64)
 # Disable skills that are Mac-only, require local hardware, or aren't relevant
 
 disabled:
@@ -20,13 +20,13 @@ disabled:
   - sonoscli          # Sonos speakers (jkh's house, not reachable from DO)
   - voice-call        # Voice calls (Mac)
 
-  # Require local hardware/context not on do-host1
+  # Require local hardware/context not on local
   - eightctl          # Hardware controller
   - goplaces          # Location/places (Mac)
   - oracle            # Oracle hardware
 
   # Not configured / no creds on this instance
-  - 1password         # Not set up on do-host1
+  - 1password         # Not set up on local
   - discord           # Not configured
   - notion            # Not configured
   - trello            # Not configured

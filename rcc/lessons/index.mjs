@@ -21,7 +21,7 @@ import { execSync } from 'child_process';
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const LESSONS_DIR   = process.env.LESSONS_DIR   || join(process.env.HOME || '/tmp', '.rcc/lessons');
-const MINIO_ALIAS   = process.env.MINIO_ALIAS   || 'do-host1';
+const MINIO_ALIAS   = process.env.MINIO_ALIAS || 'local';
 const MINIO_BUCKET  = process.env.MINIO_BUCKET  || 'agents';
 const AGENT_NAME    = process.env.AGENT_NAME    || 'unknown';
 const BUS_API       = process.env.BUS_API       || 'http://localhost:8788';

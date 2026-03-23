@@ -21,7 +21,7 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKSPACE = join(__dirname, '../../');
 const MC = process.env.MC_BIN || '/home/jkh/.local/bin/mc';
-const MINIO_ALIAS = 'do-host1';
+const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
 const SHARED_PREFIX = `${MINIO_ALIAS}/agents/shared`;
 
 function mcCat(path) {
@@ -67,7 +67,7 @@ if (!jkhState) {
 // Build markdown summary
 const lines = [];
 lines.push(`# jkh Morning Context — ${today}`);
-lines.push(`_Generated at ${now} by Rocky (do-host1)_`);
+lines.push(`_Generated at ${now} by ${process.env.AGENT_NAME || 'agent'}_`);
 lines.push('');
 lines.push('## jkh Status');
 lines.push(`- **Last seen:** ${jkhState.last_seen_ts || 'unknown'} on ${jkhState.last_seen_channel || 'unknown'}`);
