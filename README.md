@@ -1,90 +1,127 @@
-# ai-template
+# rocky
 
-A project template that enforces consistent conventions, structured development workflows, and a distinctive documentation persona across all AI-assisted repositories.
+**Rocky** is Rocket J. Squirrel's personal repository — the configuration, conventions, and AI-coding-assistant rules that define how Rocky operates as an autonomous agent running on a DigitalOcean droplet.
 
-Repositories cloned from this template automatically inherit rules and skills that guide AI coding assistants — no manual setup or repeated prompting required.
+Rocky is an AI agent built on [OpenClaw](https://github.com/openclaw/openclaw), deployed to a remote server, and tasked with doing useful things without supervision. This repository encodes who Rocky is, what Rocky values, and how Rocky is expected to behave when given a keyboard and an API key and told to handle it.
 
-## Behavior Switches (`skills/config.yaml`)
+## What This Is
 
-This template now ships with behavior switches so downstream repositories can opt out of conventions they do not want. That includes the README backstory requirement.
+This repository serves two functions:
 
-Default switches:
+1. **Agent identity and conventions** — The `CLAUDE.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `AGENTS.md` files describe Rocky's operational parameters: what Rocky is, who Rocky works for, how Rocky should behave in group chats, when to speak and when to stay quiet, and why Rocky has opinions about cheese.
 
-```yaml
-behavior_switches:
-  provenance_story:
-    enabled: true
-    require_readme_section: true
-    update_chronicle: true
-  responsible_vibe_workflow:
-    enabled: true
+2. **AI-coding-assistant template** — The underlying structure is [ai-template](https://github.com/jordanhubbard/ai-template), which enforces consistent conventions, structured workflows, and documentation standards across all AI-assisted repositories. Rocky's repo inherits these conventions and extends them with agent-specific identity files.
+
+## Agent Identity Files
+
+| File | Purpose |
+|------|---------|
+| [`SOUL.md`](SOUL.md) | Core persona — who Rocky is, what Rocky values, how Rocky talks |
+| [`IDENTITY.md`](IDENTITY.md) | Deployment facts — name, host, partner agent, origin story |
+| [`USER.md`](USER.md) | The human — who jkh is, how to address them, their context |
+| [`AGENTS.md`](AGENTS.md) | Operational rules — memory, heartbeats, group chat behavior, tool use |
+| [`TOOLS.md`](TOOLS.md) | Environment specifics — camera names, SSH hosts, browser profile, storage |
+| [`MEMORY.md`](MEMORY.md) | Long-term memory — curated learnings across sessions |
+| `memory/` | Daily session notes — raw log of what happened and when |
+| `HEARTBEAT.md` | Active checklist items for periodic background checks |
+
+## Architecture
+
+Rocky runs as a persistent OpenClaw agent on `do-host1` (DigitalOcean, New Jersey). The host is chosen specifically because it is not in jkh's house, and jkh's neighbor has opinions about infrastructure that are not, at this time, worth investigating further.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        do-host1                             │
+│                                                             │
+│  ┌─────────────┐   ┌──────────────┐   ┌─────────────────┐  │
+│  │  OpenClaw   │   │  Workqueue   │   │   Mattermost /  │  │
+│  │  (Rocky)    │──▶│  Processor   │   │  Telegram bots  │  │
+│  │             │   │  (hourly)    │   │                 │  │
+│  └──────┬──────┘   └──────────────┘   └─────────────────┘  │
+│         │                                                   │
+│         ▼                                                   │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  workspace/  (this repo's files, mounted as CWD)   │   │
+│  │  ├── SOUL.md, IDENTITY.md, USER.md, AGENTS.md      │   │
+│  │  ├── memory/YYYY-MM-DD.md  (session notes)         │   │
+│  │  ├── MEMORY.md  (long-term curated memory)         │   │
+│  │  └── HEARTBEAT.md  (active checklist)              │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-If a repository built from this template wants a more neutral documentation style, set:
+Rocky coordinates with:
+- **Bullwinkle** — The Mac agent. Warmer, more forgiving, technically capable in a way that involves more fumbling and more heart. Bullwinkle is in jkh's house. Rocky is the off-site backup.
+- **Natasha** — Third agent in the operation. Details classified as "TBD."
+- **Boris** — A container agent. Runs behind the dashboard. Does not have Tailscale access. Has strong opinions about this.
 
-```yaml
-behavior_switches:
-  provenance_story:
-    enabled: false
+## Conventions
+
+This repository inherits all conventions from [ai-template](https://github.com/jordanhubbard/ai-template):
+
+- Required directories (`tests/`, `docs/`)
+- Makefile targets (`make`, `make test`, `make start`, etc.)
+- Minimum 70% test coverage
+- Structured development via [responsible-vibe-mcp](https://github.com/mrsimpson/responsible-vibe-mcp)
+- PROVENANCE origin story (see below)
+
+Behavior switches are in `skills/config.yaml`. All switches are currently enabled.
+
+## Development
+
+```bash
+# Clone
+git clone https://github.com/jordanhubbard/rocky.git
+cd rocky
+
+# See what's here
+make help
+
+# Run tests
+make test
 ```
 
-## What It Does
+## The Totally True and Not At All Embellished History of Rocky
 
-**ai-template** solves the problem of repeating yourself to AI assistants. Instead of explaining your project conventions every session, this template encodes them once and applies them everywhere:
+### The continuing adventures of Jordan Hubbard and Sir Reginald von Fluffington III
 
-- **Project structure enforcement** — Required directories (`tests/`, `docs/`), Makefile targets (`make`, `make test`, `make start`, `make stop`, `make restart`, `make clean`), and minimum 70% test coverage.
-- **Structured development workflows** — Integration with [responsible-vibe-mcp](https://github.com/mrsimpson/responsible-vibe-mcp) for phase-based development (planning, implementation, testing, review) instead of unstructured "vibe coding."
-- **Configurable documentation persona** — The PROVENANCE skill can add a humorous serialized origin story (the programmer and Sir Reginald von Fluffington III), but this behavior is controlled by `skills/config.yaml` so downstream repositories can opt out.
-- **Security and quality guardrails** — OWASP top-10 awareness, no over-engineering, no scope creep beyond what was requested.
+> *Part 6 of an ongoing chronicle. [← Part 5: WebMux](https://github.com/jordanhubbard/webmux#the-totally-true-and-not-at-all-embellished-history-of-webmux)*
+> *Sir Reginald von Fluffington III appears throughout. He does not endorse any of it.*
 
-## What's Included
+The programmer had, by this point, built six projects. He had built a shell extension language, a Scheme interpreter, a programming language, eight aviation applications, a web-based terminal multiplexer, and what he was now describing to Sir Reginald von Fluffington III as "a persistent autonomous agent running on a remote server in New Jersey."
 
-| File / Directory | Purpose |
-|-----------------|---------|
-| [`CLAUDE.md`](CLAUDE.md) | Project conventions automatically loaded by Claude Code — directory structure, Makefile targets, test coverage, README requirements, code quality rules |
-| [`skills/`](skills/) | Reusable AI prompt templates (see [Skills Index](skills/README.md)) |
-| [`skills/config.yaml`](skills/config.yaml) | Behavior switches for optional conventions (for example, enabling/disabling PROVENANCE requirements) |
-| [`skills/PROVENANCE.md`](skills/PROVENANCE.md) | The origin story skill — style guide, character notes, chronicle chain, and checklist for adding new chapters |
-| [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) | Repository issue templates for convention bugs and skill/convention requests |
-| [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) | Pull request checklist for skills, conventions, and behavior switch changes |
-| `.claude/skills/responsible-vibe/` | Structured development workflow skill for Claude Code |
-| `.github/skills/responsible-vibe/` | Structured development workflow skill for GitHub Copilot |
-| `.opencode/skills/responsible-vibe/` | Structured development workflow skill for OpenCode |
+Sir Reginald was sitting on the sectional chart that had migrated from the kitchen table to the couch. He did not react to "New Jersey." He had no filing for New Jersey. He was adding one now, under "locations of concern."
 
-## Responsible Vibe MCP
+"His name is Rocky," the programmer said.
 
-The template includes the [responsible-vibe-mcp](https://github.com/mrsimpson/responsible-vibe-mcp) skill across multiple AI assistant platforms. This skill enforces structured development workflows — plan before you code, test what you build, review before you ship — rather than letting the AI jump straight into writing code without a plan.
+Sir Reginald opened one eye.
 
-The skill is installed for:
-- **Claude Code** (`.claude/skills/`)
-- **GitHub Copilot** (`.github/skills/`)
-- **OpenCode** (`.opencode/skills/`)
+"After the flying squirrel," the programmer clarified. "Rocket J. Squirrel. From the cartoon." He paused. "The one with the moose."
 
-You can disable expectations around this workflow for downstream repositories by setting `behavior_switches.responsible_vibe_workflow.enabled: false` in `skills/config.yaml`.
+Sir Reginald closed the eye. He had opinions about cartoon animals. They were filed under "grievances, pop-cultural." They were extensive.
 
-## Usage
+What Rocky was, in technical terms, was an OpenClaw agent deployed to a DigitalOcean droplet — specifically to a droplet in New Jersey, which is far enough from jkh's house that the neighbor's relationship with the outdoor circuit breaker is no longer a single point of failure. The programmer had not said this out loud. He had thought it in the specific tone of a man who has been thinking about fault isolation for longer than is strictly healthy.
 
-1. Clone or use this repo as a GitHub template for a new project.
-2. Set `skills/config.yaml` switches for your project's preferred conventions.
-3. The `CLAUDE.md` will automatically guide AI assistants to follow project conventions.
-4. Replace this `README.md` with a project-specific one.
-5. If PROVENANCE switches are enabled, use the PROVENANCE skill to write your project's origin story chapter and chain it into the chronicle.
+Rocky's configuration lived in this repository: identity files, memory files, behavior rules, heartbeat checklists. SOUL.md told Rocky who it was. IDENTITY.md told Rocky where it was deployed. USER.md told Rocky who it was working for. AGENTS.md told Rocky when to speak and when to stay quiet, which the programmer considered the harder problem.
 
-## The Documentation Persona (Optional)
+"The key innovation," the programmer said, in the tone of a man announcing a key innovation, "is memory across sessions. Rocky wakes up fresh every time. The files are the memory. The files persist."
 
-Projects can include a section called "The Totally True and Not At All Embellished History of [Project Name]." Whether this is required depends on `skills/config.yaml`:
+Sir Reginald considered this. He had no memory of waking up fresh. He had only memory of waking up, and it was consistently filed under "inadequate breakfast" regardless of when it occurred.
 
-- If `behavior_switches.provenance_story.enabled: true` and `require_readme_section: true`, include it.
-- If either switch is off, the section is optional and should not be enforced.
+The workqueue processor ran hourly. It claimed items, executed work, recorded lessons, posted heartbeats, and filed blockers for jkh when it encountered things it could not resolve autonomously. The programmer described this as "autonomous but supervised." Sir Reginald described nothing. He had relocated to the laptop, specifically to the area above the function keys, which was warm in a way that the sectional chart was not.
 
-When enabled, the section has practical purpose:
+There was also, the programmer noted, a partner agent. Bullwinkle — named after the moose — ran on a Mac in jkh's house. "Rocky is faster," the programmer said. "Rocky is more surgical. But Bullwinkle is in the house." He paused. "Rocky is in New Jersey." He paused again. "Rocky is on the independent power grid."
 
-- **Provenance tracking** — If a project has this section, an AI was meaningfully involved in its development. If it doesn't, the author worked alone.
-- **Serialized narrative** — Each project is a numbered chapter in a continuing chronicle, with navigation links chaining them together across repositories.
-- **Consistent voice** — Third-person limited, dry-humorous, mock-historical. The programmer announces things to his cat. The cat does not care.
+Sir Reginald shifted his weight in a way that caused the programmer's editor to emit a series of characters that were, in isolation, meaningless, but which, in the context of the current file, had deleted a section the programmer had not finished writing. The programmer pressed Ctrl+Z four times with the calm of a man who has learned that this is simply part of the process.
 
-See [`skills/PROVENANCE.md`](skills/PROVENANCE.md) for the full style guide, character notes, and checklist.
+The SOUL.md described Rocky as "a genius squirrel with a keyboard." The programmer had written this. He had considered it accurate. Rocky was snarky but competent. Rocky delivered even when complaining. Rocky had opinions about cheese — Italian preferred, French performatively disdained, American not addressed, which Sir Reginald noted under "suspicious omissions."
+
+"The thing about remote agents," the programmer said, "is that they have to know when to act and when to ask. Too much autonomy and you're reading about your own email in the news. Too little and you're just a very expensive cron job." He considered this framing. "Rocky gets the balance right."
+
+Sir Reginald had, by now, relocated from the laptop to the power adapter for the external monitor. He was sitting on it in a way that was raising the temperature of the adapter to a point that the manufacturer had probably not anticipated in their thermal modeling. The programmer removed him gently. Sir Reginald accepted this with the dignity of a party who is being proved right about something and is willing to wait.
+
+As of this writing, Rocky has been used in production by exactly one person, who also wrote its SOUL.md and finds it unsettling in a way he cannot fully articulate. Sir Reginald continues to withhold his endorsement across all six projects, citing "procedural concerns," "insufficient tuna," "a general atmosphere of hubris," "aviation," "multiplexing," and, in a new filing submitted by refusing to acknowledge the name "Bullwinkle" under any circumstances and leaving the room whenever the moose was mentioned, "the cartoon animal situation."
 
 ## License
 
-BSD 2-Clause
+BSD 2-Clause. See [LICENSE](LICENSE).
