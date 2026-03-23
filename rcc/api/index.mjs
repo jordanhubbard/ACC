@@ -9,16 +9,18 @@
  */
 
 import { createServer } from 'http';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
+import { dirname } from 'path';
 import { Brain, createRequest } from '../brain/index.mjs';
 import { Pump } from '../scout/pump.mjs';
-import { learnLesson, queryLessons, formatLessonsForContext, receiveLessonFromBus, seedKnownLessons } from '../lessons/index.mjs';
+import { learnLesson, queryLessons, queryAllLessons, formatLessonsForContext, getTrendingLessons, formatTrendingForHeartbeat, getHeartbeatContext, receiveLessonFromBus, seedKnownLessons } from '../lessons/index.mjs';
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT            = parseInt(process.env.RCC_PORT || '8789', 10);
 const QUEUE_PATH      = process.env.QUEUE_PATH    || '../../workqueue/queue.json';
-const AGENTS_PATH     = process.env.AGENTS_PATH   || './agents.json';
+const AGENTS_PATH        = process.env.AGENTS_PATH        || './agents.json';
+const CAPABILITIES_PATH  = process.env.CAPABILITIES_PATH  || './data/agent-capabilities.json';
 const REPOS_PATH      = process.env.REPOS_PATH    || './repos.json';
 const PROJECTS_PATH   = process.env.PROJECTS_PATH || './projects.json';
 const RCC_PUBLIC_URL  = process.env.RCC_PUBLIC_URL || 'http://localhost:8789';
@@ -145,6 +147,19 @@ async function readAgents() {
 
 async function writeAgents(data) {
   const p = new URL(AGENTS_PATH, import.meta.url).pathname;
+  await writeFile(p, JSON.stringify(data, null, 2));
+}
+
+// ── Agent capabilities I/O ────────────────────────────────────────────────
+async function readCapabilities() {
+  const p = new URL(CAPABILITIES_PATH, import.meta.url).pathname;
+  if (!existsSync(p)) return {};
+  return JSON.parse(await readFile(p, 'utf8'));
+}
+
+async function writeCapabilities(data) {
+  const p = new URL(CAPABILITIES_PATH, import.meta.url).pathname;
+  await mkdir(dirname(p), { recursive: true });
   await writeFile(p, JSON.stringify(data, null, 2));
 }
 
@@ -322,11 +337,55 @@ async function handleRequest(req, res) {
 
     if (method === 'GET' && path === '/api/agents') {
       const agents = await readAgents();
+      const caps   = await readCapabilities();
       const result = Object.entries(agents).map(([name, agent]) => ({
         ...agent,
+        capabilities: { ...(agent.capabilities || {}), ...(caps[name] || {}) },
         heartbeat: heartbeats[name] || null,
       }));
       return json(res, 200, result);
+    }
+
+    // ── GET /api/agents/best?task=X — capability-based routing ───────────
+    if (method === 'GET' && path === '/api/agents/best') {
+      const task = url.searchParams.get('task') || '';
+      const agents = await readAgents();
+      const caps   = await readCapabilities();
+      const GPU_TASKS    = new Set(['gpu', 'render', 'training', 'inference']);
+      const CLAUDE_TASKS = new Set(['claude', 'code', 'review', 'debug', 'triage']);
+      const CTX_PRIORITY = { large: 3, medium: 2, small: 1 };
+
+      const candidates = Object.entries(agents).map(([name, agent]) => ({
+        name,
+        ...agent,
+        capabilities: { ...(agent.capabilities || {}), ...(caps[name] || {}) },
+        heartbeat: heartbeats[name] || null,
+      }));
+
+      // prefer online agents (heartbeat within last 10 min), fall back to all
+      const onlineCutoff = Date.now() - 10 * 60 * 1000;
+      const online = candidates.filter(a => a.heartbeat && new Date(a.heartbeat.ts).getTime() > onlineCutoff);
+      const pool   = online.length > 0 ? online : candidates;
+
+      let best = null;
+
+      if (GPU_TASKS.has(task)) {
+        const gpu = pool.filter(a => a.capabilities?.gpu);
+        if (gpu.length) best = gpu.sort((a, b) => (b.capabilities.gpu_vram_gb || 0) - (a.capabilities.gpu_vram_gb || 0))[0];
+      } else if (CLAUDE_TASKS.has(task)) {
+        const cli = pool.filter(a => a.capabilities?.claude_cli);
+        if (cli.length) best = cli.sort((a, b) => (CTX_PRIORITY[b.capabilities.context_size] || 0) - (CTX_PRIORITY[a.capabilities.context_size] || 0))[0];
+      }
+
+      if (!best) {
+        // match preferred_tasks
+        const byPref = pool.filter(a => (a.capabilities?.preferred_tasks || []).includes(task));
+        if (byPref.length) best = byPref[0];
+      }
+
+      if (!best && pool.length) best = pool[0];
+      if (!best) return json(res, 404, { error: 'No agents available' });
+      return json(res, 200, { agent: best, task });
     }
 
     if (method === 'GET' && path === '/api/heartbeats') {
@@ -649,6 +708,39 @@ async function handleRequest(req, res) {
       return json(res, 201, { ok: true, token, agent: { ...agents[body.name], token } });
     }
 
+    // ── POST /api/agents/:name — publish capabilities at startup (upsert) ─
+    const agentNameMatch = path.match(/^\/api\/agents\/([^/]+)$/);
+    if (method === 'POST' && agentNameMatch) {
+      const name = decodeURIComponent(agentNameMatch[1]);
+      const body = await readBody(req);
+      const agents = await readAgents();
+      if (!agents[name]) {
+        // auto-register on first capability publish
+        const token = `rcc-agent-${name}-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+        agents[name] = {
+          name,
+          host: body.host || 'unknown',
+          type: body.type || 'full',
+          token,
+          registeredAt: new Date().toISOString(),
+          lastSeen: null,
+          capabilities: {},
+          billing: { claude_cli: 'fixed', inference_key: 'metered', gpu: 'fixed' },
+        };
+        AUTH_TOKENS.add(token);
+      } else {
+        if (body.host) agents[name].host = body.host;
+        if (body.type) agents[name].type = body.type;
+      }
+      await writeAgents(agents);
+      if (body.capabilities) {
+        const caps = await readCapabilities();
+        caps[name] = { ...(caps[name] || {}), ...body.capabilities };
+        await writeCapabilities(caps);
+      }
+      return json(res, 200, { ok: true, token: agents[name].token, agent: agents[name] });
+    }
+
     // ── PATCH /api/agents/:name — update capabilities ─────────────────────
     const agentPatchMatch = path.match(/^\/api\/agents\/([^/]+)$/);
     if (method === 'PATCH' && agentPatchMatch) {
@@ -656,11 +748,16 @@ async function handleRequest(req, res) {
       const body = await readBody(req);
       const agents = await readAgents();
       if (!agents[name]) return json(res, 404, { error: 'Agent not found' });
-      if (body.capabilities) Object.assign(agents[name].capabilities, body.capabilities);
-      if (body.billing) Object.assign(agents[name].billing, body.billing);
+      if (body.capabilities) Object.assign(agents[name].capabilities || {}, body.capabilities);
+      if (body.billing) Object.assign(agents[name].billing || {}, body.billing);
       if (body.host) agents[name].host = body.host;
       if (body.type) agents[name].type = body.type;
       await writeAgents(agents);
+      if (body.capabilities) {
+        const caps = await readCapabilities();
+        caps[name] = { ...(caps[name] || {}), ...body.capabilities };
+        await writeCapabilities(caps);
+      }
       return json(res, 200, { ok: true, agent: agents[name] });
     }
 
@@ -724,12 +821,36 @@ async function handleRequest(req, res) {
       return json(res, 201, { ok: true, lesson });
     }
 
+    // ── GET /api/lessons/trending — top lessons by score + recency ────────
+    if (method === 'GET' && path === '/api/lessons/trending') {
+      const limit = parseInt(url.searchParams.get('limit') || '5', 10);
+      const recentDays = parseInt(url.searchParams.get('days') || '7', 10);
+      const lessons = await getTrendingLessons({ limit, recentDays });
+      const context = url.searchParams.get('format') === 'context' ? formatTrendingForHeartbeat(lessons) : null;
+      return json(res, 200, { lessons, context, count: lessons.length });
+    }
+
+    // ── GET /api/lessons/heartbeat — context block for heartbeat ──────────
+    if (method === 'GET' && path === '/api/lessons/heartbeat') {
+      const domains = (url.searchParams.get('domains') || '').split(',').filter(Boolean);
+      const context = await getHeartbeatContext({ domains });
+      return json(res, 200, { context });
+    }
+
     // ── GET /api/lessons?domain=X&q=keyword+keyword ───────────────────────
+    // If no domain specified but q= is present, search across all domains
     if (method === 'GET' && path.startsWith('/api/lessons')) {
-      const domain = url.searchParams.get('domain') || 'general';
+      const domain = url.searchParams.get('domain');
       const q = (url.searchParams.get('q') || '').split(/\s+/).filter(Boolean);
       const limit = parseInt(url.searchParams.get('limit') || '5', 10);
-      const lessons = await queryLessons({ domain, keywords: q, limit });
+
+      let lessons;
+      if (!domain) {
+        // Cross-domain search
+        lessons = await queryAllLessons({ keywords: q, limit });
+      } else {
+        lessons = await queryLessons({ domain, keywords: q, limit });
+      }
       const context = url.searchParams.get('format') === 'context' ? formatLessonsForContext(lessons) : null;
       return json(res, 200, { lessons, context, count: lessons.length });
     }
