@@ -164,6 +164,129 @@ function readBody(req) {
   });
 }
 
+// ── HTML UI helpers ────────────────────────────────────────────────────────
+const HTML_STYLE = `
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh;padding:2rem}
+    a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
+    .nav{font-size:.85rem;color:#8b949e;margin-bottom:1.5rem}
+    .nav a{color:#8b949e}
+    h1{font-size:1.8rem;font-weight:700;margin-bottom:.4rem}
+    .subtitle{color:#8b949e;font-size:.95rem;margin-bottom:1.5rem}
+    .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1.25rem 1.5rem;margin-bottom:1rem}
+    .card h2{font-size:1rem;font-weight:600;margin-bottom:.5rem}
+    .meta{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;font-size:.85rem;color:#8b949e;margin-bottom:.75rem}
+    .meta span{display:flex;align-items:center;gap:.3rem}
+    .badge{display:inline-block;padding:.15rem .55rem;border-radius:999px;font-size:.75rem;font-weight:600;background:#21262d;border:1px solid #30363d;color:#8b949e}
+    .badge.team{border-color:#388bfd55;color:#58a6ff}
+    .badge.personal{border-color:#3fb95055;color:#3fb950}
+    .scouts{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.75rem}
+    .scout-tag{background:#21262d;border:1px solid #30363d;border-radius:4px;padding:.1rem .5rem;font-size:.75rem;color:#8b949e}
+    .notes{color:#c9d1d9;font-size:.875rem;margin-top:.75rem;line-height:1.5;border-top:1px solid #21262d;padding-top:.75rem}
+    .links{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;margin-top:.75rem;font-size:.85rem}
+    .project-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem}
+    .project-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1.25rem;cursor:pointer;transition:border-color .15s}
+    .project-card:hover{border-color:#58a6ff}
+    .project-card h3{font-size:1rem;font-weight:600;margin-bottom:.35rem}
+    .project-card .desc{font-size:.85rem;color:#8b949e;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .error{color:#f85149;margin-top:2rem;font-size:1rem}
+    .spinner{color:#8b949e;margin-top:2rem}
+    .detail-header{margin-bottom:1.5rem}
+    .detail-header h1{margin-bottom:.3rem}
+    .queue-section h2{font-size:1.1rem;font-weight:600;margin-bottom:.75rem}
+    .queue-item{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:.75rem 1rem;margin-bottom:.5rem;font-size:.875rem}
+    .queue-item .qi-title{font-weight:600;margin-bottom:.25rem}
+    .qi-meta{font-size:.78rem;color:#8b949e;display:flex;gap:.75rem;flex-wrap:wrap}
+    .status-badge{display:inline-block;padding:.1rem .45rem;border-radius:4px;font-size:.72rem;font-weight:600;text-transform:uppercase}
+    .status-pending{background:#1f2d3d;color:#58a6ff;border:1px solid #388bfd55}
+    .status-active{background:#1a2f1a;color:#3fb950;border:1px solid #3fb95055}
+    .status-completed{background:#1c1c1c;color:#8b949e;border:1px solid #30363d}
+    .status-cancelled{background:#1c1c1c;color:#8b949e;border:1px solid #30363d}
+    .status-failed{background:#2d1a1a;color:#f85149;border:1px solid #f8514955}
+  </style>`;
+
+function projectsListHtml() {
+  return `<!DOCTYPE html><html lang="en"><head>${HTML_STYLE}<title>Projects — RCC</title></head><body>
+  <div class="nav"><a href="/">← RCC</a></div>
+  <h1>Projects</h1>
+  <p class="subtitle">All registered projects tracked by Rocky Command Center</p>
+  <div id="root"><p class="spinner">Loading…</p></div>
+  <script>
+    fetch('/api/projects').then(r=>r.json()).then(projects=>{
+      const root=document.getElementById('root');
+      if(!projects.length){root.innerHTML='<p class="error">No projects found.</p>';return;}
+      const byKind=(k)=>projects.filter(p=>p.kind===k);
+      const renderCard=(p)=>\`<a href="/projects/\${encodeURIComponent(p.id)}" style="text-decoration:none">
+        <div class="project-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem">
+            <h3>\${p.display_name||p.id}</h3>
+            <span class="badge \${p.kind||''}">\${p.kind||'project'}</span>
+          </div>
+          <div class="desc">\${p.description||''}</div>
+        </div></a>\`;
+      const sections=[];
+      const team=byKind('team'), personal=byKind('personal'), other=projects.filter(p=>p.kind!=='team'&&p.kind!=='personal');
+      if(team.length) sections.push(\`<h2 style="font-size:1rem;font-weight:600;color:#8b949e;margin:1.25rem 0 .6rem">Team Projects</h2><div class="project-grid">\${team.map(renderCard).join('')}</div>\`);
+      if(personal.length) sections.push(\`<h2 style="font-size:1rem;font-weight:600;color:#8b949e;margin:1.25rem 0 .6rem">Personal Projects</h2><div class="project-grid">\${personal.map(renderCard).join('')}</div>\`);
+      if(other.length) sections.push(\`<div class="project-grid">\${other.map(renderCard).join('')}</div>\`);
+      root.innerHTML=sections.join('');
+    }).catch(e=>{document.getElementById('root').innerHTML='<p class="error">Failed to load projects: '+e.message+'</p>';});
+  </script></body></html>`;
+}
+
+function projectDetailHtml(projectId) {
+  const encodedId = encodeURIComponent(projectId);
+  return `<!DOCTYPE html><html lang="en"><head>${HTML_STYLE}<title>${projectId} — RCC</title></head><body>
+  <div class="nav"><a href="/projects">← Projects</a></div>
+  <div id="root"><p class="spinner">Loading…</p></div>
+  <script>
+    const projectId=${JSON.stringify(projectId)};
+    const encodedId=${JSON.stringify(encodedId)};
+    Promise.all([
+      fetch('/api/projects/'+encodedId).then(r=>r.json()),
+      fetch('/api/queue').then(r=>r.json()),
+    ]).then(([p, qdata])=>{
+      if(p.error){document.getElementById('root').innerHTML='<p class="error">'+p.error+'</p>';return;}
+      const items=[...(qdata.items||[]),...(qdata.completed||[])].filter(i=>i.project===projectId||i.repo===projectId||(i.slack_channels||[]).some(c=>c===projectId));
+      const active=items.filter(i=>!['completed','cancelled'].includes(i.status));
+      const done=items.filter(i=>['completed','cancelled'].includes(i.status)).slice(0,10);
+      const statusBadge=(s)=>\`<span class="status-badge status-\${s||'pending'}">\${s||'pending'}</span>\`;
+      const renderItem=(i)=>\`<div class="queue-item">
+        <div class="qi-title">\${i.title||'Untitled'}</div>
+        <div class="qi-meta">
+          \${statusBadge(i.status)}
+          \${i.preferred_executor?'<span>'+i.preferred_executor+'</span>':''}
+          \${i.assignedTo?'<span>→ '+i.assignedTo+'</span>':''}
+          <span>\${new Date(i.createdAt||i.ts||0).toLocaleDateString()}</span>
+        </div>
+      </div>\`;
+      const scoutTags=(p.scouts||[]).map(s=>'<span class="scout-tag">'+s+'</span>').join('');
+      const channelLinks=(p.slack_channels||[]).map(c=>'<span>Slack #'+c.channel_id+(c.workspace?' ('+c.workspace+')':'')+'</span>').join('');
+      document.getElementById('root').innerHTML=\`
+        <div class="detail-header">
+          <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.3rem">
+            <h1>\${p.display_name||p.id}</h1>
+            <span class="badge \${p.kind||''}">\${p.kind||'project'}</span>
+          </div>
+          <p class="subtitle">\${p.description||''}</p>
+          <div class="links">
+            \${p.github_url?'<a href="'+p.github_url+'" target="_blank">GitHub →</a>':''}
+            \${p.issue_tracker&&p.issue_tracker!==p.github_url+'/issues'?'<a href="'+p.issue_tracker+'" target="_blank">Issues →</a>':''}
+            \${channelLinks}
+          </div>
+          \${scoutTags?'<div class="scouts">'+scoutTags+'</div>':''}
+          \${p.notes?'<div class="notes">'+p.notes+'</div>':''}
+        </div>
+        \${active.length?'<div class="queue-section card"><h2>Active Work ('+active.length+')</h2>'+active.map(renderItem).join('')+'</div>':''}
+        \${done.length?'<div class="queue-section card" style="margin-top:.5rem"><h2>Recent Completed</h2>'+done.map(renderItem).join('')+'</div>':''}
+        \${!active.length&&!done.length?'<div class="card"><p style="color:#8b949e;font-size:.875rem">No queue items for this project yet.</p></div>':''}
+      \`
+    }).catch(e=>{document.getElementById('root').innerHTML='<p class="error">Failed to load: '+e.message+'</p>';});
+  </script></body></html>`;
+}
+
 // ── Router ─────────────────────────────────────────────────────────────────
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://localhost`);
@@ -252,18 +375,17 @@ async function handleRequest(req, res) {
       return json(res, 200, { ...base, ...overlay });
     }
 
-    // ── Friendly redirects: /projects → /api/projects ────────────────────
-    if (method === 'GET' && path.startsWith('/projects')) {
-      const apiPath = '/api' + path + (url.search || '');
-      res.writeHead(302, { Location: apiPath, 'Access-Control-Allow-Origin': '*' });
-      res.end();
+    // ── UI: GET /projects — project list page ────────────────────────────
+    if (method === 'GET' && path === '/projects') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      res.end(projectsListHtml());
       return;
     }
-    // ── Friendly redirects: /repos → /api/repos ──────────────────────────
-    if (method === 'GET' && path.startsWith('/repos')) {
-      const apiPath = '/api' + path + (url.search || '');
-      res.writeHead(302, { Location: apiPath, 'Access-Control-Allow-Origin': '*' });
-      res.end();
+    // ── UI: GET /projects/:owner/:repo — project detail page ─────────────
+    const projectUiMatch = path.match(/^\/projects\/([^/]+(?:\/[^/]+|%2F[^/]+))$/i);
+    if (method === 'GET' && projectUiMatch) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      res.end(projectDetailHtml(decodeURIComponent(projectUiMatch[1])));
       return;
     }
 
