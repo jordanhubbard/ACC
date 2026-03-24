@@ -278,6 +278,7 @@ function projectDetailHtml(projectId) {
   <script>
     const projectId=${JSON.stringify(projectId)};
     const encodedId=${JSON.stringify(encodedId)};
+    function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
     function timeAgo(ds){if(!ds)return'';const s=Math.floor((Date.now()-new Date(ds))/1000);if(s<60)return s+'s ago';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago';}
     function labelFg(hex){if(!hex||hex==='000000')return'#8b949e';const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);return(r*299+g*587+b*114)/1000>128?'#0d1117':'#f0f6fc';}
     function labelChip(l){const bg='#'+((l.color&&l.color!=='000000')?l.color:'333');const fg=labelFg(l.color);return\`<span class="label-chip" style="background:\${bg}33;border-color:\${bg}88;color:\${fg}">\${esc(l.name||'')}</span>\`;}
@@ -301,7 +302,7 @@ function projectDetailHtml(projectId) {
           \${statusBadge(i.status)}
           \${i.preferred_executor?'<span>'+i.preferred_executor+'</span>':''}
           \${i.assignedTo?'<span>→ '+i.assignedTo+'</span>':''}
-          <span>\${new Date(i.createdAt||i.ts||0).toLocaleDateString()}</span>
+          <span>\${(i.createdAt||i.ts)?new Date(i.createdAt||i.ts).toLocaleDateString():'—'}</span>
         </div>
       </div>\`;
       const scoutTags=(p.scouts||[]).map(s=>'<span class="scout-tag">'+s+'</span>').join('');
