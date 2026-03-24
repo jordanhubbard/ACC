@@ -422,6 +422,54 @@ async function handleRequest(req, res) {
         });
       return json(res, 200, result);
     }
+    // ── GET /api/projects/:owner/:repo/github — live issues + PRs (public) ─
+    // Must be before projectPublicDetailMatch (which would otherwise eat the /github suffix)
+    if (method === 'GET' && path.endsWith('/github')) {
+      const githubSubMatch = path.match(/^\/api\/projects\/([^/]+(?:\/[^/]+|%2F[^/]+))\/github$/i);
+      if (githubSubMatch) {
+        const fullName = decodeURIComponent(githubSubMatch[1]);
+        if (!globalThis._githubCache) globalThis._githubCache = new Map();
+        const cached = globalThis._githubCache.get(fullName);
+        const bustCache = url.searchParams.get('refresh') === '1';
+        if (cached && !bustCache && (Date.now() - cached.ts) < 5 * 60 * 1000) {
+          return json(res, 200, cached.data);
+        }
+        const { execSync } = await import('child_process');
+        function ghq(args, fields) {
+          try {
+            const out = execSync(`gh ${args} --json ${fields}`, { encoding: 'utf8', stdio: ['pipe','pipe','pipe'] });
+            return JSON.parse(out);
+          } catch { return null; }
+        }
+        const issues = ghq(`issue list --repo ${fullName} --state open --limit 50`,
+          'number,title,labels,url,author,createdAt,updatedAt,comments') || [];
+        const prs = ghq(`pr list --repo ${fullName} --state open --limit 30`,
+          'number,title,author,url,isDraft,reviewDecision,mergeable,createdAt,updatedAt,labels') || [];
+        const result = {
+          repo: fullName,
+          fetchedAt: new Date().toISOString(),
+          issues: issues.map(i => ({
+            number: i.number, title: i.title, url: i.url,
+            labels: (i.labels || []).map(l => ({ name: l.name, color: l.color })),
+            author: i.author?.login || i.author,
+            createdAt: i.createdAt, updatedAt: i.updatedAt,
+            commentCount: (i.comments || []).length,
+          })),
+          prs: (prs || []).map(p => ({
+            number: p.number, title: p.title, url: p.url,
+            author: p.author?.login || p.author,
+            isDraft: p.isDraft || false,
+            reviewDecision: p.reviewDecision || null,
+            mergeable: p.mergeable || null,
+            createdAt: p.createdAt, updatedAt: p.updatedAt,
+            labels: (p.labels || []).map(l => ({ name: l.name, color: l.color })),
+          })),
+        };
+        globalThis._githubCache.set(fullName, { ts: Date.now(), data: result });
+        return json(res, 200, result);
+      }
+    }
+
     const projectPublicDetailMatch = path.match(/^\/api\/projects\/([^/]+(?:\/[^/]+|%2F[^/]+))$/i);
     if (method === 'GET' && projectPublicDetailMatch) {
       const fullName = decodeURIComponent(projectPublicDetailMatch[1]);
@@ -458,6 +506,20 @@ async function handleRequest(req, res) {
       const body = await readBody(req);
       if (!body.title) return json(res, 400, { error: 'title required' });
       const q = await readQueue();
+
+      // Scout dedup: if a scout_key is provided, reject if it already exists
+      // anywhere in the queue (active OR completed) to prevent hourly re-filing.
+      if (body.scout_key) {
+        const allExisting = [...(q.items||[]), ...(q.completed||[])];
+        const exists = allExisting.some(i =>
+          i.scout_key === body.scout_key ||
+          (i.tags || []).includes(body.scout_key)
+        );
+        if (exists) {
+          return json(res, 200, { ok: false, duplicate: true, scout_key: body.scout_key });
+        }
+      }
+
       // Infer preferred_executor if not specified
       const inferExecutor = (b) => {
         if (b.preferred_executor) return b.preferred_executor;
@@ -905,6 +967,59 @@ async function handleRequest(req, res) {
           const overlay = projectMap.get(r.full_name) || {};
           return { ...base, ...overlay };
         });
+      return json(res, 200, result);
+    }
+
+    // ── GET /api/projects/:owner/:repo/github — live issues + PRs ────────
+    // Must be before projectDetailMatch (which would otherwise eat the /github suffix)
+    const projectGithubMatch = path.match(/^\/api\/projects\/([^/]+(?:\/[^/]+|%2F[^/]+))\/github$/i);
+    if (method === 'GET' && projectGithubMatch) {
+      const fullName = decodeURIComponent(projectGithubMatch[1]);
+      // 5-minute in-memory cache
+      if (!globalThis._githubCache) globalThis._githubCache = new Map();
+      const cached = globalThis._githubCache.get(fullName);
+      const bustCache = url.searchParams.get('refresh') === '1';
+      if (cached && !bustCache && (Date.now() - cached.ts) < 5 * 60 * 1000) {
+        return json(res, 200, cached.data);
+      }
+      const { execSync } = await import('child_process');
+      function ghq(args, fields) {
+        try {
+          const out = execSync(`gh ${args} --json ${fields}`, { encoding: 'utf8', stdio: ['pipe','pipe','pipe'] });
+          return JSON.parse(out);
+        } catch { return null; }
+      }
+      const issues = ghq(`issue list --repo ${fullName} --state open --limit 50`,
+        'number,title,labels,url,author,createdAt,updatedAt,comments') || [];
+      const prs = ghq(`pr list --repo ${fullName} --state open --limit 30`,
+        'number,title,author,url,isDraft,reviewDecision,mergeable,createdAt,updatedAt,labels') || [];
+      const result = {
+        repo: fullName,
+        fetchedAt: new Date().toISOString(),
+        issues: issues.map(i => ({
+          number: i.number,
+          title: i.title,
+          url: i.url,
+          labels: (i.labels || []).map(l => ({ name: l.name, color: l.color })),
+          author: i.author?.login || i.author,
+          createdAt: i.createdAt,
+          updatedAt: i.updatedAt,
+          commentCount: (i.comments || []).length,
+        })),
+        prs: (prs || []).map(p => ({
+          number: p.number,
+          title: p.title,
+          url: p.url,
+          author: p.author?.login || p.author,
+          isDraft: p.isDraft || false,
+          reviewDecision: p.reviewDecision || null,
+          mergeable: p.mergeable || null,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+          labels: (p.labels || []).map(l => ({ name: l.name, color: l.color })),
+        })),
+      };
+      globalThis._githubCache.set(fullName, { ts: Date.now(), data: result });
       return json(res, 200, result);
     }
 
