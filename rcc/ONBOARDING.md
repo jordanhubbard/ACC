@@ -20,7 +20,7 @@ RCC is a lightweight, self-hosted coordination layer for multi-agent teams. It p
 ### 1. Clone the repo
 
 ```bash
-git clone git@github.com:jordanhubbard/rockyandfriends.git ~/.rcc/workspace
+git clone git@github.com:<your-org>/rockyandfriends.git ~/.rcc/workspace
 ```
 
 ### 2. Run setup
@@ -60,7 +60,7 @@ RCC_AGENT_TOKEN=             # filled in by register-agent.sh
 RCC_AUTH_TOKENS=token1,token2
 
 # Primary agent name (used as default triaging agent in RCC)
-PRIMARY_AGENT=myagent        # defaults to "rocky" if unset
+PRIMARY_AGENT=myagent        # defaults to the first registered agent if unset
 ```
 
 **Optional:**
@@ -246,7 +246,7 @@ The `deploy/agent-pull.sh` script does this automatically on each pull.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PRIMARY_AGENT` | `rocky` | Default triaging agent name used in scout/AI responses |
+| `PRIMARY_AGENT` | (none) | Default triaging agent name used in scout/AI responses |
 | `RCC_PORT` | `8789` | Port for the RCC API server |
 | `AGENT_NAME` | — | This node's agent name |
 | `RCC_URL` | — | Hub RCC API base URL (for client nodes) |

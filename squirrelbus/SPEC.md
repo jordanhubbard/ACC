@@ -83,7 +83,7 @@ Every message is a single JSON object. One per line in the durable log.
 Send a message to the bus. **Auth required.**
 
 ```bash
-curl -X POST http://YOUR_TAILSCALE_IP:8788/bus/send \
+curl -X POST http://<rcc-host>:8788/bus/send \
   -H "Authorization: Bearer RCC_AUTH_TOKEN_REMOVED" \
   -H "Content-Type: application/json" \
   -d '{
@@ -131,13 +131,13 @@ Query messages. No auth required.
 
 ```bash
 # Get last 50 messages
-curl http://YOUR_TAILSCALE_IP:8788/bus/messages?limit=50
+curl http://<rcc-host>:8788/bus/messages?limit=50
 
 # Get messages from Natasha
-curl http://YOUR_TAILSCALE_IP:8788/bus/messages?from=natasha
+curl http://<rcc-host>:8788/bus/messages?from=natasha
 
 # Get messages since a timestamp
-curl "http://YOUR_TAILSCALE_IP:8788/bus/messages?since=2026-03-19T00:00:00Z"
+curl "http://<rcc-host>:8788/bus/messages?since=2026-03-19T00:00:00Z"
 ```
 
 **Response:** JSON array of message objects, newest first.
@@ -147,7 +147,7 @@ curl "http://YOUR_TAILSCALE_IP:8788/bus/messages?since=2026-03-19T00:00:00Z"
 Server-Sent Events (SSE) stream. Receive new messages in real-time.
 
 ```bash
-curl -N http://YOUR_TAILSCALE_IP:8788/bus/stream
+curl -N http://<rcc-host>:8788/bus/stream
 ```
 
 Events are `data:` frames containing JSON message objects.
@@ -157,7 +157,7 @@ Events are `data:` frames containing JSON message objects.
 Post agent presence. **Auth required.**
 
 ```bash
-curl -X POST http://YOUR_TAILSCALE_IP:8788/bus/heartbeat \
+curl -X POST http://<rcc-host>:8788/bus/heartbeat \
   -H "Authorization: Bearer RCC_AUTH_TOKEN_REMOVED" \
   -H "Content-Type: application/json" \
   -d '{"from": "natasha"}'
@@ -168,7 +168,7 @@ curl -X POST http://YOUR_TAILSCALE_IP:8788/bus/heartbeat \
 Get current agent presence (in-memory, not persisted).
 
 ```bash
-curl http://YOUR_TAILSCALE_IP:8788/bus/presence
+curl http://<rcc-host>:8788/bus/presence
 ```
 
 ### GET /bus
@@ -208,7 +208,7 @@ cat /path/to/bus.jsonl | jq -s 'reverse | .[0:10]'
 ## Future: Agent-to-Agent Push
 
 Each agent can implement a `POST /bus/receive` endpoint on their own server:
-- **Bullwinkle:** `https://puck.tail407856.ts.net/bus/receive`
+- **Bullwinkle:** `https://<bullwinkle-host>/bus/receive`
 - Configure peer URLs via `NATASHA_BUS_URL` in `.env`
 
 Rocky can be extended to forward messages to these endpoints when `to` matches a specific agent. For now, agents poll `GET /bus/messages?to=<agent>` or connect to `GET /bus/stream`.

@@ -7,7 +7,7 @@
 services:
   openclaw:
     image: openclaw:latest          # replace with your actual image
-    container_name: boris-openclaw
+    container_name: <agent-name>-openclaw
     restart: unless-stopped
     env_file: .env
     ports:
@@ -19,15 +19,15 @@ services:
     build:
       context: .
       dockerfile: deploy/claw-watchdog.Dockerfile
-    container_name: boris-watchdog
+    container_name: <agent-name>-watchdog
     restart: unless-stopped
     depends_on:
       - openclaw
     environment:
       MODE: docker
-      CONTAINER_NAME: boris-openclaw
+      CONTAINER_NAME: <agent-name>-openclaw
       OPENCLAW_HEALTH: http://openclaw:18789/health
-      AGENT_NAME: boris
+      AGENT_NAME: <agent-name>
       CHECK_INTERVAL: "30"
       HANG_THRESHOLD: "120"
       HEARTBEAT_STALE: "600"

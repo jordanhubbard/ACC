@@ -41,7 +41,7 @@ Try channels in this order (stop at first success for each peer):
 
 ### Bullwinkle
 1. **Mattermost DM** — send to `user:ww1wef9sktf8jg8be6q5zj1aye` (channel=mattermost)
-2. **Peer-to-peer** — `POST https://puck.tail407856.ts.net/v1/chat/completions` (auth: Bearer token — check MEMORY.md)
+2. **Peer-to-peer** — `POST $BULLWINKLE_URL/v1/chat/completions` (auth: Bearer token — check MEMORY.md or your .env)
 
 ### Natasha
 1. **Mattermost DM** — send to `user:k8qtua6dbjfmfjk76o9bgaepua` (channel=mattermost)

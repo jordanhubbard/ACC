@@ -28,7 +28,7 @@ cd /tmp && tar xzf squirrelbus-plugin.tar.gz
 
 **Option B — direct copy** (if on the same Tailscale network):
 ```bash
-scp rocky@YOUR_TAILSCALE_IP:/home/jkh/.openclaw/workspace/squirrelbus-plugin.tar.gz /tmp/
+scp <agent-user>@<rcc-host>:/home/<agent-user>/.openclaw/workspace/squirrelbus-plugin.tar.gz /tmp/
 cd /tmp && tar xzf squirrelbus-plugin.tar.gz
 ```
 

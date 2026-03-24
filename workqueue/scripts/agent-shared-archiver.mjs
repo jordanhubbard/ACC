@@ -22,7 +22,7 @@ const MC = process.env.MC_BIN || '/home/jkh/.local/bin/mc';
 const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
 const SHARED_PREFIX = `${MINIO_ALIAS}/agents/shared`;
 
-const MM_SERVER = 'https://chat.yourmom.photos';
+const MM_SERVER = process.env.MATTERMOST_URL || '';
 const MM_TOKEN  = process.env.MATTERMOST_TOKEN || '';
 const CHANNEL_ID = 'sjkptm1ot3naijobynuqdcexyh';
 const PER_PAGE = 100;

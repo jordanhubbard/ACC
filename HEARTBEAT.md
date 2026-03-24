@@ -13,11 +13,11 @@ RCC API healthy (uptime 17564s). Queue: 22 items, all ideas or jkh-resolved.
 
 ### Each heartbeat: check these in order
 
-1. **Queue check**: `curl -s http://localhost:8789/api/queue -H "Authorization: Bearer RCC_AUTH_TOKEN_PLACEHOLDER"` — anything in-progress or stalled? Claim and work actionable items.
+1. **Queue check**: `curl -s http://localhost:8789/api/queue -H "Authorization: Bearer $RCC_AUTH_TOKEN"` — anything in-progress or stalled? Claim and work actionable items.
 
-2. **RCC health**: `curl -s http://localhost:8789/health -H "Authorization: Bearer RCC_AUTH_TOKEN_PLACEHOLDER"` — confirm up.
+2. **RCC health**: `curl -s http://localhost:8789/health -H "Authorization: Bearer $RCC_AUTH_TOKEN"` — confirm up.
 
-3. **Git sync**: After completing any task, commit + push to `jordanhubbard/rockyandfriends`.
+3. **Git sync**: After completing any task, commit + push to your workspace repo.
 
 ### Resolved today
 - `wq-JKH-security-rotation` ✅ closed — git audit confirmed no tokens leaked

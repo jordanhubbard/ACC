@@ -72,7 +72,7 @@ function buildProjectFromRepo(repo) {
     rcc_url:       projectUrl(repo.full_name),
     issue_tracker: repo.issue_tracker_url ? `https://${repo.issue_tracker_url}` : `https://github.com/${repo.full_name}/issues`,
     slack_channels: repo.ownership?.slack_channel
-      ? [{ workspace: repo.ownership.slack_workspace || 'omgjkh', channel_id: repo.ownership.slack_channel }]
+      ? [{ workspace: repo.ownership.slack_workspace || process.env.SLACK_WORKSPACE || '', channel_id: repo.ownership.slack_channel }]
       : [],
     triaging_agent: repo.ownership?.triaging_agent || process.env.DEFAULT_TRIAGING_AGENT || '',
     enabled:        repo.enabled !== false,
@@ -1334,7 +1334,7 @@ async function handleRequest(req, res) {
       const repo  = repos.find(r => r.full_name === fullName);
       if (repo) {
         if (!repo.ownership) repo.ownership = {};
-        if (!repo.ownership.slack_channel || body.workspace === 'omgjkh') {
+        if (!repo.ownership.slack_channel) {
           repo.ownership.slack_channel   = body.channel_id;
           repo.ownership.slack_workspace = body.workspace;
           await pump.patchRepo(fullName, { ownership: repo.ownership });

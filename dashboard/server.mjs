@@ -39,7 +39,7 @@ const execFileP = promisify(execFile);
 
 const app = express();
 const PORT = 8788;
-const AUTH_TOKEN = process.env.RCC_AUTH_TOKENS || process.env.RCC_AGENT_TOKEN || 'RCC_AUTH_TOKEN_PLACEHOLDER';
+const AUTH_TOKEN = process.env.RCC_AUTH_TOKENS || process.env.RCC_AGENT_TOKEN || '';
 const QUEUE_PATH = '/home/jkh/.openclaw/workspace/workqueue/queue.json';
 const MC_PATH = '/home/jkh/.local/bin/mc';
 const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
@@ -2179,7 +2179,7 @@ app.get('/api/activity', async (req, res) => {
       for (const c of contribs) {
         const login = typeof c === 'string' ? c : c.github;
         const commits = typeof c === 'object' ? c.commits : 0;
-        if (login === 'jordanhubbard') continue; // that's jkh
+        if (login === (process.env.GITHUB_OWNER || '')) continue; // skip repo owner
         if (!peopleMap.has(login)) {
           peopleMap.set(login, {
             id: `person:${login}`,

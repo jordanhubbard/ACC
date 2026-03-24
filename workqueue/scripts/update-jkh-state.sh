@@ -10,7 +10,7 @@
 #   update-jkh-state.sh read
 #   update-jkh-state.sh patch '.current_location = "Taipei, Taiwan"'
 #   update-jkh-state.sh append-context '{"ts":"2026-03-20T00:00:00Z","summary":"jkh arrived in Taipei"}'
-#   update-jkh-state.sh set-last-seen "slack-omgjkh" "Discussed render pipeline"
+#   update-jkh-state.sh set-last-seen "slack-your-workspace" "Discussed render pipeline"
 
 set -e
 

@@ -36,12 +36,8 @@ The backstory sections form a **linked chain** across repositories.  Each sectio
 
 | Part | Repository | GitHub URL |
 |------|-----------|------------|
-| 1 | shemacs | https://github.com/jordanhubbard/shemacs |
-| 2 | sheme   | https://github.com/jordanhubbard/sheme   |
-| 3 | NanoLang | https://github.com/jordanhubbard/nanolang |
-| 4 | Aviation | https://github.com/jordanhubbard/Aviation |
-| 5 | WebMux | https://github.com/jordanhubbard/webmux |
-| 6 | rocky | https://github.com/jordanhubbard/rocky |
+| 1 | your-first-repo | https://github.com/your-org/your-first-repo |
+| 2 | your-second-repo | https://github.com/your-org/your-second-repo |
 | N | *(your new repo)* | *(add here when you chain it)* |
 
 When adding a new Part N:
