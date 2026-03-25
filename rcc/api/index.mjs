@@ -6,6 +6,11 @@
  *
  * Port: RCC_PORT env var (default 8789)
  * Auth: Bearer token — must be in RCC_AUTH_TOKENS (comma-separated)
+ *
+ * Slack inbound:
+ *   SLACK_SIGNING_SECRET  — Slack app signing secret for verifying event/command payloads
+ *   OFFTERA_BOT           — Bot token for workspace THJ9A47K3
+ *   OMGJKH_BOT            — Bot token for workspace TE0V8MBEJ
  */
 
 import { createServer } from 'http';
@@ -13,6 +18,7 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname } from 'path';
 import { hostname } from 'os';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { Brain, createRequest } from '../brain/index.mjs';
 import { Pump } from '../scout/pump.mjs';
 import { learnLesson, queryLessons, queryAllLessons, formatLessonsForContext, getTrendingLessons, formatTrendingForHeartbeat, getHeartbeatContext, receiveLessonFromBus, seedKnownLessons } from '../lessons/index.mjs';
@@ -378,6 +384,81 @@ function projectDetailHtml(projectId) {
       \`
     }).catch(e=>{document.getElementById('root').innerHTML='<p class="error">Failed to load: '+e.message+'</p>';});
   </script></body></html>`;
+}
+
+// ── Slack helpers ───────────────────────────────────────────────────────────
+
+// Dedup: track last 1000 processed event IDs to ignore retries
+const processedEventIds = new Set();
+function trackEventId(id) {
+  if (processedEventIds.has(id)) return false;
+  processedEventIds.add(id);
+  if (processedEventIds.size > 1000) {
+    processedEventIds.delete(processedEventIds.values().next().value);
+  }
+  return true;
+}
+
+// Map Slack team_id → bot token
+function getSlackToken(teamId) {
+  if (teamId === 'THJ9A47K3') return process.env.OFFTERA_BOT;
+  if (teamId === 'TE0V8MBEJ') return process.env.OMGJKH_BOT;
+  return process.env.SLACK_TOKEN;
+}
+
+// Post a message to Slack, optionally threaded
+async function postSlackReply(token, channel, text, thread_ts) {
+  const payload = { channel, text };
+  if (thread_ts) payload.thread_ts = thread_ts;
+  const r = await fetch('https://slack.com/api/chat.postMessage', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+  return r.json();
+}
+
+// Read raw body bytes (needed before JSON/form parse, for HMAC verification)
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 1e6) reject(new Error('Body too large')); });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
+// Parse application/x-www-form-urlencoded (Slack slash commands)
+function parseFormBody(raw) {
+  const obj = {};
+  for (const [k, v] of new URLSearchParams(raw).entries()) obj[k] = v;
+  return obj;
+}
+
+// Verify Slack signing secret — returns true if signature valid and timestamp fresh
+function verifySlackSignature(rawBody, headers) {
+  const secret = process.env.SLACK_SIGNING_SECRET;
+  if (!secret) return false;
+  const ts = headers['x-slack-request-timestamp'];
+  const sig = headers['x-slack-signature'];
+  if (!ts || !sig) return false;
+  if (Math.abs(Date.now() / 1000 - parseInt(ts, 10)) > 300) return false; // > 5 min old
+  const expected = 'v0=' + createHmac('sha256', secret).update(`v0:${ts}:${rawBody}`).digest('hex');
+  try { return timingSafeEqual(Buffer.from(expected), Buffer.from(sig)); } catch { return false; }
+}
+
+// Ask brain and return the response text, with 25s timeout
+async function askBrain(messages, metadata = {}) {
+  const b = await getBrain();
+  const brainReq = createRequest({ messages, maxTokens: 800, priority: 'normal', metadata });
+  return Promise.race([
+    new Promise(resolve => {
+      const onDone = (r) => { if (r.id === brainReq.id) { b.off('completed', onDone); resolve(r.result); } };
+      b.on('completed', onDone);
+      b.enqueue(brainReq);
+    }),
+    new Promise(resolve => setTimeout(() => resolve("Sorry, I timed out thinking about that 🐿️"), 25000)),
+  ]);
 }
 
 // ── Router ─────────────────────────────────────────────────────────────────
@@ -1386,6 +1467,201 @@ async function handleRequest(req, res) {
     if (method === 'POST' && path === '/api/repos/scan') {
       const created = await getPump().scan();
       return json(res, 200, { ok: true, itemsCreated: created });
+    }
+
+    // ── POST /api/slack/events — inbound Slack Events API ────────────────
+    if (method === 'POST' && path === '/api/slack/events') {
+      const rawBody = await readRawBody(req);
+      if (!verifySlackSignature(rawBody, req.headers)) {
+        return json(res, 401, { error: 'Invalid Slack signature' });
+      }
+      let body;
+      try { body = JSON.parse(rawBody); } catch { return json(res, 400, { error: 'Invalid JSON' }); }
+
+      // URL verification challenge (initial app setup)
+      if (body.type === 'url_verification') {
+        return json(res, 200, { challenge: body.challenge });
+      }
+
+      if (body.type !== 'event_callback') {
+        return json(res, 200, { ok: true });
+      }
+
+      const event = body.event || {};
+      const teamId = body.team_id;
+      const eventId = body.event_id;
+
+      // Dedup: acknowledge and skip if already processed
+      if (eventId && !trackEventId(eventId)) {
+        return json(res, 200, { ok: true, deduped: true });
+      }
+
+      // Acknowledge within 3s — processing happens async below
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+
+      setImmediate(async () => {
+        try {
+          const token = getSlackToken(teamId);
+          if (!token) return;
+
+          // ── app_mention ────────────────────────────────────────────────
+          if (event.type === 'app_mention') {
+            const { channel, user, text, thread_ts, ts } = event;
+            const cleanText = (text || '').replace(/<@[A-Z0-9]+>/g, '').trim();
+            const replyThread = thread_ts || ts;
+
+            // Post thinking indicator in thread
+            await postSlackReply(token, channel, '...', replyThread);
+
+            // Resolve project context from channel mapping
+            let ctxNote = '';
+            try {
+              const repos = await getPump().listRepos();
+              const projects = await readProjects();
+              let repo = repos.find(r => r.ownership?.slack_channel === channel);
+              if (!repo) {
+                const pe = projects.find(p => (p.slack_channels || []).some(c => c.channel_id === channel));
+                if (pe) repo = repos.find(r => r.full_name === pe.id);
+              }
+              if (repo) ctxNote = ` Context: project ${repo.full_name}. ${repo.description || ''}`.trimEnd();
+            } catch {}
+
+            const reply = await askBrain(
+              [
+                { role: 'system', content: `You are Rocky, an AI assistant. Be concise and helpful.${ctxNote}` },
+                { role: 'user', content: cleanText || '(no message text)' },
+              ],
+              { channel, user, teamId },
+            ).catch(() => "Sorry, I timed out thinking about that 🐿️");
+
+            await postSlackReply(token, channel, reply, replyThread);
+          }
+
+          // ── DM messages (not from bots) ────────────────────────────────
+          if (event.type === 'message' && !event.bot_id && event.channel?.startsWith('D')) {
+            const { channel, user, text, thread_ts, ts } = event;
+            if (!text) return;
+            const replyThread = thread_ts || ts;
+
+            const reply = await askBrain(
+              [
+                { role: 'system', content: 'You are Rocky, an AI assistant. Be concise and helpful.' },
+                { role: 'user', content: text },
+              ],
+              { channel, user, teamId },
+            ).catch(() => "Sorry, I timed out thinking about that 🐿️");
+
+            await postSlackReply(token, channel, reply, replyThread);
+          }
+        } catch (err) {
+          console.error('[rcc-api] Slack event processing error:', err.message);
+        }
+      });
+
+      return; // already responded
+    }
+
+    // ── POST /api/slack/commands — Slack slash commands ───────────────────
+    if (method === 'POST' && path === '/api/slack/commands') {
+      const rawBody = await readRawBody(req);
+      if (!verifySlackSignature(rawBody, req.headers)) {
+        return json(res, 401, { error: 'Invalid Slack signature' });
+      }
+      const body = parseFormBody(rawBody);
+      const { text = '', response_url, channel_id, team_id, user_id } = body;
+
+      const args = text.trim().split(/\s+/);
+      const sub = args[0]?.toLowerCase() || '';
+
+      // /rcc help
+      if (!sub || sub === 'help') {
+        return json(res, 200, {
+          response_type: 'ephemeral',
+          text: '*Rocky Command Center — Available Commands*\n' +
+            '• `/rcc status` — agent health summary\n' +
+            '• `/rcc queue` — top 5 pending work items\n' +
+            '• `/rcc ask <question>` — ask Rocky a question\n' +
+            '• `/rcc help` — this message',
+        });
+      }
+
+      // /rcc status
+      if (sub === 'status') {
+        const agents = await readAgents();
+        const q = await readQueue();
+        const cutoff = Date.now() - 10 * 60 * 1000;
+        const agentEntries = Object.entries(agents);
+        const onlineNames = new Set(
+          agentEntries.filter(([name]) => heartbeats[name] && new Date(heartbeats[name].ts).getTime() > cutoff).map(([n]) => n)
+        );
+        const pending = (q.items || []).filter(i => !['completed', 'cancelled'].includes(i.status));
+        const lines = [
+          `*RCC Status* — ${onlineNames.size}/${agentEntries.length} agents online, ${pending.length} pending`,
+          ...agentEntries.map(([name]) => `${onlineNames.has(name) ? '✅' : '⬛'} ${name}`),
+        ];
+        return json(res, 200, { response_type: 'in_channel', text: lines.join('\n') });
+      }
+
+      // /rcc queue
+      if (sub === 'queue') {
+        const q = await readQueue();
+        const pending = (q.items || []).filter(i => !['completed', 'cancelled'].includes(i.status)).slice(0, 5);
+        if (!pending.length) {
+          return json(res, 200, { response_type: 'in_channel', text: '*Queue is empty* ✓' });
+        }
+        const lines = pending.map((item, i) =>
+          `${i + 1}. *${item.title || 'Untitled'}* — \`${item.status || 'pending'}\`${item.project ? ` [${item.project}]` : ''}`
+        );
+        return json(res, 200, {
+          response_type: 'in_channel',
+          text: `*Top ${pending.length} Queue Items*\n${lines.join('\n')}`,
+        });
+      }
+
+      // /rcc ask <question>
+      if (sub === 'ask') {
+        const question = args.slice(1).join(' ').trim();
+        if (!question) {
+          return json(res, 200, { response_type: 'ephemeral', text: 'Usage: `/rcc ask <your question>`' });
+        }
+        // Ack immediately with a placeholder, then post real answer
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ response_type: 'in_channel', text: '...thinking 🐿️' }));
+
+        setImmediate(async () => {
+          const answer = await askBrain(
+            [
+              { role: 'system', content: 'You are Rocky, an AI assistant. Be concise and helpful.' },
+              { role: 'user', content: question },
+            ],
+            { channel: channel_id, user: user_id, teamId: team_id },
+          ).catch(() => "Sorry, I timed out thinking about that 🐿️");
+
+          try {
+            if (response_url) {
+              await fetch(response_url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ response_type: 'in_channel', text: answer, replace_original: false }),
+              });
+            } else {
+              const token = getSlackToken(team_id);
+              if (token && channel_id) await postSlackReply(token, channel_id, answer);
+            }
+          } catch (err) {
+            console.error('[rcc-api] Slash command reply error:', err.message);
+          }
+        });
+
+        return; // already responded
+      }
+
+      // Unknown subcommand
+      return json(res, 200, {
+        response_type: 'ephemeral',
+        text: `Unknown command \`/rcc ${sub}\`. Try \`/rcc help\`.`,
+      });
     }
 
     // ── POST /api/slack/send — send a message via Slack as a named agent ──
