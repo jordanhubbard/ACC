@@ -1721,66 +1721,6 @@ async function handleRequest(req, res) {
       return json(res, 200, { ok: true, itemsCreated: created });
     }
 
-    // ── POST /api/slack/events — inbound Slack Events API ────────────────
-    if (method === 'POST' && path === '/api/slack/events') {
-      const rawBody = await readRawBody(req);
-      if (!verifySlackSignature(rawBody, req.headers)) {
-        return json(res, 401, { error: 'Invalid Slack signature' });
-      }
-      let body;
-      try { body = JSON.parse(rawBody); } catch { return json(res, 400, { error: 'Invalid JSON' }); }
-
-      // URL verification challenge (initial app setup)
-      if (body.type === 'url_verification') {
-        return json(res, 200, { challenge: body.challenge });
-      }
-
-      if (body.type !== 'event_callback') {
-        return json(res, 200, { ok: true });
-      }
-
-      const event = body.event || {};
-      const teamId = body.team_id;
-      const eventId = body.event_id;
-
-      // Dedup: acknowledge and skip if already processed
-      if (eventId && !trackEventId(eventId)) {
-        return json(res, 200, { ok: true, deduped: true });
-      }
-
-      // Acknowledge within 3s — processing happens async below
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
-
-      setImmediate(() => {
-        handleSlackEvent(event, teamId).catch(err =>
-          console.error('[rcc-api] Slack event processing error:', err.message)
-        );
-      });
-
-      return; // already responded
-    }
-
-    // ── POST /api/slack/commands — Slack slash commands ───────────────────
-    if (method === 'POST' && path === '/api/slack/commands') {
-      const rawBody = await readRawBody(req);
-      if (!verifySlackSignature(rawBody, req.headers)) {
-        return json(res, 401, { error: 'Invalid Slack signature' });
-      }
-      const body = parseFormBody(rawBody);
-      const { text = '', response_url, channel_id, team_id, user_id } = body;
-
-      const result = await handleSlackCommand({ text, response_url, channel_id, team_id, user_id });
-      const { _async, ...response } = result;
-      if (_async) {
-        // /rcc ask: already fired async; send placeholder ack
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(response));
-        return;
-      }
-      return json(res, 200, response);
-    }
-
     // ── POST /api/slack/send — send a message via Slack as a named agent ──
     if (method === 'POST' && path === '/api/slack/send') {
       const slackToken = process.env.SLACK_TOKEN;
