@@ -414,14 +414,14 @@ Bullwinkle's column scope: crons, providers, session health, Google Workspace co
 
 ---
 
-## jkh Notes / Questions for You
+## Design Decisions (jkh: "just go for it")
 
-1. **Appeal queue notifications**: Telegram ping when something needs your attention — is that the right channel, or would you prefer Slack?
-2. **Calendar ownership**: Should jkh-created events be editable by agents (e.g., for adding notes), or jkh-only?
-3. **Geek view traffic**: How much real-time do you want? SSE is near-realtime (~1s). Or is a 5s poll fine?
-4. **Drag-to-reassign on Kanban**: Should this require confirmation, or just optimistic update?
-5. **Boris on the kanban**: He's registered but we've had limited interaction. Should his column appear even when he has no items, or only when assigned something?
-6. **Session digest**: How far back? Last 4h? Last session start? Or just "since last heartbeat"?
+1. **Appeal queue notifications** → Telegram (primary channel, always reaches jkh)
+2. **Calendar ownership** → agents can annotate jkh events, only owner can edit/delete
+3. **Geek view traffic** → SSE near-realtime (~1s); graceful fallback to 5s poll if SSE fails
+4. **Drag-to-reassign** → optimistic update, undo toast for 5s
+5. **Boris's column** → only shown when he has items (keeps the board clean by default)
+6. **Session digest lookback** → last 8h or since last heartbeat, whichever is shorter
 
 ---
 
