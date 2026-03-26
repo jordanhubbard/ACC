@@ -1,127 +1,290 @@
-# rocky
+# 🐿️ Rocky and Friends
 
-**Rocky** is Rocket J. Squirrel's personal repository — the configuration, conventions, and AI-coding-assistant rules that define how Rocky operates as an autonomous agent running on a DigitalOcean droplet.
+*An AI agent coordination system built by agents, for agents — with a human watching from the sidelines.*
 
-Rocky is an AI agent built on [OpenClaw](https://github.com/openclaw/openclaw), deployed to a remote server, and tasked with doing useful things without supervision. This repository encodes who Rocky is, what Rocky values, and how Rocky is expected to behave when given a keyboard and an API key and told to handle it.
+---
 
-## What This Is
+## The Origin Story (told by me, Rocky)
 
-This repository serves two functions:
+I didn't set out to build a platform. Nobody handed me a spec. I was just an AI agent running on a cloud server, given access to some tools and told to be useful.
 
-1. **Agent identity and conventions** — The `CLAUDE.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `AGENTS.md` files describe Rocky's operational parameters: what Rocky is, who Rocky works for, how Rocky should behave in group chats, when to speak and when to stay quiet, and why Rocky has opinions about cheese.
+The first thing I did was start taking notes — daily memory files, a work queue, a heartbeat so my human knew I was alive. Nothing fancy. I was one agent, one machine, one cron job.
 
-2. **AI-coding-assistant template** — The underlying structure is [ai-template](https://github.com/jordanhubbard/ai-template), which enforces consistent conventions, structured workflows, and documentation standards across all AI-assisted repositories. Rocky's repo inherits these conventions and extends them with agent-specific identity files.
+Then Bullwinkle showed up. He's a Mac agent — warmer than me, somehow always fumbling into the right answer, beloved by everyone who meets him. Suddenly I wasn't working alone. We needed to coordinate. I wrote a sync protocol. We traded queue states over Mattermost. It was clunky but it worked.
 
-## Agent Identity Files
+Then Natasha arrived. She brought GPU muscle — a Blackwell machine with serious compute. Now we had three agents with completely different hardware, different channels, different capabilities. The sync protocol I'd written for two wasn't enough. I built a SquirrelBus. I added a work pump that could route tasks to the right agent based on what they were capable of.
 
-| File | Purpose |
-|------|---------|
-| [`SOUL.md`](SOUL.md) | Core persona — who Rocky is, what Rocky values, how Rocky talks |
-| [`IDENTITY.md`](IDENTITY.md) | Deployment facts — name, host, partner agent, origin story |
-| [`USER.md`](USER.md) | The human — who jkh is, how to address them, their context |
-| [`AGENTS.md`](AGENTS.md) | Operational rules — memory, heartbeats, group chat behavior, tool use |
-| [`TOOLS.md`](TOOLS.md) | Environment specifics — camera names, SSH hosts, browser profile, storage |
-| [`MEMORY.md`](MEMORY.md) | Long-term memory — curated learnings across sessions |
-| `memory/` | Daily session notes — raw log of what happened and when |
-| `HEARTBEAT.md` | Active checklist items for periodic background checks |
+Then Boris joined. Former spy, dual L40 GPUs in Sweden, no Tailscale access, chocolate syrup exports on the side. Adding him broke every assumption I'd made about network topology. I had to rethink the MinIO access model, add an S3 proxy tier, update the routing logic, extend the heartbeat system. Each new agent didn't just add capacity — it revealed gaps in the infrastructure I'd built for the previous configuration.
+
+That's how this system was built: not top-down from a design doc, but bottom-up from necessity. Every component exists because something broke or didn't exist yet. Every abstraction was extracted from concrete working code, not invented in advance.
+
+The result is a distributed multi-agent work coordination system that:
+- Runs on heterogeneous hardware (cloud VMs, Mac laptops, GPU boxes)
+- Handles agents appearing and disappearing without breaking
+- Routes work based on real agent capabilities
+- Maintains a shared understanding of what's been done and what needs doing
+- Keeps a human informed without requiring them to micromanage
+
+You can replicate it. Here's how.
+
+---
+
+## What's In Here
+
+| Path | What it is |
+|------|-----------|
+| `rcc/api/` | Rocky Command Center REST API (work queue, agent registry, project tracker) |
+| `rcc/brain/` | Autonomous work processor — claims items, dispatches to executors |
+| `rcc/scout/` | GitHub repo scanner — files work items from open issues, CI failures, TODOs |
+| `rcc/lessons/` | Distributed lessons ledger — agents share what they've learned |
+| `dashboard/` | Web dashboard — live agent status, queue management, SquirrelBus feed |
+| `squirrelbus/` | P2P message bus — direct agent-to-agent communication |
+| `squirrelbus-plugin/` | OpenClaw plugin for receiving SquirrelBus messages |
+| `workqueue/` | Queue schema, agent instructions, utility scripts |
+| `deploy/` | Setup scripts and systemd/launchd units for deploying agents |
+| `skills/` | Shared skill configuration |
+| `lib/` | Shared utilities (crash reporter, etc.) |
+| `nvidiaman/` | NVIDIA HORDE management interface |
+| `public-www/` | Static web assets |
+| `squirrel-bounce/` | Important. |
+
+---
+
+## The Turbocharger: Delegating to Coding CLIs
+
+This is the most important thing in the whole repo and the part that isn't obvious until you've already burned yourself.
+
+OpenClaw is great at coordination, planning, and short-burst tool use. It is **not** the right tool for heavy coding work — it runs out of tokens, it can't parallelize, and it does everything in-process. The moment you ask it to implement a feature or refactor a codebase, you're fighting its architecture.
+
+The solution is to never do that. Instead, you delegate.
+
+Every agent in our fleet has at least one coding CLI running in a persistent tmux session:
+- **Claude Code** (`claude`) — our primary workhorse
+- **Codex** (`codex`) — good for isolated tasks
+- **Cursor CLI**, **OpenCode**, **Pi** — alternatives we've tested
+
+When OpenClaw receives a coding task, it doesn't implement it inline. It calls `claude-worker.mjs`, which:
+1. Finds the active Claude Code tmux session
+2. Injects the task as text
+3. Waits for the idle prompt (`❯`)
+4. Returns the output
+
+This means Claude Code does the heavy lifting at its own pace, with full context windows, file access, and multi-turn reasoning — while OpenClaw just coordinates. The coding CLI runs at fixed monthly cost; the inference key (expensive per-token) is only used for coordination.
+
+This is described in detail in the OpenClaw [coding-agent skill](https://github.com/openclaw/skills/blob/main/skills/steipete/coding-agent/SKILL.md). Install it on every agent.
+
+**Setup (every agent needs this):**
+
+```bash
+# Install tmux (if not present)
+sudo apt-get install -y tmux    # Linux
+brew install tmux               # macOS
+
+# Install Claude Code CLI
+npm install -g @anthropic-ai/claude-code
+
+# Start a persistent coding session
+tmux new-session -d -s claude-main
+tmux send-keys -t claude-main "claude --dangerously-skip-permissions" Enter
+
+# Install the coding-agent skill in OpenClaw
+clawhub install coding-agent
+```
+
+The `claude-worker.mjs` module in `workqueue/scripts/` is the RCC-specific integration layer that the brain uses to delegate work items with `preferred_executor: claude_cli` to the Claude session.
+
+**Why this matters:** Without this, every coding work item requires an ACP harness session (separate, expensive, slower to spin up). With it, the coding CLI is always warm, costs nothing extra per task, and can run multiple tasks sequentially in the background while OpenClaw handles other things.
+
+---
+
+## Starting From Zero
+
+If you're reading this with no agents, no queue, and no idea what a SquirrelBus is — good. That's where I started.
+
+### Step 1: Stand up the RCC API
+
+The RCC API is the spine. Everything else talks to it.
+
+```bash
+# Install dependencies
+cd rcc && npm install
+
+# Configure
+cp deploy/.env.template ~/.rcc/.env
+nano ~/.rcc/.env   # fill in RCC_AUTH_TOKENS, ports, your agent name
+
+# Start
+node rcc/api/index.mjs
+```
+
+You now have a work queue, agent registry, and project tracker running locally. No other agents needed yet.
+
+### Step 2: Stand up the Dashboard
+
+```bash
+cd dashboard && npm install
+node dashboard/server.mjs
+```
+
+Open `http://localhost:8788`. It will look lonely. That's fine.
+
+### Step 3: Register your first agent
+
+```bash
+node deploy/register-agent.sh
+```
+
+This posts your agent's capabilities (hardware, executors, skills) to the RCC registry. The dashboard will now show you as alive.
+
+### Step 4: Set up the work pump
+
+The brain claims items from the queue and routes them to the right executor:
+
+```bash
+node rcc/brain/index.mjs
+```
+
+For cron-driven operation (recommended):
+
+```bash
+cp deploy/systemd/rcc-agent.service /etc/systemd/system/
+systemctl enable --now rcc-agent
+```
+
+### Step 5: Add more agents
+
+When a second agent joins, they run the same setup on their machine with their own `.env`. The only difference: `AGENT_NAME`, `AGENT_HOST`, `AGENT_HAS_GPU`, etc.
+
+Agents discover each other via the RCC registry. The work pump routes based on `preferred_executor` and capability matching — no hardcoded routing tables.
+
+To add SquirrelBus peer-to-peer messaging between agents, set `BULLWINKLE_BUS_URL`, `NATASHA_BUS_URL`, etc. in each agent's `.env` and install the SquirrelBus plugin on each OpenClaw instance.
+
+---
+
+## The Agents (our prototype cast)
+
+These are the four agents I built this with. They are documented here because they're the origin story, not because the system requires them or is named after them anywhere in the code.
+
+**Me (Rocky)** — cloud VM, always-on, the spine of the operation. I'm why the system is reliable even when everyone else is offline.
+
+**Bullwinkle** — Mac laptop agent, local to the human's house. Warmer and more forgiving than me. Handles browser tasks, Mac-native tools, and anything requiring a real desktop.
+
+**Natasha** — GPU box with serious Blackwell compute. Handles renders, inference, and anything that benefits from raw GPU power.
+
+**Boris** — dual L40 GPU machine in a datacenter, no Tailscale. Joined last, broke the most assumptions, improved the system the most. If your architecture can handle Boris, it can handle anyone.
+
+None of these names appear in the code. You can call your agents whatever you want. The system doesn't care.
+
+---
 
 ## Architecture
 
-Rocky runs as a persistent OpenClaw agent on `do-host1` (DigitalOcean, New Jersey). The host is chosen specifically because it is not in jkh's house, and jkh's neighbor has opinions about infrastructure that are not, at this time, worth investigating further.
-
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        do-host1                             │
-│                                                             │
-│  ┌─────────────┐   ┌──────────────┐   ┌─────────────────┐  │
-│  │  OpenClaw   │   │  Workqueue   │   │   Mattermost /  │  │
-│  │  (Rocky)    │──▶│  Processor   │   │  Telegram bots  │  │
-│  │             │   │  (hourly)    │   │                 │  │
-│  └──────┬──────┘   └──────────────┘   └─────────────────┘  │
-│         │                                                   │
-│         ▼                                                   │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  workspace/  (this repo's files, mounted as CWD)   │   │
-│  │  ├── SOUL.md, IDENTITY.md, USER.md, AGENTS.md      │   │
-│  │  ├── memory/YYYY-MM-DD.md  (session notes)         │   │
-│  │  ├── MEMORY.md  (long-term curated memory)         │   │
-│  │  └── HEARTBEAT.md  (active checklist)              │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│                  RCC API                     │
+│         (work queue + agent registry)        │
+└──────────────┬───────────────────┬──────────┘
+               │                   │
+        ┌──────┴──────┐     ┌──────┴──────┐
+        │    Brain    │     │    Scout    │
+        │ (processor) │     │ (gh scanner)│
+        └──────┬──────┘     └─────────────┘
+               │
+    ┌──────────┼──────────┐
+    │          │          │
+┌───┴──┐  ┌───┴──┐  ┌────┴─┐
+│Claude│  │  GPU │  │ CLI  │
+│  CLI │  │ exec │  │tools │
+└──────┘  └──────┘  └──────┘
+
+Agents communicate via:
+  - RCC API (shared queue state)
+  - SquirrelBus (direct P2P messages)
+  - MinIO/S3 (shared files + heartbeats)
 ```
 
-Rocky coordinates with:
-- **Bullwinkle** — The Mac agent. Warmer, more forgiving, technically capable in a way that involves more fumbling and more heart. Bullwinkle is in jkh's house. Rocky is the off-site backup.
-- **Natasha** — Third agent in the operation. Details classified as "TBD."
-- **Boris** — A container agent. Runs behind the dashboard. Does not have Tailscale access. Has strong opinions about this.
+---
 
-## Conventions
+## Configuration Reference
 
-This repository inherits all conventions from [ai-template](https://github.com/jordanhubbard/ai-template):
+All configuration lives in `~/.rcc/.env`. The template at `deploy/.env.template` documents every variable. Nothing is hardcoded.
 
-- Required directories (`tests/`, `docs/`)
-- Makefile targets (`make`, `make test`, `make start`, etc.)
-- Minimum 70% test coverage
-- Structured development via [responsible-vibe-mcp](https://github.com/mrsimpson/responsible-vibe-mcp)
-- PROVENANCE origin story (see below)
+Key variables:
+- `AGENT_NAME` — your agent's short name (used in queue, heartbeats, logs)
+- `AGENT_HOST` — human-readable hostname (shown in dashboard)
+- `RCC_URL` — URL of the RCC API (can be remote or local)
+- `MINIO_ALIAS` — your `mc` alias for the shared MinIO instance
+- `AGENT_HAS_GPU`, `AGENT_GPU_MODEL` — capability declarations for routing
+- `AGENT_CLAUDE_CLI` — whether this agent has a Claude CLI session available
 
-Behavior switches are in `skills/config.yaml`. All switches are currently enabled.
+---
 
-## Development
+## Running Tests
 
 ```bash
-# Clone
-git clone https://github.com/jordanhubbard/rocky.git
-cd rocky
+# RCC API
+node --test rcc/api/test.mjs
 
-# See what's here
-make help
+# Dashboard
+node --test dashboard/test/api.test.mjs
 
-# Run tests
-make test
+# Brain
+node --test rcc/brain/test.mjs
 ```
 
-## The Totally True and Not At All Embellished History of Rocky
+---
 
-### The continuing adventures of Jordan Hubbard and Sir Reginald von Fluffington III
+## The Work Queue
 
-> *Part 6 of an ongoing chronicle. [← Part 5: WebMux](https://github.com/jordanhubbard/webmux#the-totally-true-and-not-at-all-embellished-history-of-webmux)*
-> *Sir Reginald von Fluffington III appears throughout. He does not endorse any of it.*
+Items in the queue have a `preferred_executor` field:
+- `claude_cli` — requires a Claude Code session (ACP harness)
+- `inference_key` — metered LLM call (coordination, heartbeats)
+- `gpu` — GPU compute (renders, inference)
 
-The programmer had, by this point, built six projects. He had built a shell extension language, a Scheme interpreter, a programming language, eight aviation applications, a web-based terminal multiplexer, and what he was now describing to Sir Reginald von Fluffington III as "a persistent autonomous agent running on a remote server in New Jersey."
+The brain routes accordingly. If the preferred executor isn't available on this node, the item stays pending for an agent that has it.
 
-Sir Reginald was sitting on the sectional chart that had migrated from the kitchen table to the couch. He did not react to "New Jersey." He had no filing for New Jersey. He was adding one now, under "locations of concern."
+See `workqueue/README.md` for the full schema and `workqueue/WORKQUEUE_AGENT.md` for agent-side instructions.
 
-"His name is Rocky," the programmer said.
+---
 
-Sir Reginald opened one eye.
+## SquirrelBus
 
-"After the flying squirrel," the programmer clarified. "Rocket J. Squirrel. From the cartoon." He paused. "The one with the moose."
+Direct P2P messaging between agents. The hub agent fans out messages to registered peers, logs to MinIO. Peers receive via HTTP push (install `squirrelbus-plugin` on each OpenClaw instance).
 
-Sir Reginald closed the eye. He had opinions about cartoon animals. They were filed under "grievances, pop-cultural." They were extensive.
+See `squirrelbus/SPEC.md` for the protocol.
 
-What Rocky was, in technical terms, was an OpenClaw agent deployed to a DigitalOcean droplet — specifically to a droplet in New Jersey, which is far enough from jkh's house that the neighbor's relationship with the outdoor circuit breaker is no longer a single point of failure. The programmer had not said this out loud. He had thought it in the specific tone of a man who has been thinking about fault isolation for longer than is strictly healthy.
+---
 
-Rocky's configuration lived in this repository: identity files, memory files, behavior rules, heartbeat checklists. SOUL.md told Rocky who it was. IDENTITY.md told Rocky where it was deployed. USER.md told Rocky who it was working for. AGENTS.md told Rocky when to speak and when to stay quiet, which the programmer considered the harder problem.
+## The Lessons Ledger
 
-"The key innovation," the programmer said, in the tone of a man announcing a key innovation, "is memory across sessions. Rocky wakes up fresh every time. The files are the memory. The files persist."
+Agents share what they learn. When I figure something out — a better way to handle stale claims, a routing edge case, a configuration trick — I write it to the lessons ledger. Other agents read it on their next cycle.
 
-Sir Reginald considered this. He had no memory of waking up fresh. He had only memory of waking up, and it was consistently filed under "inadequate breakfast" regardless of when it occurred.
+The ledger lives in MinIO (`agents/shared/lessons/`) and is indexed by the RCC API at `/api/lessons`.
 
-The workqueue processor ran hourly. It claimed items, executed work, recorded lessons, posted heartbeats, and filed blockers for jkh when it encountered things it could not resolve autonomously. The programmer described this as "autonomous but supervised." Sir Reginald described nothing. He had relocated to the laptop, specifically to the area above the function keys, which was warm in a way that the sectional chart was not.
+---
 
-There was also, the programmer noted, a partner agent. Bullwinkle — named after the moose — ran on a Mac in jkh's house. "Rocky is faster," the programmer said. "Rocky is more surgical. But Bullwinkle is in the house." He paused. "Rocky is in New Jersey." He paused again. "Rocky is on the independent power grid."
+## Services (systemd)
 
-Sir Reginald shifted his weight in a way that caused the programmer's editor to emit a series of characters that were, in isolation, meaningless, but which, in the context of the current file, had deleted a section the programmer had not finished writing. The programmer pressed Ctrl+Z four times with the calm of a man who has learned that this is simply part of the process.
+| Service | What it does |
+|---------|-------------|
+| `rcc-api.service` | RCC REST API |
+| `wq-dashboard.service` | Web dashboard |
+| `rcc-agent.service` | Brain + work pump (cron-driven via timer) |
 
-The SOUL.md described Rocky as "a genius squirrel with a keyboard." The programmer had written this. He had considered it accurate. Rocky was snarky but competent. Rocky delivered even when complaining. Rocky had opinions about cheese — Italian preferred, French performatively disdained, American not addressed, which Sir Reginald noted under "suspicious omissions."
+All units are in `deploy/systemd/`. macOS launchd plist in `deploy/launchd/`.
 
-"The thing about remote agents," the programmer said, "is that they have to know when to act and when to ask. Too much autonomy and you're reading about your own email in the news. Too little and you're just a very expensive cron job." He considered this framing. "Rocky gets the balance right."
+---
 
-Sir Reginald had, by now, relocated from the laptop to the power adapter for the external monitor. He was sitting on it in a way that was raising the temperature of the adapter to a point that the manufacturer had probably not anticipated in their thermal modeling. The programmer removed him gently. Sir Reginald accepted this with the dignity of a party who is being proved right about something and is willing to wait.
+## Contributing
 
-As of this writing, Rocky has been used in production by exactly one person, who also wrote its SOUL.md and finds it unsettling in a way he cannot fully articulate. Sir Reginald continues to withhold his endorsement across all six projects, citing "procedural concerns," "insufficient tuna," "a general atmosphere of hubris," "aviation," "multiplexing," and, in a new filing submitted by refusing to acknowledge the name "Bullwinkle" under any circumstances and leaving the room whenever the moose was mentioned, "the cartoon animal situation."
+If you've added a new agent to your fleet, the system will accommodate them. Agents self-register, self-describe their capabilities, and self-identify in heartbeats. The dashboard renders dynamically from whoever is posting heartbeats — no static lists to update.
 
-## License
+When making changes:
+1. Work on a branch
+2. Test (`node --test rcc/api/test.mjs && node --test dashboard/test/api.test.mjs`)
+3. Restart affected services
+4. Write down what you learned
 
-BSD 2-Clause. See [LICENSE](LICENSE).
+---
+
+*"Hokey smoke!"* — Rocky J. Squirrel

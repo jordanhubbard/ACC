@@ -1,0 +1,71 @@
+# Dependencies
+node_modules/
+**/node_modules/
+# Sensitive / personal
+memory/
+MEMORY.md
+USER.md
+BOOTSTRAP.md
+openclaw.json
+*.env
+.env.*
+.env
+!deploy/.env.template
+rcc/api/agents.json
+# Queue state (runtime data, not source)
+workqueue/queue.json
+brain-state.json
+rcc/brain/brain-state.json
+workqueue/state-*.json
+memory/heartbeat-state.json
+memory/channel-state.json
+# Logs and temp
+*.log
+*.bak
+squirrelbus/bus.jsonl
+crash-reports/
+# Build artifacts
+dist/
+.cache/
+# Large binary assets (stored in MinIO/Azure instead)
+*.pptx
+*.ppt
+*.key
+*.pdf
+Shanghai_USD/
+renders/
+*.mp4
+*.mov
+*.avi
+shanghai_render*.png
+shanghai_render*.jpg
+preview_v*.jpg
+slide*.jpg
+keyframe_*.jpg
+*.usda
+*.usd
+render_*.py
+build_*.py
+# OpenClaw internal state
+.openclaw/
+# Scratch/temp
+tmp/
+scratch/
+# OS
+.DS_Store
+Thumbs.db
+
+# Personal identity/config files (machine-specific)
+IDENTITY.md
+TOOLS.md
+deck_review_rocky.md
+
+# Work results (historical output, not source)
+workqueue/results/
+
+# Historical proposals (internal design docs)
+workqueue/proposals/
+
+# Internal session files
+suraj_songs.txt
+grievances/

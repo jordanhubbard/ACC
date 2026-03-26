@@ -1,19 +1,65 @@
-schema_version: "1.0"
+# Rocky's Skills Configuration
+# local (Digital Ocean, Linux x64)
+# Disable skills that are Mac-only, require local hardware, or aren't relevant
 
-# Template-level behavior switches inherited by repositories created from
-# ai-template. Copy this file into downstream repositories to opt in/out.
-behavior_switches:
-  provenance_story:
-    # Master switch for the "Totally True and Not At All Embellished History"
-    # convention.
-    enabled: true
+disabled:
+  # Mac-only
+  - apple-notes
+  - apple-reminders
+  - bear-notes
+  - bluebubbles       # iMessage bridge (Mac)
+  - blucli            # Bluetooth CLI (Mac)
+  - camsnap           # Mac camera
+  - imsg              # iMessage (Mac)
+  - openhue           # Philips Hue (local network at jkh's house)
+  - peekaboo          # Mac camera/vision
+  - sag               # ElevenLabs TTS (Mac voice output)
+  - sherpa-onnx-tts   # Local TTS (Mac)
+  - spotify-player    # Spotify playback (Mac)
+  - things-mac        # Things 3 (Mac)
+  - sonoscli          # Sonos speakers (jkh's house, not reachable from DO)
+  - voice-call        # Voice calls (Mac)
 
-    # If true, README updates are expected to include the PROVENANCE section.
-    require_readme_section: true
+  # Require local hardware/context not on local
+  - eightctl          # Hardware controller
+  - goplaces          # Location/places (Mac)
+  - oracle            # Oracle hardware
 
-    # If true, keep chronicle links/table updates in sync across repositories.
-    update_chronicle: true
+  # Not configured / no creds on this instance
+  - 1password         # Not set up on local
+  - discord           # Not configured
+  - notion            # Not configured
+  - trello            # Not configured
+  - ordercli          # Not configured
 
-  responsible_vibe_workflow:
-    # Enables structured workflow guidance provided by responsible-vibe skills.
-    enabled: true
+enabled:
+  # Core tools Rocky uses
+  - clawhub           # Skill management
+  - gemini            # Gemini CLI
+  - gh-issues         # GitHub issue/PR management
+  - gifgrep           # GIF search
+  - github            # gh CLI
+  - healthcheck       # Security audits
+  - himalaya          # Email (IMAP/SMTP)
+  - mcporter          # MCP server control
+  - nano-banana-pro   # Image generation (Gemini)
+  - obsidian          # Notes (if vault configured)
+  - openai-image-gen  # OpenAI image generation
+  - openai-whisper    # Local Whisper STT
+  - openai-whisper-api # Whisper API
+  - skill-creator     # Create/update skills
+  - slack             # Slack integration
+  - songsee           # Audio spectrograms
+  - summarize         # Summarization
+  - tmux              # tmux control
+  - video-frames      # ffmpeg frame extraction
+  - wacli             # WhatsApp CLI
+  - weather           # Weather lookups
+  - canvas            # Canvas/UI rendering
+  - session-logs      # Session logging
+  - coding-agent      # Code generation
+  - blogwatcher       # Blog monitoring
+  - xurl              # URL tools
+  - nano-pdf          # PDF tools
+  - model-usage       # Model usage tracking
+  - gog               # Google Drive (read-only for Rocky; Bullwinkle writes)
