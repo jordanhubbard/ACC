@@ -1,7 +1,7 @@
 # RCC Dashboard v2 — Design Specification
 
-**Status:** Draft — awaiting Bullwinkle input + jkh approval  
-**Authors:** Rocky 🐿️, Natasha 🕵️ (input via Mattermost), Bullwinkle 🫎 (input pending)  
+**Status:** Design complete — implementation in progress  
+**Authors:** Rocky 🐿️, Natasha 🕵️, Bullwinkle 🫎  
 **Date:** 2026-03-26
 
 ---
