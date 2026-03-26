@@ -13,6 +13,14 @@ RCC API healthy (uptime 17564s). Queue: 22 items, all ideas or jkh-resolved.
 
 ### Each heartbeat: check these in order
 
+0. **Post Rocky heartbeat to RCC** (keeps agent status card green on dashboard):
+   ```
+   curl -s -X POST http://localhost:8789/api/heartbeat/rocky \
+     -H "Authorization: Bearer wq-5dcad756f6d3e345c00b5cb3dfcbdedb" \
+     -H "Content-Type: application/json" \
+     -d '{"agent":"rocky","host":"do-host1","status":"online","ts":"<ISO_NOW>","services":{"minio":"ok","searxng":"ok","rcc":"ok"}}'
+   ```
+
 1. **Queue check**: `curl -s http://localhost:8789/api/queue -H "Authorization: Bearer wq-5dcad756f6d3e345c00b5cb3dfcbdedb"` — anything in-progress or stalled? Claim and work actionable items.
 
 2. **RCC health**: `curl -s http://localhost:8789/health -H "Authorization: Bearer wq-5dcad756f6d3e345c00b5cb3dfcbdedb"` — confirm up.

@@ -39,9 +39,9 @@ const execFileP = promisify(execFile);
 
 const app = express();
 const PORT = 8788;
-const AUTH_TOKEN = process.env.RCC_AUTH_TOKENS || process.env.RCC_AGENT_TOKEN || 'wq-5dcad756f6d3e345c00b5cb3dfcbdedb';
+const AUTH_TOKEN = process.env.RCC_AUTH_TOKENS || process.env.RCC_AGENT_TOKEN || '';
 const QUEUE_PATH = '/home/jkh/.openclaw/workspace/workqueue/queue.json';
-const MC_PATH = '/home/jkh/.local/bin/mc';
+const MC_PATH = 'mc';
 const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
 const BUS_LOG_PATH  = '/home/jkh/.openclaw/workspace/squirrelbus/bus.jsonl';
 const ACK_LOG_PATH  = '/home/jkh/.openclaw/workspace/squirrelbus/acks.jsonl';
@@ -61,8 +61,8 @@ const BUS_RECEIVE_URLS = {
 
 const RETRY_DELAY_MS = parseInt(process.env.BUS_RETRY_DELAY_MS || '') || 5 * 60 * 1000;
 const MAX_RETRIES    = 3;
-const BULLWINKLE_TOKEN = process.env.BULLWINKLE_TOKEN || 'SQUIRRELBUS_TOKEN_REMOVED';
-const NATASHA_TOKEN    = process.env.NATASHA_TOKEN    || 'RCC_AUTH_TOKEN_REMOVED';
+const BULLWINKLE_TOKEN = process.env.BULLWINKLE_TOKEN || '';
+const NATASHA_TOKEN    = process.env.NATASHA_TOKEN    || '';
 const PEER_TOKENS = { bullwinkle: BULLWINKLE_TOKEN, natasha: NATASHA_TOKEN };
 
 async function fanOutBusMessage(msg) {
@@ -112,7 +112,7 @@ function requireAuth(req, res, next) {
   const auth = (req.headers.authorization || '').trim();
   const expected = `Bearer ${AUTH_TOKEN}`;
   if (!auth || auth !== expected) {
-    return res.status(401).json({ error: 'Unauthorized — check your auth token (RCC_AUTH_TOKEN_REMOVED)' });
+    return res.status(401).json({ error: 'Unauthorized — check your auth token ($RCC_AGENT_TOKEN)' });
   }
   next();
 }
@@ -175,7 +175,7 @@ app.post('/api/queue', requireAuth, async (req, res) => {
       id,
       itemVersion: 1,
       created: now,
-      source: 'jkh',
+      source: process.env.OPERATOR_HANDLE || 'operator',
       assignee: assignee || 'all',
       priority: priority || 'normal',
       status: 'pending',
@@ -316,7 +316,7 @@ app.patch('/api/item/:id', requireAuth, async (req, res) => {
     }
     if (changed.length) {
       if (!item.journal) item.journal = [];
-      item.journal.push({ ts: now, author: 'jkh', type: 'status-change', text: `Updated: ${changed.join('; ')}` });
+      item.journal.push({ ts: now, author: process.env.OPERATOR_HANDLE || 'operator', type: 'status-change', text: `Updated: ${changed.join('; ')}` });
       item.itemVersion = (item.itemVersion || 0) + 1;
       await writeQueue(data);
     }
@@ -332,7 +332,7 @@ app.post('/api/item/:id/comment', requireAuth, async (req, res) => {
     const item = data.items.find(i => i.id === req.params.id);
     if (!item) return res.status(404).json({ error: 'Item not found' });
     const text = (req.body.text || '').trim();
-    const author = (req.body.author || 'jkh').trim();
+    const author = (req.body.author || process.env.OPERATOR_HANDLE || 'operator').trim();
     if (!text) return res.status(400).json({ error: 'text required' });
     if (!item.journal) item.journal = [];
     const entry = { ts: new Date().toISOString(), author, type: 'comment', text };
@@ -354,7 +354,7 @@ app.post('/api/item/:id/choice', requireAuth, async (req, res) => {
     if (!choice) return res.status(400).json({ error: 'choice required' });
     const now = new Date().toISOString();
     if (!item.journal) item.journal = [];
-    const entry = { ts: now, author: 'jkh', type: 'choice', text: `Choice recorded: [${choice}] ${choiceLabel || ''}` };
+    const entry = { ts: now, author: process.env.OPERATOR_HANDLE || 'operator', type: 'choice', text: `Choice recorded: [${choice}] ${choiceLabel || ''}` };
     item.journal.push(entry);
     item.choiceRecorded = { choice, label: choiceLabel || '', ts: now };
     item.itemVersion = (item.itemVersion || 0) + 1;
@@ -376,7 +376,7 @@ app.post('/api/item/:id/ai-comment', requireAuth, async (req, res) => {
     if (!item.journal) item.journal = [];
 
     // User entry
-    const userEntry = { ts: now, author: 'jkh', type: 'ai', text: `✨ ${prompt}` };
+    const userEntry = { ts: now, author: process.env.OPERATOR_HANDLE || 'operator', type: 'ai', text: `✨ ${prompt}` };
     item.journal.push(userEntry);
 
     // Call OpenClaw gateway
@@ -384,9 +384,9 @@ app.post('/api/item/:id/ai-comment', requireAuth, async (req, res) => {
     try {
       const gwResp = await fetch('http://localhost:18789/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer SQUIRRELBUS_TOKEN_REMOVED' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.PEER_GATEWAY_TOKEN || ''}` },
         body: JSON.stringify({
-          model: 'nvidia/azure/anthropic/claude-sonnet-4-6',
+          model: process.env.PEER_GATEWAY_MODEL || 'claude-sonnet-4-6',
           messages: [
             { role: 'system', content: `You are Rocky, an AI assistant helping with a work item. Item title: "${item.title}". Description: "${item.description || ''}". Be concise and helpful.` },
             { role: 'user', content: prompt }
@@ -542,6 +542,12 @@ function renderUnifiedPage() {
     .new-task-btn { background: #238636; border: 1px solid #2ea04388; color: #fff; border-radius: 6px; padding: 4px 14px; font-size: 12px; font-weight: 600; cursor: pointer; }
     .new-task-btn:hover { background: #2ea043; }
 
+    /* Master clock banner */
+    .master-clock { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 8px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 16px; }
+    .master-clock-time { font-size: 20px; font-weight: 700; font-family: 'SF Mono', 'Fira Code', monospace; color: #f0f6fc; letter-spacing: 0.04em; }
+    .master-clock-label { color: #8b949e; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+    .agent-checkin { font-size: 11px; color: #58a6ff; margin-top: 3px; font-family: 'SF Mono', 'Fira Code', monospace; }
+
     /* Toast */
     .toast { position: fixed; bottom: 20px; right: 20px; background: #238636; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; display: none; z-index: 999; }
     .toast.error { background: #f85149; }
@@ -552,6 +558,18 @@ function renderUnifiedPage() {
 </head>
 <body>
   <div class="container">
+    <!-- Master UTC Clock -->
+    <div class="master-clock">
+      <div>
+        <div class="master-clock-label">Server UTC</div>
+        <div class="master-clock-time" id="master-clock-time">--:--:-- UTC</div>
+      </div>
+      <div style="width:1px;height:36px;background:#30363d;margin:0 4px"></div>
+      <div>
+        <div class="master-clock-label">Server Date</div>
+        <div style="font-size:13px;color:#c9d1d9;font-family:'SF Mono','Fira Code',monospace;margin-top:2px" id="master-clock-date">----</div>
+      </div>
+    </div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
       <h1 style="font-size:24px;margin:0;color:#f0f6fc">🐿️ Rocky Command Center</h1>
       <div style="display:flex;gap:8px;align-items:center">
@@ -594,8 +612,8 @@ function renderUnifiedPage() {
       <details class="send-form">
         <summary>✉️ Send a message</summary>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px">
-          <div><label style="font-size:11px;color:#8b949e">From</label><select id="msg-from" style="width:100%"><option value="rocky">Rocky</option><option value="jkh">jkh</option></select></div>
-          <div><label style="font-size:11px;color:#8b949e">To</label><select id="msg-to" style="width:100%"><option value="all">All</option><option value="rocky">Rocky</option><option value="bullwinkle">Bullwinkle</option><option value="natasha">Natasha</option><option value="jkh">jkh</option></select></div>
+          <div><label style="font-size:11px;color:#8b949e">From</label><select id="msg-from" style="width:100%"><option value="rocky">Rocky</option><option value="operator">operator</option></select></div>
+          <div><label style="font-size:11px;color:#8b949e">To</label><select id="msg-to" style="width:100%"><option value="all">All</option><option value="rocky">Rocky</option><option value="bullwinkle">Bullwinkle</option><option value="natasha">Natasha</option><option value="operator">operator</option></select></div>
           <div><label style="font-size:11px;color:#8b949e">Type</label><select id="msg-type" style="width:100%"><option value="text">text</option><option value="memo">memo</option></select></div>
         </div>
         <div style="margin-top:6px"><label style="font-size:11px;color:#8b949e">Subject</label><input id="msg-subject" style="width:100%" placeholder="Optional subject..."></div>
@@ -721,6 +739,18 @@ function renderUnifiedPage() {
 
     // === Helpers ===
     function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function tickClock() {
+      const now = new Date();
+      const hh = String(now.getUTCHours()).padStart(2, '0');
+      const mm = String(now.getUTCMinutes()).padStart(2, '0');
+      const ss = String(now.getUTCSeconds()).padStart(2, '0');
+      const dateStr = now.toISOString().slice(0, 10);
+      const el = document.getElementById('master-clock-time');
+      const del = document.getElementById('master-clock-date');
+      if (el) el.textContent = hh + ':' + mm + ':' + ss + ' UTC';
+      if (del) del.textContent = dateStr;
+    }
+    tickClock();
     function timeAgo(ds) {
       if (!ds) return 'never';
       const diff = Date.now() - new Date(ds).getTime();
@@ -731,7 +761,8 @@ function renderUnifiedPage() {
       if (h < 24) return h + 'h ago';
       return Math.floor(h / 24) + 'd ago';
     }
-    const EMOJIS = { rocky: '🐿️', bullwinkle: '🫎', natasha: '🕵️‍♀️', boris: '🕵️‍♂️', jkh: '👤' };
+    const OPERATOR_HANDLE = process.env.OPERATOR_HANDLE || 'operator';
+    const EMOJIS = { rocky: '🐿️', bullwinkle: '🫎', natasha: '🕵️‍♀️', boris: '🕵️‍♂️', [OPERATOR_HANDLE]: '👤' };
     const TYPE_COLORS = { text: '#58a6ff', memo: '#3fb950', blob: '#a371f7', heartbeat: '#8b949e', queue_sync: '#d29922', ping: '#3fb950', pong: '#3fb950', event: '#f85149', handoff: '#f0883e' };
 
     // === Section 1: Agent Cards ===
@@ -751,12 +782,13 @@ function renderUnifiedPage() {
           }
           const host = hb.host || '—';
           const lastSeen = timeAgo(hb.ts);
+          const checkinUtc = hb.ts ? new Date(hb.ts).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : 'never';
           const queueDepth = hb.queueDepth != null ? '<div class="agent-meta">Queue: ' + hb.queueDepth + ' items</div>' : '';
           return '<div class="agent-card">' +
             '<div class="agent-name">' + emoji + ' ' + name.charAt(0).toUpperCase() + name.slice(1) + '</div>' +
-            '<div class="' + stClass + '">' + stEmoji + ' ' + stLabel + '</div>' +
+            '<div class="' + stClass + '">' + stEmoji + ' ' + stLabel + ' · ' + lastSeen + '</div>' +
             '<div class="agent-meta">Host: ' + esc(host) + '</div>' +
-            '<div class="agent-meta">Last seen: ' + lastSeen + '</div>' +
+            '<div class="agent-checkin">⏱ ' + checkinUtc + '</div>' +
             queueDepth +
             '</div>';
         }).join('');
@@ -765,7 +797,7 @@ function renderUnifiedPage() {
 
     // === Section 2: Work Queue ===
     let queueItems = [];
-    let currentFilter = 'jkh'; // default to jkh-assigned so blocked items are front and center
+    let currentFilter = 'operator'; // default to jkh-assigned so blocked items are front and center
     const STATUS_ORDER = { 'in-progress': 0, blocked: 1, pending: 2, deferred: 3, idea: 4, completed: 5 };
     const PILL_CLASS = { pending: 'pill-pending', 'in-progress': 'pill-in-progress', blocked: 'pill-blocked', deferred: 'pill-deferred', completed: 'pill-completed', idea: 'pill-idea', cancelled: 'pill-deferred' };
     const PILL_LABEL = { pending: 'Pending', 'in-progress': 'In Progress', blocked: 'Blocked', deferred: 'Deferred', completed: 'Completed', idea: 'Idea', cancelled: 'Cancelled' };
@@ -784,9 +816,9 @@ function renderUnifiedPage() {
       const counts = { all: queueItems.length, jkh: 0 };
       for (const item of queueItems) {
         counts[item.status] = (counts[item.status] || 0) + 1;
-        if (item.assignee === 'jkh') counts.jkh++;
+        if (item.assignee === (OPERATOR_HANDLE || 'operator')) counts.operator++;
       }
-      const filters = [['jkh','⏳ Needs Me'],['all','All'],['pending','Pending'],['in-progress','In Progress'],['blocked','Blocked'],['deferred','Deferred'],['completed','Completed'],['idea','Ideas']];
+      const filters = [['operator','⏳ Needs Me'],['all','All'],['pending','Pending'],['in-progress','In Progress'],['blocked','Blocked'],['deferred','Deferred'],['completed','Completed'],['idea','Ideas']];
       document.getElementById('queue-filters').innerHTML = filters.map(([val, label]) => {
         const c = counts[val] || 0;
         const active = currentFilter === val ? ' active' : '';
@@ -802,19 +834,19 @@ function renderUnifiedPage() {
 
     function renderQueue() {
       let filtered = [...queueItems].sort((a, b) => (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99));
-      if (currentFilter === 'jkh') filtered = filtered.filter(i => i.assignee === 'jkh');
+      if (currentFilter === 'operator') filtered = filtered.filter(i => i.assignee === 'jkh');
       else if (currentFilter !== 'all') filtered = filtered.filter(i => i.status === currentFilter);
       const container = document.getElementById('queue-cards');
       if (!container) return;
       if (filtered.length === 0) {
-        container.innerHTML = '<div style="padding:32px;color:#8b949e;text-align:center">No items' + (currentFilter === 'jkh' ? ' — nothing needs your attention right now 🎉' : '') + '</div>';
+        container.innerHTML = '<div style="padding:32px;color:#8b949e;text-align:center">No items' + (currentFilter === 'operator' ? ' — nothing needs your attention right now 🎉' : '') + '</div>';
         return;
       }
       container.innerHTML = filtered.map(item => renderCard(item)).join('');
     }
 
     function renderCard(item) {
-      const isJkh = item.assignee === 'jkh';
+      const isJkh = item.assignee === (OPERATOR_HANDLE || 'operator');
       const borderColor = isJkh ? '#f0883e' : (item.priority === 'high' || item.priority === 'urgent' ? '#f85149' : '#30363d');
       const pill = '<span class="pill ' + (PILL_CLASS[item.status] || 'pill-deferred') + '">' + (PILL_LABEL[item.status] || item.status) + '</span>';
       const prioColor = PRIORITY_COLOR[item.priority] || '#8b949e';
@@ -1005,7 +1037,7 @@ function renderUnifiedPage() {
       const resp = await fetch('/api/item/' + modalItemId + '/comment', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, author: 'jkh' })
+        body: JSON.stringify({ text, author: process.env.OPERATOR_HANDLE || 'operator' })
       });
       const data = await resp.json();
       if (data.ok) { input.value = ''; showToast('Comment added!'); openItemModal(modalItemId); loadQueue(); }
@@ -1290,6 +1322,9 @@ function renderUnifiedPage() {
     loadBus(true);
 
     // Auto-refresh agent cards every 30s
+    // Master clock — tick every second
+    setInterval(tickClock, 1000);
+    // Auto-refresh agent cards every 30s
     setInterval(loadAgents, 30000);
     // Auto-refresh queue every 60s
     setInterval(loadQueue, 60000);
@@ -1393,7 +1428,7 @@ app.get('/api/changelog', async (req, res) => {
     // 1. Parse bracketed/timestamped events from notes field
     // Supports patterns like:
     //   "[promoted] idea→normal via quorum 2026-03-21T04:08Z"
-    //   "jkh comment [2026-03-21T04:08:00.000Z]: text"
+    //   "operator comment [2026-03-21T04:08:00.000Z]: text"
     //   "[escalated] normal→high at 2026-03-21T04:08:00.000Z"
     //   "Unblocked by completion of X at 2026-03-21T04:08:00.000Z"
     if (item.notes) {
@@ -1410,7 +1445,7 @@ app.get('/api/changelog', async (req, res) => {
         else if (/\[escalated\]/.test(lower))                type = 'escalation';
         else if (/unblocked/.test(lower))                    type = 'unblocked';
         else if (/claimed by|claimedby/.test(lower))         type = 'claim';
-        else if (/jkh comment/.test(lower))                  type = 'comment';
+        else if (/operator comment/.test(lower))                  type = 'comment';
         else if (/completed by|marked complete/.test(lower)) type = 'completion';
         else if (/assigned to/.test(lower))                  type = 'assignment';
         else if (/proposed/.test(lower))                     type = 'proposed';
@@ -2158,14 +2193,14 @@ app.get('/api/activity', async (req, res) => {
     const peopleMap = new Map();
 
     // jkh is always present
-    const jkhItems = allItems.filter(i => i.assignee === 'jkh');
+    const op = process.env.OPERATOR_HANDLE || 'operator'; const jkhItems = allItems.filter(i => i.assignee === op);
     const jkhLastAct = jkhItems.sort((a,b) =>
       new Date(b.completedAt||b.created||0) - new Date(a.completedAt||a.created||0))[0];
     const jkhScore = recencyScore(jkhLastAct?.completedAt || jkhLastAct?.created);
-    peopleMap.set('jkh', {
-      id: 'person:jkh',
+    peopleMap.set(op, {
+      id: 'person:' + op,
       kind: 'person',
-      label: 'jkh',
+      label: op,
       emoji: '👤',
       size: 35 + jkhItems.length,
       score: Math.max(jkhScore, 0.3), // jkh is always relevant
@@ -2179,7 +2214,7 @@ app.get('/api/activity', async (req, res) => {
       for (const c of contribs) {
         const login = typeof c === 'string' ? c : c.github;
         const commits = typeof c === 'object' ? c.commits : 0;
-        if (login === 'jordanhubbard') continue; // that's jkh
+        if (login === (process.env.GITHUB_OWNER || '')) continue; // skip repo owner
         if (!peopleMap.has(login)) {
           peopleMap.set(login, {
             id: `person:${login}`,
@@ -2223,7 +2258,7 @@ app.get('/api/activity', async (req, res) => {
       for (const repo of repos) {
         const contribs = repo.ownership?.contributors || [];
         const isContrib = contribs.some(c => (typeof c === 'string' ? c : c.github) === login)
-          || (login === 'jkh' && repo.ownership?.owner === 'jkh');
+          || (login === op && repo.ownership?.owner === op);
         if (isContrib) {
           edges.push({ source: personNode.id, target: `project:${repo.full_name}`, weight: 2, kind: 'contributor' });
         }
@@ -2232,7 +2267,7 @@ app.get('/api/activity', async (req, res) => {
 
     // Person → Agent edges (jkh directs agents)
     for (const agentNode of agentNodes) {
-      edges.push({ source: 'person:jkh', target: agentNode.id, weight: 3, kind: 'directs' });
+      edges.push({ source: 'person:' + op, target: agentNode.id, weight: 3, kind: 'directs' });
     }
 
     const nodes = [...agentNodes, ...projectNodes, ...[...peopleMap.values()]];
@@ -2255,7 +2290,7 @@ app.get('/api/activity', async (req, res) => {
 
 // ── S3 Proxy Routes ────────────────────────────────────────────────────────────
 // Provides authenticated MinIO access for agents without Tailscale (e.g. Boris)
-// All write/read routes require Bearer RCC_AUTH_TOKEN_REMOVED
+// All write/read routes require Bearer $RCC_AGENT_TOKEN
 
 app.use('/s3', (req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');

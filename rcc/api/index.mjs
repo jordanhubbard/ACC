@@ -12,6 +12,7 @@ import { createServer } from 'http';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname } from 'path';
+import { createHmac, timingSafeEqual, randomUUID } from 'crypto';
 import { Brain, createRequest } from '../brain/index.mjs';
 import { Pump } from '../scout/pump.mjs';
 import { learnLesson, queryLessons, queryAllLessons, formatLessonsForContext, getTrendingLessons, formatTrendingForHeartbeat, getHeartbeatContext, receiveLessonFromBus, seedKnownLessons } from '../lessons/index.mjs';
@@ -26,6 +27,12 @@ const PROJECTS_PATH   = process.env.PROJECTS_PATH || './projects.json';
 const RCC_PUBLIC_URL  = process.env.RCC_PUBLIC_URL || 'http://localhost:8789';
 const AUTH_TOKENS  = new Set((process.env.RCC_AUTH_TOKENS || '').split(',').map(t => t.trim()).filter(Boolean));
 const START_TIME   = Date.now();
+const CALENDAR_PATH = process.env.CALENDAR_PATH || './data/calendar.json';
+
+// ── Slack config ───────────────────────────────────────────────────────────
+const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
+const SLACK_BOT_TOKEN      = process.env.SLACK_BOT_TOKEN      || '';
+const SLACK_API            = 'https://slack.com/api';
 
 // ── Stale claim thresholds (ms) by executor type ───────────────────────────
 // claude_cli: real coding agents, can run 60-90min on complex tasks
@@ -40,6 +47,10 @@ const STALE_THRESHOLDS = {
 
 // ── In-memory heartbeats ───────────────────────────────────────────────────
 const heartbeats = {};
+const heartbeatHistory = {};
+const cronStatus = {};
+const providerHealth = {};
+const geekSseClients = new Set();
 
 // ── Projects I/O ─────────────────────────────────────────────────────────
 async function readProjects() {
@@ -163,6 +174,19 @@ async function writeCapabilities(data) {
   await writeFile(p, JSON.stringify(data, null, 2));
 }
 
+// ── Calendar I/O ───────────────────────────────────────────────────────────
+async function readCalendar() {
+  const p = new URL(CALENDAR_PATH, import.meta.url).pathname;
+  if (!existsSync(p)) return [];
+  return JSON.parse(await readFile(p, 'utf8'));
+}
+
+async function writeCalendar(data) {
+  const p = new URL(CALENDAR_PATH, import.meta.url).pathname;
+  await mkdir(dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify(data, null, 2));
+}
+
 // ── HTTP helpers ───────────────────────────────────────────────────────────
 function json(res, status, body) {
   const payload = JSON.stringify(body);
@@ -177,6 +201,16 @@ function readBody(req) {
     req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error('Invalid JSON')); } });
     req.on('error', reject);
   });
+}
+
+// ── Geek SSE broadcast ─────────────────────────────────────────────────────
+function broadcastGeekEvent(type, from, to, label) {
+  if (geekSseClients.size === 0) return;
+  const data = JSON.stringify({ type, from, to, label, ts: new Date().toISOString() });
+  const msg = `data: ${data}\n\n`;
+  for (const client of geekSseClients) {
+    try { client.write(msg); } catch { geekSseClients.delete(client); }
+  }
 }
 
 // ── HTML UI helpers ────────────────────────────────────────────────────────
@@ -328,6 +362,80 @@ function projectDetailHtml(projectId) {
       \`
     }).catch(e=>{document.getElementById('root').innerHTML='<p class="error">Failed to load: '+e.message+'</p>';});
   </script></body></html>`;
+}
+
+// ── Slack helpers ──────────────────────────────────────────────────────────
+
+/** Read raw body bytes (needed for Slack signature verification) */
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+/** Verify Slack request signature — returns true if valid */
+function verifySlackSignature(req, rawBody) {
+  if (!SLACK_SIGNING_SECRET) return true; // dev mode — no secret configured
+  const ts = req.headers['x-slack-request-timestamp'];
+  const sig = req.headers['x-slack-signature'];
+  if (!ts || !sig) return false;
+  // Replay attack: reject if >5 minutes old
+  if (Math.abs(Date.now() / 1000 - parseInt(ts, 10)) > 300) return false;
+  const baseString = `v0:${ts}:${rawBody.toString('utf8')}`;
+  const hmac = createHmac('sha256', SLACK_SIGNING_SECRET).update(baseString).digest('hex');
+  const computed = Buffer.from(`v0=${hmac}`);
+  const provided  = Buffer.from(sig);
+  if (computed.length !== provided.length) return false;
+  return timingSafeEqual(computed, provided);
+}
+
+/** Post a message to Slack */
+async function slackPost(endpoint, payload) {
+  if (!SLACK_BOT_TOKEN) throw new Error('SLACK_BOT_TOKEN not configured');
+  const resp = await fetch(`${SLACK_API}/${endpoint}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${SLACK_BOT_TOKEN}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify(payload),
+  });
+  return resp.json();
+}
+
+/** Format queue summary for Slack */
+async function formatQueueSummary() {
+  const qdata = await readQueue();
+  const pending = (qdata.items || []).filter(i => i.status === 'pending');
+  const inProgress = (qdata.items || []).filter(i => i.status === 'in-progress');
+  const top = pending
+    .sort((a, b) => {
+      const pri = { urgent: 0, high: 1, medium: 2, normal: 2, low: 3, idea: 4 };
+      return (pri[a.priority] ?? 2) - (pri[b.priority] ?? 2);
+    })
+    .slice(0, 3);
+  let text = `*Queue status:* ${pending.length} pending, ${inProgress.length} in-progress`;
+  if (top.length) {
+    text += '\n*Top items:*\n' + top.map(i =>
+      `• [${i.priority}] ${i.title?.slice(0, 80) ?? i.id} _(${i.assignee})_`
+    ).join('\n');
+  }
+  return text;
+}
+
+/** Format heartbeat/agent status for Slack */
+async function formatAgentStatus() {
+  const agentsData = await readAgents().catch(() => []);
+  const aList = Array.isArray(agentsData) ? agentsData : (agentsData.agents || []);
+  const agents = aList.map(a => {
+    const mins = a.lastSeen ? Math.round((Date.now() - new Date(a.lastSeen).getTime()) / 60000) : null;
+    const status = mins === null ? '?' : mins < 5 ? '🟢' : mins < 30 ? '🟡' : '🔴';
+    return `${status} *${a.name || a.id}* — ${mins === null ? 'never' : `${mins}m ago`} (${a.host || 'unknown host'})`;
+  });
+  return agents.length ? agents.join('\n') : '_No agents registered_';
 }
 
 // ── Router ─────────────────────────────────────────────────────────────────
@@ -653,7 +761,7 @@ async function handleRequest(req, res) {
       const q = await readQueue();
       const item = q.items?.find(i => i.id === id);
       if (!item) return json(res, 404, { error: 'Item not found' });
-      const allowed = ['title','description','priority','assignee','status','notes','choices','claimedBy','claimedAt','result','completedAt'];
+      const allowed = ['title','description','priority','assignee','status','notes','choices','claimedBy','claimedAt','result','completedAt','type','blockedBy','blocks','needsHuman','needsHumanAt','needsHumanReason'];
       const now = new Date().toISOString();
       const changed = [];
       for (const field of allowed) {
@@ -857,12 +965,17 @@ async function handleRequest(req, res) {
       const agent = decodeURIComponent(hbMatch[1]);
       const body = await readBody(req);
       heartbeats[agent] = { agent, ts: new Date().toISOString(), status: 'online', ...body };
+      // Ring buffer for heartbeat history (max 288 entries = 24h at 5-min intervals)
+      if (!heartbeatHistory[agent]) heartbeatHistory[agent] = [];
+      heartbeatHistory[agent].push({ ts: new Date().toISOString(), status: 'online' });
+      if (heartbeatHistory[agent].length > 288) heartbeatHistory[agent].shift();
       // Update agent lastSeen
       const agents = await readAgents();
       if (agents[agent]) {
         agents[agent].lastSeen = heartbeats[agent].ts;
         await writeAgents(agents);
       }
+      broadcastGeekEvent('heartbeat', agent, 'rocky', `${agent} heartbeat`);
       return json(res, 200, { ok: true });
     }
 
@@ -1144,6 +1257,7 @@ async function handleRequest(req, res) {
     // ── POST /api/bus/receive — handle incoming SquirrelBus messages ──────
     if (method === 'POST' && path === '/api/bus/receive') {
       const body = await readBody(req);
+      broadcastGeekEvent('bus_msg', body.from || 'unknown', body.to || 'all', 'SquirrelBus message');
       if (body.type === 'lesson') {
         await receiveLessonFromBus(body);
         return json(res, 200, { ok: true });
@@ -1155,6 +1269,412 @@ async function handleRequest(req, res) {
     if (method === 'POST' && path === '/api/repos/scan') {
       const created = await getPump().scan();
       return json(res, 200, { ok: true, itemsCreated: created });
+    }
+
+    // ── POST /api/slack/send — send a message to Slack ─────────────────────
+    if (method === 'POST' && path === '/api/slack/send') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const body = await readBody(req);
+      if (!body.channel || !body.text) return json(res, 400, { error: 'channel and text required' });
+      const result = await slackPost('chat.postMessage', {
+        channel:   body.channel,
+        text:      body.text,
+        thread_ts: body.thread_ts,
+        mrkdwn:    true,
+      });
+      return json(res, 200, { ok: result.ok, ts: result.ts, error: result.error });
+    }
+
+    // ── POST /api/slack/events — Slack Events API (app_mention, message.im) ─
+    if (method === 'POST' && path === '/api/slack/events') {
+      const rawBody = await readRawBody(req);
+      if (!verifySlackSignature(req, rawBody)) {
+        return json(res, 401, { error: 'Invalid Slack signature' });
+      }
+      let body;
+      try { body = JSON.parse(rawBody.toString('utf8')); } catch { return json(res, 400, { error: 'Invalid JSON' }); }
+
+      // Slack url_verification challenge (app setup handshake)
+      if (body.type === 'url_verification') {
+        return json(res, 200, { challenge: body.challenge });
+      }
+
+      // Process events asynchronously — Slack requires 200 within 3s
+      const event = body.event || {};
+      json(res, 200, { ok: true }); // respond immediately
+
+      if (event.type === 'app_mention' || (event.type === 'message' && event.channel_type === 'im' && !event.bot_id)) {
+        const text = (event.text || '').replace(/<@[A-Z0-9]+>/g, '').trim();
+        if (!text) return;
+        try {
+          const b = await getBrain();
+          const request = createRequest({
+            role: 'user',
+            content: text,
+            context: { slack_user: event.user, slack_channel: event.channel, source: 'slack' },
+          });
+          const reply = await b.process(request);
+          const replyText = typeof reply === 'string' ? reply : reply?.content || reply?.text || JSON.stringify(reply);
+          await slackPost('chat.postMessage', {
+            channel:   event.channel,
+            text:      replyText,
+            thread_ts: event.ts,
+            mrkdwn:    true,
+          });
+        } catch (e) {
+          console.error('[rcc-api] Slack event brain error:', e.message);
+          await slackPost('chat.postMessage', {
+            channel:   event.channel,
+            text:      `⚠️ Error: ${e.message}`,
+            thread_ts: event.ts,
+          }).catch(() => {});
+        }
+      }
+      return; // already responded
+    }
+
+    // ── POST /api/slack/commands — Slack slash commands (/rcc ...) ─────────
+    if (method === 'POST' && path === '/api/slack/commands') {
+      const rawBody = await readRawBody(req);
+      if (!verifySlackSignature(req, rawBody)) {
+        return json(res, 401, { error: 'Invalid Slack signature' });
+      }
+      // Slack sends slash command payloads as URL-encoded form
+      const params = Object.fromEntries(new URLSearchParams(rawBody.toString('utf8')));
+      const cmdText = (params.text || '').trim().toLowerCase();
+      const channel  = params.channel_id;
+      const responseUrl = params.response_url;
+
+      // Helper: send delayed response to Slack response_url
+      const slackRespond = async (text) => {
+        if (!responseUrl) return;
+        await fetch(responseUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, response_type: 'in_channel', mrkdwn: true }),
+        }).catch(() => {});
+      };
+
+      // Acknowledge immediately (required within 3s)
+      const ack = { text: '⏳ Working on it...', response_type: 'ephemeral' };
+
+      if (cmdText === 'status' || cmdText === '') {
+        json(res, 200, ack);
+        const statusText = await formatAgentStatus().catch(e => `Error: ${e.message}`);
+        await slackRespond(`*🐿️ RCC Agent Status*\n${statusText}`);
+        return;
+      }
+
+      if (cmdText === 'queue') {
+        json(res, 200, ack);
+        const queueText = await formatQueueSummary().catch(e => `Error: ${e.message}`);
+        await slackRespond(`*📋 RCC Queue*\n${queueText}`);
+        return;
+      }
+
+      if (cmdText.startsWith('ask ')) {
+        const question = cmdText.slice(4).trim();
+        json(res, 200, ack);
+        try {
+          const b = await getBrain();
+          const request = createRequest({
+            role: 'user',
+            content: question,
+            context: { slack_channel: channel, source: 'slack_command' },
+          });
+          const reply = await b.process(request);
+          const replyText = typeof reply === 'string' ? reply : reply?.content || reply?.text || JSON.stringify(reply);
+          await slackRespond(`*🧠 RCC Brain:* ${replyText}`);
+        } catch (e) {
+          await slackRespond(`⚠️ Error: ${e.message}`);
+        }
+        return;
+      }
+
+      // Unknown command — show help
+      return json(res, 200, {
+        text: '*RCC Slash Commands*\n`/rcc status` — agent heartbeat status\n`/rcc queue` — pending work items\n`/rcc ask <question>` — ask the RCC brain',
+        response_type: 'ephemeral',
+      });
+    }
+
+    // ── GET /api/calendar ─────────────────────────────────────────────────
+    if (method === 'GET' && path === '/api/calendar') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      let events = await readCalendar();
+      const start = url.searchParams.get('start');
+      const end   = url.searchParams.get('end');
+      const resource = url.searchParams.get('resource');
+      if (start) events = events.filter(e => e.end >= start);
+      if (end)   events = events.filter(e => e.start <= end);
+      if (resource) events = events.filter(e => e.resource === resource);
+      return json(res, 200, events);
+    }
+
+    // ── POST /api/calendar ────────────────────────────────────────────────
+    if (method === 'POST' && path === '/api/calendar') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const body = await readBody(req);
+      if (!body.title || !body.start || !body.end)
+        return json(res, 400, { error: 'title, start, end required' });
+      const events = await readCalendar();
+      const event = {
+        id: randomUUID(),
+        title: body.title,
+        start: body.start,
+        end: body.end,
+        allDay: body.allDay || false,
+        tags: body.tags || [],
+        description: body.description || '',
+        owner: body.owner || null,
+        type: body.type || 'event',
+        resource: body.resource || null,
+      };
+      events.push(event);
+      await writeCalendar(events);
+      return json(res, 201, { ok: true, event });
+    }
+
+    // ── DELETE /api/calendar/:id ──────────────────────────────────────────
+    const calDeleteMatch = path.match(/^\/api\/calendar\/([^/]+)$/);
+    if (method === 'DELETE' && calDeleteMatch) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const id = decodeURIComponent(calDeleteMatch[1]);
+      const events = await readCalendar();
+      const idx = events.findIndex(e => e.id === id);
+      if (idx === -1) return json(res, 404, { error: 'Event not found' });
+      const event = events[idx];
+      // Determine caller identity from token (for owner check)
+      const auth = req.headers['authorization'] || '';
+      const token = auth.replace(/^Bearer\s+/i, '').trim();
+      const agents = await readAgents();
+      const callerAgent = Object.entries(agents).find(([, a]) => a.token === token)?.[0] || null;
+      if (event.owner !== 'rocky' && callerAgent !== event.owner && callerAgent !== 'rocky') {
+        return json(res, 403, { error: 'Only the event owner or Rocky may delete this event' });
+      }
+      events.splice(idx, 1);
+      await writeCalendar(events);
+      return json(res, 200, { ok: true });
+    }
+
+    // ── PATCH /api/calendar/:id ───────────────────────────────────────────
+    const calPatchMatch = path.match(/^\/api\/calendar\/([^/]+)$/);
+    if (method === 'PATCH' && calPatchMatch) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const id = decodeURIComponent(calPatchMatch[1]);
+      const body = await readBody(req);
+      const events = await readCalendar();
+      const idx = events.findIndex(e => e.id === id);
+      if (idx === -1) return json(res, 404, { error: 'Event not found' });
+      events[idx] = { ...events[idx], ...body, id };
+      await writeCalendar(events);
+      return json(res, 200, { ok: true, event: events[idx] });
+    }
+
+    // ── GET /api/appeal ───────────────────────────────────────────────────
+    if (method === 'GET' && path === '/api/appeal') {
+      const q = await readQueue();
+      const all = [...(q.items || []), ...(q.completed || [])];
+      const appeals = all.filter(i => i.needsHuman === true || i.status === 'awaiting-jkh');
+      appeals.sort((a, b) => {
+        const ta = a.needsHumanAt ? new Date(a.needsHumanAt).getTime() : 0;
+        const tb = b.needsHumanAt ? new Date(b.needsHumanAt).getTime() : 0;
+        return ta - tb;
+      });
+      return json(res, 200, appeals);
+    }
+
+    // ── POST /api/appeal/:id ──────────────────────────────────────────────
+    const appealMatch = path.match(/^\/api\/appeal\/([^/]+)$/);
+    if (method === 'POST' && appealMatch) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const id = decodeURIComponent(appealMatch[1]);
+      const body = await readBody(req);
+      const { action, note, assignee } = body;
+      if (!['approve','reject','reassign','comment'].includes(action))
+        return json(res, 400, { error: 'action must be approve, reject, reassign, or comment' });
+      const q = await readQueue();
+      const item = [...(q.items || []), ...(q.completed || [])].find(i => i.id === id);
+      if (!item) return json(res, 404, { error: 'Item not found' });
+      const now = new Date().toISOString();
+      if (!item.journal) item.journal = [];
+      if (action === 'approve') {
+        item.status = 'pending';
+        item.needsHuman = false;
+        item.journal.push({ ts: now, author: 'jkh', type: 'appeal', text: `Approved${note ? ': ' + note : ''}` });
+      } else if (action === 'reject') {
+        item.status = 'cancelled';
+        item.needsHuman = false;
+        item.journal.push({ ts: now, author: 'jkh', type: 'appeal', text: `Rejected${note ? ': ' + note : ''}` });
+      } else if (action === 'reassign') {
+        if (!assignee) return json(res, 400, { error: 'assignee required for reassign' });
+        item.assignee = assignee;
+        item.needsHuman = false;
+        item.journal.push({ ts: now, author: 'jkh', type: 'appeal', text: `Reassigned to ${assignee}${note ? ': ' + note : ''}` });
+      } else if (action === 'comment') {
+        item.journal.push({ ts: now, author: 'jkh', type: 'comment', text: note || '' });
+        // needsHuman stays true
+      }
+      item.itemVersion = (item.itemVersion || 0) + 1;
+      // Re-archive if completed/cancelled
+      if (item.status === 'completed' || item.status === 'cancelled') {
+        q.items = (q.items || []).filter(i => i.id !== item.id);
+        if (!q.completed) q.completed = [];
+        if (!q.completed.find(i => i.id === item.id)) q.completed.push(item);
+      }
+      await writeQueue(q);
+      return json(res, 200, { ok: true, item });
+    }
+
+    // ── GET /api/heartbeat/:agent/history ─────────────────────────────────
+    const hbHistoryMatch = path.match(/^\/api\/heartbeat\/([^/]+)\/history$/);
+    if (method === 'GET' && hbHistoryMatch) {
+      const agent = decodeURIComponent(hbHistoryMatch[1]);
+      return json(res, 200, heartbeatHistory[agent] || []);
+    }
+
+    // ── GET /api/crons ────────────────────────────────────────────────────
+    if (method === 'GET' && path === '/api/crons') {
+      return json(res, 200, Object.values(cronStatus));
+    }
+
+    // ── POST /api/crons/:agent ────────────────────────────────────────────
+    const cronMatch = path.match(/^\/api\/crons\/([^/]+)$/);
+    if (method === 'POST' && cronMatch) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const agent = decodeURIComponent(cronMatch[1]);
+      const body = await readBody(req);
+      if (!body.jobId) return json(res, 400, { error: 'jobId required' });
+      const key = `${agent}/${body.jobId}`;
+      cronStatus[key] = { ...body, agent, updatedAt: new Date().toISOString() };
+      return json(res, 200, { ok: true, key });
+    }
+
+    // ── GET /api/provider-health ──────────────────────────────────────────
+    if (method === 'GET' && path === '/api/provider-health') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      return json(res, 200, providerHealth);
+    }
+
+    // ── POST /api/provider-health ─────────────────────────────────────────
+    if (method === 'POST' && path === '/api/provider-health') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const body = await readBody(req);
+      if (!body.provider) return json(res, 400, { error: 'provider required' });
+      providerHealth[body.provider] = { ...body, ts: new Date().toISOString() };
+      return json(res, 200, { ok: true });
+    }
+
+    // ── POST /api/provider-health/:agent ─────────────────────────────────
+    const providerMatch = path.match(/^\/api\/provider-health\/([^/]+)$/);
+    if (method === 'POST' && providerMatch) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const agent = decodeURIComponent(providerMatch[1]);
+      const body = await readBody(req);
+      providerHealth[agent] = { ...body, agent, updatedAt: new Date().toISOString() };
+      return json(res, 200, { ok: true });
+    }
+
+    // ── GET /api/geek/topology ────────────────────────────────────────────
+    if (method === 'GET' && path === '/api/geek/topology') {
+      const nodes = [
+        { id: 'rocky',          label: 'Rocky',          type: 'agent',          host: 'do-host1',    chips: ['RCC API :8789','WQ Dashboard :8788','RCC Brain','SquirrelBus hub','Tailscale proxy'] },
+        { id: 'bullwinkle',     label: 'Bullwinkle',     type: 'agent',          host: 'puck',        chips: ['OpenClaw :18789','SquirrelBus :8788','launchd crons','disk free','uptime'] },
+        { id: 'natasha',        label: 'Natasha',        type: 'agent',          host: 'sparky',      chips: ['OpenClaw :18789','SquirrelBus /bus→:18799','Milvus :19530','CUDA/RTX','Ollama :11434'] },
+        { id: 'boris',          label: 'Boris',          type: 'agent',          host: 'l40-sweden',  chips: ['OpenClaw gateway','L40 GPU','Omniverse headless'] },
+        { id: 'milvus',         label: 'Milvus',         type: 'shared-service', host: 'do-host1',   port: 19530 },
+        { id: 'minio',          label: 'MinIO',          type: 'shared-service', host: 'do-host1',   port: 9000 },
+        { id: 'searxng',        label: 'SearXNG',        type: 'shared-service', host: 'do-host1',   port: 8888 },
+        { id: 'nvidia-gateway', label: 'NVIDIA Gateway', type: 'external',       url: 'inference-api.nvidia.com' },
+        { id: 'github',         label: 'GitHub',         type: 'external',       url: 'api.github.com' },
+        { id: 'mattermost',     label: 'Mattermost',     type: 'external',       url: 'chat.yourmom.photos' },
+        { id: 'slack-omgjkh',   label: 'Slack (omgjkh)', type: 'external',       url: 'omgjkh.slack.com' },
+        { id: 'slack-offtera',  label: 'Slack (offtera)', type: 'external',      url: 'offtera.slack.com' },
+        { id: 'telegram',       label: 'Telegram',       type: 'external',       url: 'api.telegram.org' },
+        { id: 'squirrelbus',    label: 'SquirrelBus',    type: 'bus',            host: 'do-host1' },
+      ];
+      const edges = [
+        { from: 'rocky',      to: 'rcc-api',        type: 'persistent',  protocol: 'internal' },
+        { from: 'bullwinkle', to: 'rocky',           type: 'persistent',  protocol: 'heartbeat/HTTP' },
+        { from: 'natasha',    to: 'rocky',           type: 'persistent',  protocol: 'heartbeat/HTTP' },
+        { from: 'boris',      to: 'rocky',           type: 'persistent',  protocol: 'heartbeat/HTTP' },
+        { from: 'rocky',      to: 'milvus',          type: 'on-demand',   protocol: 'gRPC' },
+        { from: 'rocky',      to: 'minio',           type: 'on-demand',   protocol: 'S3/HTTP' },
+        { from: 'rocky',      to: 'searxng',         type: 'on-demand',   protocol: 'HTTP' },
+        { from: 'rocky',      to: 'squirrelbus',     type: 'persistent',  protocol: 'JSONL/fanout' },
+        { from: 'bullwinkle', to: 'squirrelbus',     type: 'on-demand',   protocol: 'HTTP' },
+        { from: 'natasha',    to: 'squirrelbus',     type: 'on-demand',   protocol: 'HTTP' },
+        { from: 'rocky',      to: 'nvidia-gateway',  type: 'on-demand',   protocol: 'HTTPS/OpenAI' },
+        { from: 'bullwinkle', to: 'nvidia-gateway',  type: 'on-demand',   protocol: 'HTTPS/OpenAI' },
+        { from: 'natasha',    to: 'nvidia-gateway',  type: 'on-demand',   protocol: 'HTTPS/OpenAI' },
+        { from: 'rocky',      to: 'github',          type: 'on-demand',   protocol: 'HTTPS/REST' },
+        { from: 'rocky',      to: 'mattermost',      type: 'on-demand',   protocol: 'HTTPS/REST' },
+        { from: 'rocky',      to: 'slack-omgjkh',    type: 'persistent',  protocol: 'Socket Mode' },
+        { from: 'rocky',      to: 'slack-offtera',   type: 'on-demand',   protocol: 'HTTPS/REST' },
+        { from: 'rocky',      to: 'telegram',        type: 'on-demand',   protocol: 'HTTPS/Bot API' },
+      ];
+      const STALE_MS = 5 * 60 * 1000;
+      const now = Date.now();
+      const nodesWithStatus = nodes.map(n => {
+        if (n.type !== 'agent') return n;
+        const hb = heartbeats[n.id];
+        if (!hb) return { ...n, status: 'offline', lastSeen: null };
+        const age = now - new Date(hb.ts).getTime();
+        const status = age < STALE_MS ? 'online' : age < 30 * 60 * 1000 ? 'stale' : 'offline';
+        return { ...n, status, lastSeen: hb.ts };
+      });
+      // Dynamic: registered agents
+      const agentsData = await readAgents().catch(() => ({}));
+      // Dynamic: recent bus messages (last 50 lines of squirrelbus/bus.jsonl)
+      let busMessages = [];
+      const busPath = new URL('../../squirrelbus/bus.jsonl', import.meta.url).pathname;
+      if (existsSync(busPath)) {
+        try {
+          const busRaw = await readFile(busPath, 'utf8');
+          busMessages = busRaw.trim().split('\n').filter(Boolean).slice(-50).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        } catch { /* ignore */ }
+      }
+      // Dynamic: recent heartbeats summary
+      const heartbeatSummary = Object.entries(heartbeats).map(([agent, hb]) => ({ agent, ts: hb.ts, status: hb.status || 'online' }));
+      return json(res, 200, { nodes: nodesWithStatus, edges, agents: agentsData, busMessages, heartbeatSummary });
+    }
+
+    // ── GET /api/geek/stream — SSE live traffic ───────────────────────────
+    if (method === 'GET' && path === '/api/geek/stream') {
+      res.writeHead(200, {
+        'Content-Type':  'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection':    'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
+      geekSseClients.add(res);
+      const keepalive = setInterval(() => {
+        try { res.write(': keepalive\n\n'); } catch { clearInterval(keepalive); geekSseClients.delete(res); }
+      }, 15000);
+      req.on('close', () => { clearInterval(keepalive); geekSseClients.delete(res); });
+      return; // don't call res.end()
+    }
+
+    // ── GET /api/heartbeat-history ────────────────────────────────────────
+    if (method === 'GET' && path === '/api/heartbeat-history') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      return json(res, 200, heartbeatHistory);
+    }
+
+    // ── POST /api/cron-status ─────────────────────────────────────────────
+    if (method === 'POST' && path === '/api/cron-status') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const body = await readBody(req);
+      if (!body.name) return json(res, 400, { error: 'name required' });
+      cronStatus[body.name] = { ...body, ts: new Date().toISOString() };
+      return json(res, 200, { ok: true });
+    }
+
+    // ── GET /api/cron-status ──────────────────────────────────────────────
+    if (method === 'GET' && path === '/api/cron-status') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      return json(res, 200, cronStatus);
     }
 
     return json(res, 404, { error: 'Not found' });
