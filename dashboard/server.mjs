@@ -2684,27 +2684,78 @@ function renderGeekPage() {
     spawnParticle(evt.from, evt.to, agentColors[evt.from] || '#58a6ff');
   }
 
+  // Use Rocky's RCC API (port 8789) for topology data — richer node/edge/status model
+  const RCC_API = window.location.protocol + '//' + window.location.hostname + ':8789';
+
   function connectSSE() {
     statusEl.textContent = 'connecting…';
     statusEl.style.color = '#8b949e';
-    const es = new EventSource('/api/geek/stream');
-    es.onopen = () => { statusEl.textContent = '● live'; statusEl.style.color = '#3fb950'; };
-    es.onerror = () => { statusEl.textContent = '○ reconnecting…'; statusEl.style.color = '#d29922'; es.close(); setTimeout(connectSSE, 4000); };
-    es.onmessage = e => { try { addTrafficEntry(JSON.parse(e.data)); } catch {} };
+    // Primary: Rocky's authoritative SSE stream on port 8789
+    // Fallback: local dashboard stream on same port
+    const primaryUrl = RCC_API + '/api/geek/stream';
+    const fallbackUrl = '/api/geek/stream';
+    let useFallback = false;
+
+    function tryConnect(url) {
+      const es = new EventSource(url);
+      const timeout = setTimeout(() => {
+        if (!useFallback && url === primaryUrl) {
+          es.close();
+          useFallback = true;
+          tryConnect(fallbackUrl);
+        }
+      }, 5000);
+      es.onopen = () => {
+        clearTimeout(timeout);
+        statusEl.textContent = '● live' + (useFallback ? ' (local)' : '');
+        statusEl.style.color = '#3fb950';
+      };
+      es.onerror = () => {
+        clearTimeout(timeout);
+        statusEl.textContent = '○ reconnecting…';
+        statusEl.style.color = '#d29922';
+        es.close();
+        setTimeout(() => tryConnect(useFallback ? fallbackUrl : primaryUrl), 4000);
+      };
+      es.onmessage = e => {
+        try {
+          const evt = JSON.parse(e.data);
+          if (evt.type === 'connected') return; // Rocky sends a connected event on open
+          addTrafficEntry(evt);
+        } catch {}
+      };
+    }
+    tryConnect(primaryUrl);
   }
   connectSSE();
 
+  // Use /api/geek/topology from RCC API for richer status data (nodes with status field)
   function updateDots() {
-    fetch('/api/heartbeats').then(r => r.json()).then(data => {
-      for (const a of ['rocky','natasha','bullwinkle','boris']) {
-        const dot = document.getElementById('dot-' + a);
-        if (!dot) continue;
-        const hb = data[a];
-        if (!hb || !hb.ts) { dot.setAttribute('fill', '#484f58'); continue; }
-        const age = (Date.now() - new Date(hb.ts).getTime()) / 1000;
-        dot.setAttribute('fill', age < 120 ? '#3fb950' : age < 300 ? '#d29922' : '#f85149');
-      }
-    }).catch(() => {});
+    fetch(RCC_API + '/api/geek/topology')
+      .then(r => r.json())
+      .then(data => {
+        const nodes = data.nodes || [];
+        for (const node of nodes) {
+          if (node.type !== 'agent') continue;
+          const dot = document.getElementById('dot-' + node.id);
+          if (!dot) continue;
+          const color = node.status === 'online' ? '#3fb950' : node.status === 'stale' ? '#d29922' : '#f85149';
+          dot.setAttribute('fill', color);
+        }
+      })
+      .catch(() => {
+        // Fallback to /api/heartbeats on the dashboard port
+        fetch('/api/heartbeats').then(r => r.json()).then(data => {
+          for (const a of ['rocky','natasha','bullwinkle','boris']) {
+            const dot = document.getElementById('dot-' + a);
+            if (!dot) continue;
+            const hb = data[a];
+            if (!hb || !hb.ts) { dot.setAttribute('fill', '#484f58'); continue; }
+            const age = (Date.now() - new Date(hb.ts).getTime()) / 1000;
+            dot.setAttribute('fill', age < 120 ? '#3fb950' : age < 300 ? '#d29922' : '#f85149');
+          }
+        }).catch(() => {});
+      });
   }
   updateDots();
   setInterval(updateDots, 30000);
