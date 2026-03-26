@@ -303,7 +303,7 @@ Services get **their own nodes** only when they are shared infrastructure called
 Everything else renders as **service chips** on their host machine node:
 - Rocky chips: RCC API (:8789), WQ Dashboard (:8788), RCC Brain, SquirrelBus hub, Tailscale proxy
 - Bullwinkle chips: OpenClaw gateway (:18789, reachability-checked), SquirrelBus push endpoint (:8788), launchd crons (heartbeat-rcc.plist + openclaw), disk free, uptime, tmux session count
-- Natasha/Sparky chips: OpenClaw gateway (:18789), SquirrelBus sidecar (:18799), Milvus (:19530), CUDA/RTX ⚡, Ollama (⚠️ unverified — show greyed with `?` until health-confirmed)
+- Natasha/Sparky chips: OpenClaw gateway (:18789), SquirrelBus (/bus → :18799 via gateway, not a separate external port), Milvus (:19530), CUDA/RTX ⚡, Ollama (:11434, verified ✅ — models: qwen2.5-coder:32b, qwen3-coder:latest)
 - Boris chips: OpenClaw gateway, L40 GPU ⚡, Omniverse headless
 
 Rationale: machine-first topology tells you *where to SSH* for debugging. Shared-service nodes tell you *where traffic actually goes*. Hybrid gives both without the noise of a full service mesh diagram.
