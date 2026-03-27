@@ -4,6 +4,8 @@
  * Port 8788, dark theme, live data, client-side rendering
  */
 
+const WORKSPACE = process.env.OPENCLAW_WORKSPACE || `${process.env.HOME}/.openclaw/workspace`;
+
 import express from 'express';
 import { readFile, writeFile, appendFile } from 'fs/promises';
 import { existsSync, createReadStream, readdirSync, readFileSync } from 'fs';
@@ -32,7 +34,7 @@ function loadCapabilityNames() {
 // Initialize crash reporter early — before anything else can throw
 initCrashReporter({
   service: 'wq-dashboard',
-  sourceDir: '${OPENCLAW_WORKSPACE:-~/.openclaw/workspace}/dashboard'
+  sourceDir: WORKSPACE + '/dashboard'
 });
 
 const execFileP = promisify(execFile);
@@ -40,12 +42,15 @@ const execFileP = promisify(execFile);
 const app = express();
 const PORT = 8788;
 const AUTH_TOKEN = process.env.RCC_AUTH_TOKENS || process.env.RCC_AGENT_TOKEN || '';
-const QUEUE_PATH = '${OPENCLAW_WORKSPACE:-~/.openclaw/workspace}/workqueue/queue.json';
+const QUEUE_PATH = WORKSPACE + '/workqueue/queue.json';
 const MC_PATH = 'mc';
 const MINIO_ALIAS = process.env.MINIO_ALIAS || 'local';
-const BUS_LOG_PATH  = '${OPENCLAW_WORKSPACE:-~/.openclaw/workspace}/squirrelbus/bus.jsonl';
-const ACK_LOG_PATH  = '${OPENCLAW_WORKSPACE:-~/.openclaw/workspace}/squirrelbus/acks.jsonl';
-const DEAD_LOG_PATH = '${OPENCLAW_WORKSPACE:-~/.openclaw/workspace}/squirrelbus/dead-letter.jsonl';
+const BUS_LOG_PATH  = WORKSPACE + '/squirrelbus/bus.jsonl';
+const ACK_LOG_PATH  = WORKSPACE + '/squirrelbus/acks.jsonl';
+const DEAD_LOG_PATH = WORKSPACE + '/squirrelbus/dead-letter.jsonl';
+const HEARTBEAT_LOG_PATH  = WORKSPACE + '/workqueue/heartbeats.jsonl';
+const AGENT_REGISTRY_PATH = WORKSPACE + '/workqueue/agent-registry.json';
+const DECOMMISSIONED_PATH = WORKSPACE + '/workqueue/decommissioned.json';
 
 // ── SquirrelBus peer fan-out registry ─────────────────────────────────────────
 const BUS_PEERS = {
@@ -128,8 +133,125 @@ async function writeQueue(data) {
   await writeFile(QUEUE_PATH, JSON.stringify(data, null, 2) + '\n', 'utf8');
 }
 
-// In-memory heartbeat store
+// ── Heartbeat registry — persistent, append-only log, last-seen survives restart ──
+
+// In-memory heartbeat store (seeded from registry on startup)
 const heartbeats = {};
+// Decommissioned agents (tombstoned — excluded from alerts, shown greyed out)
+let decommissioned = {};
+
+const HEARTBEAT_KEEP_COUNT = 100;      // per-agent: keep last N heartbeats in log
+const HEARTBEAT_KEEP_DAYS  = 7;        // OR keep last N days (whichever is more)
+const OFFLINE_THRESHOLD_MS = 60 * 60 * 1000; // 1h silence → mark offline
+
+// Load registry from disk (call on startup)
+async function loadAgentRegistry() {
+  try {
+    if (existsSync(AGENT_REGISTRY_PATH)) {
+      const raw = await readFile(AGENT_REGISTRY_PATH, 'utf8');
+      const reg = JSON.parse(raw);
+      for (const [name, entry] of Object.entries(reg)) {
+        heartbeats[name] = entry;
+      }
+      console.log(`[heartbeat] Registry loaded: ${Object.keys(heartbeats).length} agents`);
+    }
+  } catch (e) {
+    console.error('[heartbeat] Registry load error:', e.message);
+  }
+  try {
+    if (existsSync(DECOMMISSIONED_PATH)) {
+      const raw = await readFile(DECOMMISSIONED_PATH, 'utf8');
+      decommissioned = JSON.parse(raw);
+    }
+  } catch {}
+}
+
+// Persist current in-memory heartbeats map to registry file
+async function saveAgentRegistry() {
+  try {
+    await writeFile(AGENT_REGISTRY_PATH, JSON.stringify(heartbeats, null, 2) + '\n', 'utf8');
+  } catch (e) {
+    console.error('[heartbeat] Registry save error:', e.message);
+  }
+}
+
+// Persist decommissioned set
+async function saveDecommissioned() {
+  try {
+    await writeFile(DECOMMISSIONED_PATH, JSON.stringify(decommissioned, null, 2) + '\n', 'utf8');
+  } catch (e) {
+    console.error('[heartbeat] Decommissioned save error:', e.message);
+  }
+}
+
+// Append a heartbeat to the rolling JSONL log (per-agent pruning happens separately)
+async function appendHeartbeatLog(entry) {
+  try {
+    await appendFile(HEARTBEAT_LOG_PATH, JSON.stringify(entry) + '\n', 'utf8');
+  } catch (e) {
+    console.error('[heartbeat] Log append error:', e.message);
+  }
+}
+
+// Prune heartbeat log to keep last HEARTBEAT_KEEP_COUNT entries per agent
+// (done lazily, not on every beat — called occasionally)
+async function pruneHeartbeatLog() {
+  try {
+    if (!existsSync(HEARTBEAT_LOG_PATH)) return;
+    const rl = createInterface({ input: createRS(HEARTBEAT_LOG_PATH), crlfDelay: Infinity });
+    const byAgent = {};
+    for await (const line of rl) {
+      try {
+        const e = JSON.parse(line);
+        if (!byAgent[e.agent]) byAgent[e.agent] = [];
+        byAgent[e.agent].push(e);
+      } catch {}
+    }
+    const cutoff = Date.now() - HEARTBEAT_KEEP_DAYS * 24 * 60 * 60 * 1000;
+    const kept = [];
+    for (const [, entries] of Object.entries(byAgent)) {
+      const sorted = entries.sort((a, b) => new Date(b.ts) - new Date(a.ts));
+      const fresh = sorted.filter(e => new Date(e.ts).getTime() > cutoff);
+      kept.push(...(fresh.length >= HEARTBEAT_KEEP_COUNT ? sorted.slice(0, HEARTBEAT_KEEP_COUNT) : fresh));
+    }
+    kept.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    await writeFile(HEARTBEAT_LOG_PATH, kept.map(e => JSON.stringify(e)).join('\n') + (kept.length ? '\n' : ''), 'utf8');
+  } catch (e) {
+    console.error('[heartbeat] Prune error:', e.message);
+  }
+}
+
+// Background disappearance detector — runs every 5 min
+let disappearanceCheckCount = 0;
+function startDisappearanceDetector() {
+  setInterval(async () => {
+    const now = Date.now();
+    for (const [name, hb] of Object.entries(heartbeats)) {
+      if (decommissioned[name]) continue;
+      if (!hb.ts) continue;
+      const age = now - new Date(hb.ts).getTime();
+      if (age > OFFLINE_THRESHOLD_MS && hb.status !== 'offline') {
+        const prevStatus = hb.status;
+        heartbeats[name] = { ...hb, status: 'offline', offlineSince: hb.ts, detectedOfflineAt: new Date().toISOString() };
+        await saveAgentRegistry();
+        console.log(`[heartbeat] ⚠️ Agent ${name} went offline (was ${prevStatus}, last seen ${hb.ts})`);
+        // Post a SquirrelBus alert message to 'all'
+        try {
+          await appendBusMessage({
+            from: 'rocky',
+            to: 'all',
+            type: 'event',
+            subject: `⚠️ Agent offline: ${name}`,
+            body: `Agent ${name} has not been heard from since ${hb.ts} (>${Math.round(age / 60000)}min silence). Last known host: ${hb.host || 'unknown'}`,
+          });
+        } catch {}
+      }
+    }
+    disappearanceCheckCount++;
+    // Prune log every ~1h (every 12 checks at 5min interval)
+    if (disappearanceCheckCount % 12 === 0) await pruneHeartbeatLog();
+  }, 5 * 60 * 1000);
+}
 
 async function fetchMinIOHeartbeat(agent) {
   try {
@@ -143,7 +265,7 @@ async function fetchMinIOHeartbeat(agent) {
 }
 
 async function getHeartbeats() {
-  // Start with in-memory heartbeats (includes any agent that has posted)
+  // Start with in-memory heartbeats (registry-seeded, includes all known agents)
   const result = { ...heartbeats };
   // Also check MinIO for known persistent agents (fills gaps on cold start)
   const knownAgents = loadCapabilityNames();
@@ -151,6 +273,34 @@ async function getHeartbeats() {
     if (!result[agent]) {
       const minio = await fetchMinIOHeartbeat(agent);
       if (minio) result[agent] = minio;
+    }
+  }
+  return result;
+}
+
+// Returns all known agents including offline/decommissioned
+async function getAllAgents() {
+  const live = await getHeartbeats();
+  const result = {};
+  for (const [name, hb] of Object.entries(live)) {
+    result[name] = {
+      ...hb,
+      decommissioned: !!decommissioned[name],
+      decommissionedAt: decommissioned[name]?.ts || null,
+      decommissionReason: decommissioned[name]?.reason || null,
+    };
+  }
+  // Also include decommissioned agents not in live set
+  for (const [name, info] of Object.entries(decommissioned)) {
+    if (!result[name]) {
+      result[name] = {
+        agent: name,
+        ts: null,
+        status: 'decommissioned',
+        decommissioned: true,
+        decommissionedAt: info.ts,
+        decommissionReason: info.reason,
+      };
     }
   }
   return result;
@@ -412,13 +562,86 @@ app.post('/api/item/:id/ai-comment', requireAuth, async (req, res) => {
 
 app.post('/api/heartbeat/:agent', requireAuth, async (req, res) => {
   const agent = req.params.agent;
-  heartbeats[agent] = {
+  const now = new Date().toISOString();
+  const entry = {
     agent,
-    ts: new Date().toISOString(),
+    ts: now,
     status: 'online',
     ...req.body,
   };
+  // Unmark offline/decommissioned if agent is heartbeating again
+  if (heartbeats[agent]?.status === 'offline') {
+    entry.offlineSince = null;
+    entry.detectedOfflineAt = null;
+    console.log(`[heartbeat] ✅ Agent ${agent} came back online`);
+  }
+  heartbeats[agent] = entry;
+  // Append to rolling log + persist registry
+  await appendHeartbeatLog(entry);
+  await saveAgentRegistry();
   res.json({ ok: true });
+});
+
+// GET /api/agents — all known agents including offline and decommissioned
+app.get('/api/agents', async (req, res) => {
+  try {
+    const agents = await getAllAgents();
+    res.json(agents);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/agents/:name/history — last N heartbeats for an agent
+app.get('/api/agents/:name/history', async (req, res) => {
+  const name = req.params.name;
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  try {
+    if (!existsSync(HEARTBEAT_LOG_PATH)) return res.json([]);
+    const rl = createInterface({ input: createRS(HEARTBEAT_LOG_PATH), crlfDelay: Infinity });
+    const entries = [];
+    for await (const line of rl) {
+      try {
+        const e = JSON.parse(line);
+        if (e.agent === name) entries.push(e);
+      } catch {}
+    }
+    // Return newest first
+    entries.sort((a, b) => new Date(b.ts) - new Date(a.ts));
+    res.json(entries.slice(0, limit));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:name/decommission — tombstone an agent
+app.post('/api/agents/:name/decommission', requireAuth, async (req, res) => {
+  const name = req.params.name;
+  const reason = (req.body.reason || 'no reason given').trim();
+  const now = new Date().toISOString();
+  decommissioned[name] = { ts: now, reason, by: req.body.by || 'operator' };
+  if (heartbeats[name]) {
+    heartbeats[name] = { ...heartbeats[name], status: 'decommissioned', decommissionedAt: now };
+  }
+  await saveDecommissioned();
+  await saveAgentRegistry();
+  console.log(`[heartbeat] 🪦 Agent ${name} decommissioned: ${reason}`);
+  res.json({ ok: true, name, decommissioned: decommissioned[name] });
+});
+
+// DELETE /api/agents/:name/decommission — un-tombstone an agent (recommission)
+app.delete('/api/agents/:name/decommission', requireAuth, async (req, res) => {
+  const name = req.params.name;
+  if (decommissioned[name]) {
+    delete decommissioned[name];
+    await saveDecommissioned();
+  }
+  if (heartbeats[name]?.status === 'decommissioned') {
+    heartbeats[name].status = 'offline';
+    delete heartbeats[name].decommissionedAt;
+    await saveAgentRegistry();
+  }
+  res.json({ ok: true, name, recommissioned: true });
 });
 
 // --- Crash Report API ---
@@ -738,27 +961,46 @@ function renderUnifiedPage() {
     // === Section 1: Agent Cards ===
     async function loadAgents() {
       try {
-        const hbs = await fetch('/api/heartbeats').then(r => r.json());
+        // Use /api/agents — returns ALL known agents including offline/decommissioned
+        const agents = await fetch('/api/agents').then(r => r.json());
         const el = document.getElementById('agent-cards');
-        const agentNames = Object.keys(hbs);
+        const agentNames = Object.keys(agents).sort();
+        if (agentNames.length === 0) {
+          el.innerHTML = '<div class="agent-card"><span class="agent-meta">No agents registered yet.</span></div>';
+          return;
+        }
         el.innerHTML = agentNames.map(name => {
-          const hb = hbs[name] || {};
+          const hb = agents[name] || {};
           const emoji = EMOJIS[name] || '📨';
-          let stClass = 'status-offline', stEmoji = '🔴', stLabel = 'offline';
-          if (hb.ts) {
+          let stClass, stEmoji, stLabel;
+          if (hb.decommissioned || hb.status === 'decommissioned') {
+            stClass = 'status-offline'; stEmoji = '🪦'; stLabel = 'decommissioned';
+          } else if (hb.status === 'offline' || !hb.ts) {
+            stClass = 'status-offline'; stEmoji = '🔴'; stLabel = 'offline';
+          } else {
             const age = Date.now() - new Date(hb.ts).getTime();
             if (age < 45 * 60 * 1000) { stClass = 'status-online'; stEmoji = '🟢'; stLabel = 'online'; }
             else if (age < 4 * 60 * 60 * 1000) { stClass = 'status-stale'; stEmoji = '🟡'; stLabel = 'stale'; }
+            else { stClass = 'status-offline'; stEmoji = '🔴'; stLabel = 'offline'; }
           }
           const host = hb.host || '—';
-          const lastSeen = timeAgo(hb.ts);
+          const lastSeen = hb.ts ? timeAgo(hb.ts) : 'never';
           const queueDepth = hb.queueDepth != null ? '<div class="agent-meta">Queue: ' + hb.queueDepth + ' items</div>' : '';
-          return '<div class="agent-card">' +
+          const pullRevBadge = hb.pullRev ? '<div class="agent-meta" title="git rev">Rev: ' + esc(String(hb.pullRev).slice(0, 8)) + '</div>' : '';
+          const offlineSince = (stLabel === 'offline' && hb.offlineSince)
+            ? '<div class="agent-meta" style="color:#f85149">Offline since: ' + timeAgo(hb.offlineSince) + '</div>' : '';
+          const decommNote = hb.decommissioned
+            ? '<div class="agent-meta" style="color:#8b949e">⚠️ ' + esc(hb.decommissionReason || 'decommissioned') + '</div>' : '';
+          const cardOpacity = (stLabel === 'decommissioned') ? 'opacity:0.45;' : '';
+          return '<div class="agent-card" style="' + cardOpacity + '">' +
             '<div class="agent-name">' + emoji + ' ' + name.charAt(0).toUpperCase() + name.slice(1) + '</div>' +
             '<div class="' + stClass + '">' + stEmoji + ' ' + stLabel + '</div>' +
             '<div class="agent-meta">Host: ' + esc(host) + '</div>' +
             '<div class="agent-meta">Last seen: ' + lastSeen + '</div>' +
+            pullRevBadge +
             queueDepth +
+            offlineSince +
+            decommNote +
             '</div>';
         }).join('');
       } catch (e) { console.error('Agent load error:', e); }
@@ -1990,12 +2232,37 @@ async function buildAgentDigest() {
     DIGEST_AGENTS.map(a => fetchMinIOJson(`agents/shared/${a.healthFile}`))
   );
 
-  const agentData = DIGEST_AGENTS.map((a, i) => ({
-    ...a,
-    health: healthResults[i],
-    status: digestOnlineStatus(healthResults[i]),
-    stats:  agentStats(a.name),
-  }));
+  // Merge registry status with MinIO health data
+  const allKnownAgents = await getAllAgents();
+
+  const agentData = DIGEST_AGENTS.map((a, i) => {
+    const regEntry = allKnownAgents[a.name];
+    let status = digestOnlineStatus(healthResults[i]);
+    // Prefer registry status if it says offline/decommissioned
+    if (regEntry) {
+      if (regEntry.decommissioned) status = 'decommissioned';
+      else if (regEntry.status === 'offline') status = 'offline';
+    }
+    return {
+      ...a,
+      health: healthResults[i],
+      status,
+      stats:  agentStats(a.name),
+    };
+  });
+
+  // Include any registry agents not in DIGEST_AGENTS (e.g. newly registered)
+  for (const [name, regEntry] of Object.entries(allKnownAgents)) {
+    if (!DIGEST_AGENTS.find(a => a.name === name)) {
+      agentData.push({
+        name,
+        emoji: '📨',
+        health: null,
+        status: regEntry.decommissioned ? 'decommissioned' : (regEntry.status || 'unknown'),
+        stats: agentStats(name),
+      });
+    }
+  }
 
   const totalPending   = items.filter(i => i.status === 'pending').length;
   const totalClaimed   = items.filter(i => i.status === 'claimed' || i.status === 'in-progress').length;
@@ -2050,7 +2317,11 @@ app.get('/api/digest', async (req, res) => {
 app.get('/api/activity', async (req, res) => {
   try {
     const data = await readQueue();
-    const hbs = await getHeartbeats();
+    const allAgents = await getAllAgents();
+    // Filter to only non-decommissioned agents for the activity map
+    const hbs = Object.fromEntries(
+      Object.entries(allAgents).filter(([, hb]) => !hb.decommissioned)
+    );
     const now = Date.now();
     const allItems = [...(data.items || []), ...(data.completed || [])];
 
@@ -2110,7 +2381,7 @@ app.get('/api/activity', async (req, res) => {
     // Load registered repos
     let repos = [];
     try {
-      const reposPath = '${OPENCLAW_WORKSPACE:-~/.openclaw/workspace}/rcc/api/repos.json';
+      const reposPath = WORKSPACE + '/rcc/api/repos.json';
       repos = JSON.parse(await readFile(reposPath, 'utf8'));
     } catch {}
 
@@ -2357,6 +2628,12 @@ app.delete('/s3/:bucket/*splat', requireAuth, async (req, res) => {
 
 // Initialize bus sequence on startup
 initBusSeq();
+
+// Initialize heartbeat registry from disk + start disappearance detector
+(async () => {
+  await loadAgentRegistry();
+  startDisappearanceDetector();
+})();
 
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
