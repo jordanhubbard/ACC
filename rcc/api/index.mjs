@@ -2104,6 +2104,89 @@ async function handleRequest(req, res) {
       }
     }
 
+    // ── POST /api/ideation/generate — generate ideas and add to queue ────────
+    if (method === 'POST' && path === '/api/ideation/generate') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const body = await readBody(req);
+      const agentName = body.agent || 'unknown';
+      const count = Math.min(parseInt(body.count || '1', 10), 3);
+
+      const q = await readQueue();
+      const recentQueue = (q.items || []).slice(-20);
+      const recentLessons = await queryAllLessons('').catch(() => []);
+
+      const context = { recentQueue, recentLessons, agentName };
+      const ideas = [];
+
+      for (let i = 0; i < count; i++) {
+        const idea = await generateIdea(context);
+        const itemId = `wq-IDEA-${Date.now()}-${i}`;
+        const item = {
+          id: itemId,
+          itemVersion: 1,
+          created: new Date().toISOString(),
+          source: agentName,
+          assignee: 'all',
+          priority: 'normal',
+          status: 'idea',
+          title: idea.title,
+          description: idea.description,
+          notes: idea.rationale,
+          preferred_executor: 'claude_cli',
+          journal: [],
+          choices: [],
+          choiceRecorded: null,
+          votes: [],
+          attempts: 0,
+          maxAttempts: 3,
+          claimedBy: null,
+          claimedAt: null,
+          completedAt: null,
+          result: null,
+          tags: ['idea', 'auto-generated', ...(idea.tags || [])],
+          scout_key: null,
+          repo: null,
+          ideaMeta: { difficulty: idea.difficulty, rationale: idea.rationale },
+        };
+        if (!q.items) q.items = [];
+        q.items.push(item);
+        ideas.push({ id: itemId, title: idea.title });
+      }
+
+      await writeQueue(q);
+      return json(res, 201, { ok: true, ideas });
+    }
+
+    // ── GET /api/ideation/pending — list idea items ───────────────────────
+    if (method === 'GET' && path === '/api/ideation/pending') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const q = await readQueue();
+      const ideas = (q.items || []).filter(i =>
+        i.status === 'idea' || (i.tags || []).includes('idea')
+      );
+      return json(res, 200, { ok: true, ideas });
+    }
+
+    // ── POST /api/ideation/:id/promote — promote idea to pending ─────────
+    const ideaPromoteMatch = path.match(/^\/api\/ideation\/([^/]+)\/promote$/);
+    if (method === 'POST' && ideaPromoteMatch) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const id = decodeURIComponent(ideaPromoteMatch[1]);
+      const q = await readQueue();
+      const item = (q.items || []).find(i => i.id === id);
+      if (!item) return json(res, 404, { error: 'Idea not found' });
+      if (!item.claimedBy && (!item.votes || item.votes.length < 1)) {
+        return json(res, 400, { error: 'Idea needs at least 1 vote or a claimedBy to promote' });
+      }
+      item.status = 'pending';
+      item.tags = (item.tags || []).filter(t => t !== 'idea');
+      item.tags.push('promoted-idea');
+      item.journal = item.journal || [];
+      item.journal.push({ ts: new Date().toISOString(), type: 'promote', text: 'Promoted from idea to pending' });
+      await writeQueue(q);
+      return json(res, 200, { ok: true, item });
+    }
+
     return json(res, 404, { error: 'Not found' });
 
   } catch (err) {
