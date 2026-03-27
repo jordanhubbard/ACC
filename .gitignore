@@ -3,6 +3,7 @@ node_modules/
 **/node_modules/
 # Sensitive / personal
 memory/
+!rcc/memory/
 MEMORY.md
 USER.md
 BOOTSTRAP.md
