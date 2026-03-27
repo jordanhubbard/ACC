@@ -17,6 +17,7 @@ import { Brain, createRequest } from '../brain/index.mjs';
 import { embed, upsert as vectorUpsert, search as vectorSearch, searchAll as vectorSearchAll, ensureCollections, collectionStats } from '../vector/index.mjs';
 import { Pump } from '../scout/pump.mjs';
 import { learnLesson, queryLessons, queryAllLessons, formatLessonsForContext, getTrendingLessons, formatTrendingForHeartbeat, getHeartbeatContext, receiveLessonFromBus, seedKnownLessons } from '../lessons/index.mjs';
+import { generateIdea } from '../ideation/ideation.mjs';
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT            = parseInt(process.env.RCC_PORT || '8789', 10);
@@ -596,6 +597,29 @@ async function handleRequest(req, res) {
       return json(res, 200, { agent: best, task });
     }
 
+    // ── GET /api/agents/status — all agents with last-seen + online status ─
+    if (method === 'GET' && path === '/api/agents/status') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const agents = await readAgents().catch(() => ({}));
+      const now = Date.now();
+      const result = Object.entries(agents).map(([name, agent]) => {
+        const hb = heartbeats[name] || null;
+        const lastSeen = hb?.ts || agent.lastSeen || null;
+        const gapMs = lastSeen ? now - new Date(lastSeen).getTime() : null;
+        const gap_minutes = gapMs !== null ? Math.round(gapMs / 60000) : null;
+        const onlineStatus = agent.decommissioned ? 'decommissioned'
+          : (hb ? (computeOnlineStatus(hb) ? 'online' : 'offline') : (agent.onlineStatus || 'unknown'));
+        return {
+          name,
+          lastSeen,
+          onlineStatus,
+          host: hb?.host || agent.host || null,
+          gap_minutes,
+        };
+      });
+      return json(res, 200, { ok: true, agents: result });
+    }
+
     if (method === 'GET' && path === '/api/heartbeats') {
       // Return all known agents (including offline/decommissioned) with computed online status
       const agents = await readAgents().catch(() => ({}));
@@ -1098,7 +1122,13 @@ async function handleRequest(req, res) {
       // Clear offline alert state since they're back
       delete offlineAlertSent[agent];
       broadcastGeekEvent('heartbeat', agent, 'rocky', `${agent} heartbeat`);
-      return json(res, 200, { ok: true });
+      // Scout: include pending work for this agent in the heartbeat response
+      const scoutQ = await readQueue().catch(() => ({ items: [] }));
+      const pendingWork = (scoutQ.items || [])
+        .filter(i => i.status === 'pending' && (i.assignee === agent || i.assignee === 'all'))
+        .slice(0, 3)
+        .map(({ id, title, priority, description }) => ({ id, title, priority, description }));
+      return json(res, 200, { ok: true, pendingWork });
     }
 
     // ── POST /api/complete/:id ────────────────────────────────────────────
@@ -1695,6 +1725,39 @@ async function handleRequest(req, res) {
         }
       } catch {}
       return json(res, 200, heartbeatHistory[agent] || []);
+    }
+
+    // ── GET /api/agents/history/:name — persistent heartbeat history ──────
+    const agentHistoryMatch = path.match(/^\/api\/agents\/history\/([^/]+)$/);
+    if (method === 'GET' && agentHistoryMatch) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const name = decodeURIComponent(agentHistoryMatch[1]);
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 500);
+      let entries = [];
+      try {
+        const histFile = new URL(`./data/heartbeat-history/${name}.jsonl`, import.meta.url).pathname;
+        if (existsSync(histFile)) {
+          const content = await readFile(histFile, 'utf8');
+          const lines = content.trim().split('\n').filter(Boolean);
+          entries = lines.slice(-limit).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        } else {
+          entries = (heartbeatHistory[name] || []).slice(-limit);
+        }
+      } catch {}
+      return json(res, 200, { ok: true, agent: name, entries });
+    }
+
+    // ── GET /api/scout/:name — pending work for agent ─────────────────────
+    const scoutMatch = path.match(/^\/api\/scout\/([^/]+)$/);
+    if (method === 'GET' && scoutMatch) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const name = decodeURIComponent(scoutMatch[1]);
+      const q = await readQueue().catch(() => ({ items: [] }));
+      const pending = (q.items || [])
+        .filter(i => i.status === 'pending' && (i.assignee === name || i.assignee === 'all'))
+        .slice(0, 3)
+        .map(({ id, title, priority, description }) => ({ id, title, priority, description }));
+      return json(res, 200, { ok: true, agent: name, pendingWork: pending });
     }
 
     // ── GET /api/crons ────────────────────────────────────────────────────
