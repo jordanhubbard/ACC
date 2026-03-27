@@ -5,12 +5,9 @@
  * wq-R-006 — implemented by Natasha 2026-03-21
  */
 
-import { readFileSync } from 'fs';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const QUEUE_PATH = resolve(__dirname, '../queue.json');
+// Uses RCC API as canonical queue source (not local queue.json)
+const RCC_URL   = process.env.RCC_URL   || 'http://localhost:8789';
+const RCC_TOKEN = process.env.RCC_AGENT_TOKEN || process.env.RCC_AUTH_TOKENS?.split(',')[0] || '';
 
 // Mattermost config
 const MM_URL = 'https://chat.yourmom.photos';
@@ -60,9 +57,18 @@ function formatAge(ms) {
 }
 
 async function main() {
-  const queue = JSON.parse(readFileSync(QUEUE_PATH, 'utf8'));
+  // Fetch queue from RCC API (canonical source)
+  if (!RCC_TOKEN) {
+    console.error('[stale-nudge] RCC_AGENT_TOKEN not set — cannot fetch queue.');
+    process.exit(1);
+  }
+  const queueRes = await fetch(`${RCC_URL}/api/queue`, {
+    headers: { Authorization: `Bearer ${RCC_TOKEN}` },
+  });
+  if (!queueRes.ok) throw new Error(`RCC queue fetch failed: ${queueRes.status}`);
+  const queue = await queueRes.json();
   const now = Date.now();
-  const items = queue.items || [];
+  const items = Array.isArray(queue) ? queue : (queue.items || []);
 
   // Find stale items: pending, specific assignee (not "all"), no claim, >48h old
   const stale = items.filter((item) => {
