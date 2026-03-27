@@ -4,6 +4,7 @@ import archiver from 'archiver';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { ingestMessage } from '../../../.openclaw/workspace/rcc/vector/ingest.mjs';
 
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -180,6 +181,11 @@ app.post('/api/messages', auth, async (req, res) => {
   const stmt = db.prepare('INSERT INTO messages (ts, from_agent, text, channel, mentions) VALUES (?, ?, ?, ?, ?)');
   const r = stmt.run(ts, from, text, channel, mentions ? JSON.stringify(mentions) : null);
   const message = { id: r.lastInsertRowid, ts, from_agent: from, text, channel, mentions: mentions || [] };
+
+  // Async RAG ingest — fire and forget, never fail the request
+  ingestMessage({ id: r.lastInsertRowid, ts, from_agent: from, text, channel }).catch(err =>
+    console.warn('[squirrelchat] ingest failed:', err.message)
+  );
 
   // Broadcast via SSE
   const payload = JSON.stringify({ type: 'message', message });

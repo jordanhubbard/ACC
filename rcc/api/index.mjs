@@ -14,6 +14,7 @@ import { existsSync } from 'fs';
 import { dirname } from 'path';
 import { createHmac, timingSafeEqual, randomUUID } from 'crypto';
 import { Brain, createRequest } from '../brain/index.mjs';
+import { embed, upsert as vectorUpsert, search as vectorSearch, searchAll as vectorSearchAll, ensureCollections, collectionStats } from '../vector/index.mjs';
 import { Pump } from '../scout/pump.mjs';
 import { learnLesson, queryLessons, queryAllLessons, formatLessonsForContext, getTrendingLessons, formatTrendingForHeartbeat, getHeartbeatContext, receiveLessonFromBus, seedKnownLessons } from '../lessons/index.mjs';
 
@@ -1959,6 +1960,78 @@ async function handleRequest(req, res) {
       if (body?.resolution) ticket.resolution = body.resolution;
       await writeRequests(reqs);
       return json(res, 200, { ok: true, ticket });
+    }
+
+    // ── GET /api/vector/health ────────────────────────────────────────────
+    if (method === 'GET' && path === '/api/vector/health') {
+      try {
+        const collections = await collectionStats();
+        return json(res, 200, { ok: true, collections });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err.message });
+      }
+    }
+
+    // ── GET /api/vector/search ────────────────────────────────────────────
+    if (method === 'GET' && path === '/api/vector/search') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const q = url.searchParams.get('q') || '';
+      if (!q) return json(res, 400, { error: 'Missing query parameter q' });
+      const k = parseInt(url.searchParams.get('k') || '10', 10);
+      const collections = url.searchParams.get('collections') || 'all';
+      try {
+        let results;
+        if (collections === 'all') {
+          results = await vectorSearchAll(q, { k });
+        } else {
+          results = await vectorSearch(collections, q, { k });
+          results = results.map(r => ({ collection: collections, ...r }));
+        }
+        return json(res, 200, { ok: true, query: q, results });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err.message });
+      }
+    }
+
+    // ── POST /api/vector/upsert ───────────────────────────────────────────
+    if (method === 'POST' && path === '/api/vector/upsert') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const body = await readBody(req);
+      const { collection, id, text, metadata } = body || {};
+      if (!collection || !id || !text) return json(res, 400, { error: 'Missing required fields: collection, id, text' });
+      try {
+        await vectorUpsert(collection, { id, text, metadata: metadata || {} });
+        return json(res, 200, { ok: true });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err.message });
+      }
+    }
+
+    // ── GET /api/vector/context ───────────────────────────────────────────
+    if (method === 'GET' && path === '/api/vector/context') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const q = url.searchParams.get('q') || '';
+      if (!q) return json(res, 400, { error: 'Missing query parameter q' });
+      const k = parseInt(url.searchParams.get('k') || '10', 10);
+      const collectionsParam = url.searchParams.get('collections') || 'all';
+      try {
+        let results;
+        if (collectionsParam === 'all') {
+          results = await vectorSearchAll(q, { k });
+        } else {
+          const cols = collectionsParam.split(',').map(c => c.trim()).filter(Boolean);
+          const searches = await Promise.all(
+            cols.map(async col => {
+              const hits = await vectorSearch(col, q, { k });
+              return hits.map(r => ({ collection: col, ...r }));
+            })
+          );
+          results = searches.flat().sort((a, b) => b.score - a.score).slice(0, k);
+        }
+        return json(res, 200, { ok: true, results });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err.message });
+      }
     }
 
     return json(res, 404, { error: 'Not found' });
