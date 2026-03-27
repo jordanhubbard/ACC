@@ -218,7 +218,14 @@ async function writeRequests(data) {
 async function readAgents() {
   const p = new URL(AGENTS_PATH, import.meta.url).pathname;
   if (!existsSync(p)) return {};
-  return JSON.parse(await readFile(p, 'utf8'));
+  const raw = JSON.parse(await readFile(p, 'utf8'));
+  // Normalise: if stored as array (legacy []), convert to {} keyed by name
+  if (Array.isArray(raw)) {
+    const obj = {};
+    for (const a of raw) { if (a && a.name) obj[a.name] = a; }
+    return obj;
+  }
+  return raw;
 }
 
 async function writeAgents(data) {
@@ -2052,8 +2059,25 @@ export function startServer(port = PORT) {
   return server;
 }
 
+// ── Reload persisted agent tokens into AUTH_TOKENS on startup ─────────────
+// Without this, agent tokens from agents.json are lost on every RCC restart,
+// causing Boris/RTX/etc to 401 and appear dead.
+async function reloadAgentTokens() {
+  try {
+    const agents = await readAgents();
+    const agentMap = typeof agents === 'object' && !Array.isArray(agents) ? agents : {};
+    let reloaded = 0;
+    for (const [, agent] of Object.entries(agentMap)) {
+      if (agent.token) { AUTH_TOKENS.add(agent.token); reloaded++; }
+    }
+    if (reloaded > 0) console.log(`[rcc-api] Reloaded ${reloaded} agent token(s) from agents.json`);
+  } catch (e) {
+    console.warn('[rcc-api] Could not reload agent tokens:', e.message);
+  }
+}
+
 if (process.argv[1] === new URL(import.meta.url).pathname) {
-  startServer();
+  reloadAgentTokens().then(() => startServer());
   process.on('SIGTERM', () => process.exit(0));
   process.on('SIGINT',  () => process.exit(0));
 }
