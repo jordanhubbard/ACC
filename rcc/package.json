@@ -1,1 +1,7 @@
-{"type":"module"}
+{
+  "type": "module",
+  "name": "rcc",
+  "dependencies": {
+    "@zilliz/milvus2-sdk-node": "^2.4.9"
+  }
+}
