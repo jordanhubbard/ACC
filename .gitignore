@@ -11,7 +11,13 @@ openclaw.json
 .env.*
 .env
 !deploy/.env.template
+!deploy/.env.server.template
 rcc/api/agents.json
+# Runtime data directories (generated at runtime, never committed)
+rcc/api/data/
+rcc/api/capabilities-registry.json
+memory/
+
 # Queue state (runtime data, not source)
 workqueue/queue.json
 brain-state.json
