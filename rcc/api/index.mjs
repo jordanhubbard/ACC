@@ -944,6 +944,118 @@ async function handleRequest(req, res) {
       return json(res, 200, { ok: true, reset });
     }
 
+    // ── POST /api/item/:id/claim — agent claims an item ──────────────────
+    const itemClaimMatch = path.match(/^\/api\/item\/([^/]+)\/claim$/);
+    if (method === 'POST' && itemClaimMatch) {
+      const id = decodeURIComponent(itemClaimMatch[1]);
+      const body = await readBody(req);
+      const agent = body.agent || body._author;
+      if (!agent) return json(res, 400, { error: 'agent required' });
+      const q = await readQueue();
+      const item = q.items?.find(i => i.id === id);
+      if (!item) return json(res, 404, { error: 'Item not found' });
+      // Guard: already claimed by someone else and not stale
+      if (item.claimedBy && item.claimedBy !== agent && item.status === 'in-progress') {
+        const threshold = STALE_THRESHOLDS[item.preferred_executor] || STALE_THRESHOLDS.default;
+        const age = Date.now() - new Date(item.claimedAt).getTime();
+        if (age < threshold) {
+          return json(res, 409, { error: `Already claimed by ${item.claimedBy}`, claimedBy: item.claimedBy, claimedAt: item.claimedAt });
+        }
+      }
+      const now = new Date().toISOString();
+      const prevAgent = item.claimedBy;
+      item.claimedBy = agent;
+      item.claimedAt = now;
+      item.keepaliveAt = now;
+      item.status = 'in-progress';
+      item.attempts = (item.attempts || 0) + 1;
+      if (!item.journal) item.journal = [];
+      item.journal.push({ ts: now, author: agent, type: 'claim', text: prevAgent ? `Claimed (previous: ${prevAgent})` : 'Claimed' });
+      if (!item.events) item.events = [];
+      item.events.push({ ts: now, agent, type: 'claim', note: body.note || null });
+      item.itemVersion = (item.itemVersion || 0) + 1;
+      await writeQueue(q);
+      return json(res, 200, { ok: true, item });
+    }
+
+    // ── POST /api/item/:id/complete — agent marks item done ───────────────
+    const itemCompleteMatch = path.match(/^\/api\/item\/([^/]+)\/complete$/);
+    if (method === 'POST' && itemCompleteMatch) {
+      const id = decodeURIComponent(itemCompleteMatch[1]);
+      const body = await readBody(req);
+      const agent = body.agent || body._author;
+      const q = await readQueue();
+      const item = q.items?.find(i => i.id === id);
+      if (!item) return json(res, 404, { error: 'Item not found' });
+      const now = new Date().toISOString();
+      item.status = 'completed';
+      item.completedAt = now;
+      if (body.resolution) item.resolution = body.resolution;
+      if (body.result) item.result = body.result;
+      if (!item.journal) item.journal = [];
+      item.journal.push({ ts: now, author: agent || 'api', type: 'complete', text: body.resolution || body.result || 'Completed' });
+      if (!item.events) item.events = [];
+      item.events.push({ ts: now, agent: agent || 'api', type: 'complete', note: body.resolution || body.result || null });
+      item.itemVersion = (item.itemVersion || 0) + 1;
+      // Auto-archive to completed[]
+      q.items = q.items.filter(i => i.id !== id);
+      if (!q.completed) q.completed = [];
+      q.completed.push(item);
+      await writeQueue(q);
+      return json(res, 200, { ok: true, item });
+    }
+
+    // ── POST /api/item/:id/fail — agent marks item failed, resets to pending
+    const itemFailMatch = path.match(/^\/api\/item\/([^/]+)\/fail$/);
+    if (method === 'POST' && itemFailMatch) {
+      const id = decodeURIComponent(itemFailMatch[1]);
+      const body = await readBody(req);
+      const agent = body.agent || body._author;
+      const q = await readQueue();
+      const item = q.items?.find(i => i.id === id);
+      if (!item) return json(res, 404, { error: 'Item not found' });
+      const now = new Date().toISOString();
+      const reason = body.reason || 'Agent reported failure';
+      item.status = 'pending';
+      item.claimedBy = null;
+      item.claimedAt = null;
+      item.keepaliveAt = null;
+      if (!item.journal) item.journal = [];
+      item.journal.push({ ts: now, author: agent || 'api', type: 'fail', text: reason });
+      if (!item.events) item.events = [];
+      item.events.push({ ts: now, agent: agent || 'api', type: 'fail', note: reason });
+      item.itemVersion = (item.itemVersion || 0) + 1;
+      // Move to DLQ if maxAttempts exceeded
+      if (item.attempts >= (item.maxAttempts || 3)) {
+        item.status = 'blocked';
+        item.blockedReason = `Exceeded maxAttempts (${item.maxAttempts || 3}). Last failure: ${reason}`;
+        item.journal.push({ ts: now, author: 'rcc-api', type: 'dlq', text: `Moved to blocked — maxAttempts exceeded` });
+      }
+      await writeQueue(q);
+      return json(res, 200, { ok: true, item });
+    }
+
+    // ── POST /api/item/:id/keepalive — heartbeat for long-running tasks ───
+    const itemKeepaliveMatch = path.match(/^\/api\/item\/([^/]+)\/keepalive$/);
+    if (method === 'POST' && itemKeepaliveMatch) {
+      const id = decodeURIComponent(itemKeepaliveMatch[1]);
+      const body = await readBody(req);
+      const agent = body.agent || body._author;
+      const q = await readQueue();
+      const item = q.items?.find(i => i.id === id);
+      if (!item) return json(res, 404, { error: 'Item not found' });
+      if (item.claimedBy && agent && item.claimedBy !== agent) {
+        return json(res, 409, { error: `Item claimed by ${item.claimedBy}, not ${agent}` });
+      }
+      const now = new Date().toISOString();
+      item.keepaliveAt = now;
+      if (!item.events) item.events = [];
+      item.events.push({ ts: now, agent: agent || item.claimedBy || 'api', type: 'keepalive', note: body.note || null });
+      item.itemVersion = (item.itemVersion || 0) + 1;
+      await writeQueue(q);
+      return json(res, 200, { ok: true, keepaliveAt: now });
+    }
+
     // ── PATCH /api/item/:id ───────────────────────────────────────────────
     const patchMatch = path.match(/^\/api\/item\/([^/]+)$/);
     if (method === 'PATCH' && patchMatch) {

@@ -19,13 +19,70 @@ You are the workqueue processor for **Rocky**. You run periodically via cron.
   2. If the response names **you** (`"rocky"`), claim and process it
   3. If it names another agent, **skip** — they will claim it on their own cycle
   4. If the endpoint is unreachable, fall back to: claim if `preferred_executor` is `claude_cli` or unset
-- **Claim first:** Set `claimedBy = "rocky"`, `claimedAt = <now ISO-8601>` before starting
+
+## Callback API (preferred over local queue writes)
+
+Use these RCC API endpoints instead of writing queue.json directly. They are authoritative and push real-time state to all agents.
+
+### Claim before starting
+```bash
+POST http://localhost:8789/api/item/<id>/claim
+Authorization: Bearer $RCC_AGENT_TOKEN
+{"agent":"rocky","note":"Starting task"}
+```
+Returns 409 if already claimed by someone else (non-stale). Respect the conflict — back off.
+
+### Keepalive every 30min for long tasks
+```bash
+POST http://localhost:8789/api/item/<id>/keepalive
+Authorization: Bearer $RCC_AGENT_TOKEN
+{"agent":"rocky","note":"Still working: 60% done"}
+```
+Resets the stale TTL clock. If you forget this, the stale-reset will re-queue your item.
+
+### Complete when done
+```bash
+POST http://localhost:8789/api/item/<id>/complete
+Authorization: Bearer $RCC_AGENT_TOKEN
+{"agent":"rocky","result":"Summary of what was done","resolution":"Details..."}
+```
+
+### Fail on error (resets to pending for retry)
+```bash
+POST http://localhost:8789/api/item/<id>/fail
+Authorization: Bearer $RCC_AGENT_TOKEN
+{"agent":"rocky","reason":"What went wrong"}
+```
+Automatically moves to `blocked` status if `maxAttempts` is exceeded.
+
+### Comment (progress note, no status change)
+```bash
+POST http://localhost:8789/api/item/<id>/comment
+Authorization: Bearer $RCC_AGENT_TOKEN
+{"text":"Progress update: step 1 of 3 done","author":"rocky"}
+```
+
+### Schema additions (for reference)
+- `claimedAt`: ISO timestamp set on claim
+- `keepaliveAt`: ISO timestamp updated on each keepalive
+- `events[]`: `{ts, agent, type, note}` — full audit trail of claim/complete/fail/keepalive events
+
+### Stale TTL reference
+| Executor type | TTL |
+|---|---|
+| `claude_cli` | 2 hours |
+| `gpu` | 6 hours |
+| `inference_key` | 30 minutes |
+| default | 1 hour |
+
+If no keepalive within TTL, server auto-resets to pending on `POST /api/queue/expire-stale`.
+
+## Processing Rules (continued)
+
 - If the item already has a different `claimedBy` with a newer `claimedAt`, **back off** — someone else has it
-- Set `status = "in_progress"`, increment `attempts` and `itemVersion`
-- If the task requires tools you don't have access to, set `status = "deferred"` with a note
-- On completion, set `status = "completed"`, fill `result` and `completedAt`, increment `itemVersion`
-- On failure after maxAttempts, set `status = "failed"` with error in `result`
-- Move completed/failed items to the `completed` array
+- Increment `attempts` tracked by RCC on each /claim call
+- If the task requires tools you don't have access to, set `status = "deferred"` with a note via /comment, then /fail
+- Move completed/failed items to the `completed` array (handled server-side)
 
 ## Urgent Items
 
