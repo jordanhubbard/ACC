@@ -377,4 +377,21 @@ export async function vectorHealth() {
 
 export async function collectionStats() { return {}; }
 
-export { vectorUpsert as upsert, vectorSearch as search };
+// Search across all known collections, merge and sort by score
+export async function searchAll(query, { k = 10 } = {}) {
+  const collections = ['rcc_lessons', 'rcc_queue', 'rcc_memory'];
+  const results = await Promise.all(
+    collections.map(async col => {
+      try {
+        const hits = await vectorSearch(col, query, k);
+        return hits.map(r => ({ collection: col, ...r }));
+      } catch {
+        return [];
+      }
+    })
+  );
+  return results.flat().sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, k);
+}
+
+// ── Aliases for rcc/api/index.mjs imports ──────────────────────────────────
+export { vectorUpsert as upsert, vectorSearch as search, searchAll as vectorSearchAll };
