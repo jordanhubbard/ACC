@@ -1,4 +1,5 @@
 pub mod agent_cards;
+pub mod geek_view;
 pub mod idea_incubator;
 pub mod metrics;
 pub mod squirrelbus;
