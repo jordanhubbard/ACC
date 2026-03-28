@@ -5,3 +5,7 @@ public_url = "/"
 
 [watch]
 ignore = ["../dist", "target"]
+
+[[proxy]]
+rewrite = "/sc"
+backend = "http://localhost:8790"

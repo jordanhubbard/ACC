@@ -4,4 +4,5 @@ pub mod idea_incubator;
 pub mod kanban;
 pub mod metrics;
 pub mod squirrelbus;
+pub mod squirrelchat;
 pub mod work_queue;
