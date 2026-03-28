@@ -37,6 +37,11 @@ run_test "ui.test.mjs (live UI)"            "rcc/tests/ui.test.mjs"
 run_test "dashboard-regressions.test.mjs"   "rcc/tests/dashboard-regressions.test.mjs"
 run_test "integration.test.mjs (live e2e)" "rcc/tests/integration.test.mjs"
 
+# GPU tests — only run when EMBED_BACKEND=local (sparky only, skips silently otherwise)
+if [ "${EMBED_BACKEND:-remote}" = "local" ]; then
+  run_test "gpu/memory-pressure.test.mjs"   "rcc/tests/gpu/memory-pressure.test.mjs"
+fi
+
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Test Summary"
