@@ -31,7 +31,7 @@ pub fn App() -> impl IntoView {
                         class="tab-btn"
                         class:tab-active=move || show_geek.get()
                         on:click=move |_| set_show_geek.set(true)
-                    >"Geek View"</button>
+                    >"🧠 Geek View"</button>
                 </div>
             </header>
             <main class="dash-main">
