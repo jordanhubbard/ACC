@@ -17,6 +17,8 @@ web-sys = { version = "0.3", features = [
     "MessageEvent",
     "ErrorEvent",
     "console",
+    "DragEvent",
+    "DataTransfer",
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
