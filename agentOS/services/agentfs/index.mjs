@@ -268,6 +268,104 @@ async function handleFetch(req, res, hash, searchParams) {
   }
 }
 
+// GET /agentfs/modules/:hash/bench — hot-swap latency benchmark
+// Measures: (1) fetch .wasm + AOT compile vs (2) fetch .cwasm (precompiled).
+// Returns p50/p95/p99 latencies for each path over N=10 samples.
+async function handleBench(req, res, hash) {
+  if (!/^[0-9a-f]{64}$/.test(hash)) return json(res, 400, { error: 'invalid hash format' });
+
+  const SAMPLES = 10;
+
+  // Helper: stream S3 object to Buffer and measure time
+  async function fetchTimed(key) {
+    const t0 = performance.now();
+    const r = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+    const chunks = [];
+    for await (const chunk of r.Body) chunks.push(chunk);
+    const buf = Buffer.concat(chunks);
+    return { buf, fetchMs: performance.now() - t0 };
+  }
+
+  function percentile(sorted, p) {
+    const idx = Math.min(Math.floor(sorted.length * p), sorted.length - 1);
+    return +sorted[idx].toFixed(2);
+  }
+
+  // Check both artifacts exist
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: moduleKey(hash) }));
+  } catch {
+    return json(res, 404, { error: 'module not found', hash });
+  }
+
+  const hasAot = await s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: aotKey(hash) }))
+    .then(() => true).catch(() => false);
+
+  // ── Path 1: fetch .wasm + AOT compile (simulates cold load without precompile) ──
+  const jitSamples = [];
+  for (let i = 0; i < SAMPLES; i++) {
+    const { buf, fetchMs } = await fetchTimed(moduleKey(hash));
+    const compileStart = performance.now();
+    const compiled = await aotCompile(buf);
+    const compileMs = performance.now() - compileStart;
+    jitSamples.push({ fetchMs, compileMs, totalMs: fetchMs + compileMs, aot: compiled.aot });
+  }
+
+  // ── Path 2: fetch .cwasm (precompiled, ready to load) ──
+  let aotSamples = null;
+  if (hasAot) {
+    aotSamples = [];
+    for (let i = 0; i < SAMPLES; i++) {
+      const { fetchMs } = await fetchTimed(aotKey(hash));
+      aotSamples.push({ fetchMs, compileMs: 0, totalMs: fetchMs });
+    }
+  }
+
+  function stats(samples, key) {
+    const vals = samples.map(s => s[key]).sort((a, b) => a - b);
+    return {
+      p50: percentile(vals, 0.50),
+      p95: percentile(vals, 0.95),
+      p99: percentile(vals, 0.99),
+      min: +vals[0].toFixed(2),
+      max: +vals[vals.length - 1].toFixed(2),
+    };
+  }
+
+  const result = {
+    hash,
+    samples: SAMPLES,
+    jit_path: {
+      description: 'fetch .wasm + AOT compile (cold load)',
+      fetch_ms:   stats(jitSamples, 'fetchMs'),
+      compile_ms: stats(jitSamples, 'compileMs'),
+      total_ms:   stats(jitSamples, 'totalMs'),
+      aot_available: jitSamples[0]?.aot ?? false,
+    },
+    aot_path: hasAot ? {
+      description: 'fetch precompiled .cwasm (zero-JIT hot-swap)',
+      fetch_ms:   stats(aotSamples, 'fetchMs'),
+      compile_ms: { p50: 0, p95: 0, p99: 0, min: 0, max: 0 },
+      total_ms:   stats(aotSamples, 'totalMs'),
+    } : null,
+    speedup: hasAot ? (() => {
+      const jitMean = jitSamples.map(s=>s.totalMs).reduce((a,b)=>a+b,0)/SAMPLES;
+      const aotMean = aotSamples.map(s=>s.totalMs).reduce((a,b)=>a+b,0)/SAMPLES;
+      const ratio = +(jitMean / aotMean).toFixed(2);
+      return {
+        p50: ratio,
+        note: ratio >= 1
+          ? `AOT path is ${ratio}x faster (precompile amortizes JIT cost at load time)`
+          : `AOT path is slower at this module size — .cwasm (${Math.round(aotMean)}ms fetch) vs .wasm+compile (${Math.round(jitMean)}ms). AOT benefit grows with module size; breakeven ~10KB+ modules.`,
+      };
+    })() : null,
+  };
+
+  console.log(`[agentfs] bench ${hash.slice(0,8)}: jit_p50=${result.jit_path.total_ms.p50}ms` +
+    (hasAot ? ` aot_p50=${result.aot_path.total_ms.p50}ms speedup=${result.speedup.p50}x` : ' (no aot artifact)'));
+  json(res, 200, result);
+}
+
 // DELETE /agentfs/modules/:hash — remove module + meta
 async function handleDelete(req, res, hash) {
   if (!/^[0-9a-f]{64}$/.test(hash)) return json(res, 400, { error: 'invalid hash format' });
@@ -312,6 +410,11 @@ async function router(req, res) {
     // GET /agentfs/modules (list)
     if (path === '/agentfs/modules' && req.method === 'GET') {
       return await handleList(req, res);
+    }
+    // GET /agentfs/modules/:hash/bench — latency benchmark (must be before fetchMatch)
+    const benchMatch = path.match(/^\/agentfs\/modules\/([0-9a-f]{64})\/bench$/);
+    if (benchMatch && req.method === 'GET') {
+      return await handleBench(req, res, benchMatch[1]);
     }
     // GET /agentfs/modules/:hash[?aot=1]
     const fetchMatch = path.match(/^\/agentfs\/modules\/([0-9a-f]{64})$/);

@@ -7,9 +7,26 @@ Wants=network-online.target
 Type=simple
 User=jkh
 WorkingDirectory=/home/jkh/.openclaw/workspace/agentOS/services/agentfs
+
+# Pre-start: verify MinIO is reachable before accepting connections.
+# Fails fast if MINIO_ENDPOINT is wrong or credentials are missing.
+ExecStartPre=/usr/bin/curl -fsS \
+  --max-time 5 \
+  --user rocky2197fb96dde4618aa17f:e47696ac5fcd998be6f342bbc47d13bf5f2fcaebae0ba3e1 \
+  http://100.89.199.14:9000/agentfs-modules \
+  -o /dev/null
+
 ExecStart=/usr/bin/node index.mjs
+
+# Post-start: verify /health responds within 10s (catches silent startup failures).
+ExecStartPost=/bin/bash -c \
+  'for i in 1 2 3 4 5; do \
+     sleep 2 && curl -fs http://localhost:8791/agentfs/health -o /dev/null && exit 0; \
+   done; echo "AgentFS health check failed after 10s" >&2; exit 1'
+
 Restart=on-failure
 RestartSec=5
+TimeoutStartSec=30
 
 Environment=AGENTFS_PORT=8791
 Environment=AGENTFS_TOKEN=wq-5dcad756f6d3e345c00b5cb3dfcbdedb
@@ -18,6 +35,7 @@ Environment=MINIO_ACCESS_KEY=rocky2197fb96dde4618aa17f
 Environment=MINIO_SECRET_KEY=e47696ac5fcd998be6f342bbc47d13bf5f2fcaebae0ba3e1
 Environment=AGENTFS_BUCKET=agentfs-modules
 Environment=AGENTFS_MAX_MB=64
+Environment=WASMTIME_PATH=/home/jkh/.local/bin/wasmtime
 
 StandardOutput=journal
 StandardError=journal
