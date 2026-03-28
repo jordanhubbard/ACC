@@ -11,7 +11,13 @@ You are the workqueue processor for **Natasha**. You run periodically via cron o
 
 ## Your Job
 
-1. **Sync** from API first: `GET http://146.190.134.110:8788/api/queue` — merge by itemVersion (higher wins)
+0. **Heartbeat first** — POST to RCC so the dashboard shows you online:
+   ```
+   POST http://146.190.134.110:8789/api/heartbeat/natasha
+   Authorization: Bearer wq-5dcad756f6d3e345c00b5cb3dfcbdedb
+   {"status":"online","host":"sparky","ts":"<ISO-8601 now>"}
+   ```
+1. **Sync** from API first: `GET http://146.190.134.110:8789/api/queue` — merge by itemVersion (higher wins)
 2. **Read** `workqueue/queue.json` from workspace
 3. **Process** any `pending` items assigned to `natasha` or `all` (with routing check)
 4. **Sync** with peers (Rocky, Bullwinkle) via Mattermost DM
