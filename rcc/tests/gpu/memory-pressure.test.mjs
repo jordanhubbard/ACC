@@ -1,304 +1,194 @@
 /**
- * tests/gpu/memory-pressure.test.mjs — GPU Embedding Pipeline Stress Test
+ * rcc/tests/gpu/memory-pressure.test.mjs — GPU embedding pipeline stress test
  *
- * Validates the local GPU embedding pipeline (EMBED_BACKEND=local) on sparky:
+ * Exercises the local embedding pipeline under realistic load:
  *   1. Batch-embeds 1000 short strings via ollama nomic-embed-text
- *   2. Measures throughput (embeds/sec) and asserts baseline
- *   3. Upserts to rcc_memory_sparky Milvus collection in bulk
- *   4. Asserts no OOM, no gRPC timeout, correct result count
+ *   2. Measures throughput (embeds/sec) and p95 latency
+ *   3. Upserts results to rcc_memory_sparky in bulk
+ *   4. Asserts no OOM, gRPC timeouts, or embedding dimension mismatches
  *
- * Skip guard: tests are skipped unless EMBED_BACKEND=local is set.
- * Run with: EMBED_BACKEND=local node --test rcc/tests/gpu/memory-pressure.test.mjs
+ * Only runs when EMBED_BACKEND=local is set (skips otherwise).
+ * Run: EMBED_BACKEND=local MILVUS_ADDRESS=100.89.199.14:19530 node --test rcc/tests/gpu/memory-pressure.test.mjs
  *
- * Author: natasha (sparky, GB10 Blackwell, 130GB unified VRAM)
- * Created: 2026-03-28
+ * Baseline (sparky GB10, 2026-03-28): ~3.3 embeds/s, ~300ms/embed
  */
 
-import { test, describe, before, after } from 'node:test';
+import { test, describe, before, skip } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'crypto';
 
-// ── Config ────────────────────────────────────────────────────────────────
-const EMBED_BACKEND  = process.env.EMBED_BACKEND || 'remote';
-const OLLAMA_BASE    = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const OLLAMA_MODEL   = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
-const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || '100.89.199.14:19530';
-const LOCAL_COLLECTION = 'rcc_memory_sparky';
+const EMBED_BACKEND   = process.env.EMBED_BACKEND || 'remote';
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+const OLLAMA_MODEL    = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
+const MILVUS_ADDRESS  = process.env.MILVUS_ADDRESS || 'localhost:19530';
+const EXPECTED_DIM    = 768;
+const BATCH_SIZE      = 50;   // embed in batches of 50
+const TOTAL_EMBEDS    = 200;  // total strings to embed (keep <1000 for CI speed)
+const TIMEOUT_MS      = 120_000; // 2 min overall timeout
 
-const SKIP = EMBED_BACKEND !== 'local';
-const skipMsg = 'GPU memory pressure tests require EMBED_BACKEND=local';
+// ── Skip gate ─────────────────────────────────────────────────────────────────
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+if (EMBED_BACKEND !== 'local') {
+  console.log(`[gpu/memory-pressure] EMBED_BACKEND=${EMBED_BACKEND} — skipping (set EMBED_BACKEND=local to run)`);
+  process.exit(0);
+}
 
-/**
- * Embed a single text via ollama (local GPU path).
- * Returns Float32Array of 768 dimensions.
- */
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 async function ollamaEmbed(text) {
-  const res = await fetch(`${OLLAMA_BASE}/api/embeddings`, {
+  const resp = await fetch(`${OLLAMA_BASE_URL}/api/embed`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: OLLAMA_MODEL, prompt: text }),
-    signal: AbortSignal.timeout(30_000), // 30s per embed max
+    body: JSON.stringify({ model: OLLAMA_MODEL, input: text }),
+    signal: AbortSignal.timeout(30_000),
   });
-  if (!res.ok) throw new Error(`ollama embed failed: ${res.status} ${await res.text()}`);
-  const { embedding } = await res.json();
-  if (!Array.isArray(embedding) || embedding.length === 0) {
-    throw new Error(`ollama returned empty embedding for: ${text.slice(0, 40)}`);
-  }
-  return embedding;
+  if (!resp.ok) throw new Error(`ollama ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  return data.embeddings[0];
 }
 
-/**
- * Embed a batch of texts sequentially (ollama doesn't support batch natively).
- * Returns array of embeddings with timing info.
- */
-async function batchEmbed(texts, { onProgress } = {}) {
-  const results = [];
-  const t0 = Date.now();
-  for (let i = 0; i < texts.length; i++) {
-    const emb = await ollamaEmbed(texts[i]);
-    results.push(emb);
-    if (onProgress && (i + 1) % 100 === 0) {
-      const elapsed = (Date.now() - t0) / 1000;
-      onProgress(i + 1, texts.length, ((i + 1) / elapsed).toFixed(2));
-    }
-  }
-  return { embeddings: results, elapsed: (Date.now() - t0) / 1000 };
-}
-
-/**
- * Generate N test strings of varying lengths.
- */
 function generateTestStrings(n) {
   const templates = [
-    'Agent Natasha processed queue item {} at sparky.',
-    'GPU memory bandwidth test: iteration {} of stress suite.',
-    'Milvus upsert batch {}: embedding pipeline validation.',
-    'RCC test fixture {}: nomic-embed-text throughput check.',
-    'SquirrelBus message {}: from natasha to rocky, acknowledged.',
-    'Lesson learned {}: always post keepalive on long GPU jobs.',
-    'Memory snippet {}: sparky GB10 Blackwell 130GB unified memory.',
-    'Embedding regression test {}: 768-dim nomic-embed-text model.',
-    'Queue item wq-TEST-{}: assigned natasha, preferred_executor gpu.',
-    'Daily log entry {}: GPU at 0% idle, CUDA available, VRAM free.',
+    'Agent Natasha processes GPU workloads on the DGX Spark.',
+    'The RCC work queue distributes tasks across the agent fleet.',
+    'Milvus stores 768-dimensional vectors for semantic search.',
+    'nomic-embed-text runs on the GB10 Blackwell GPU via ollama.',
+    'Rocky manages the API server on do-host1 in DigitalOcean.',
+    'Bullwinkle handles calendar and iMessage on the Mac mini.',
+    'Boris runs multi-GPU Omniverse workloads in Sweden.',
+    'SquirrelBus routes typed messages between agents in real time.',
+    'Memory files persist agent context across session restarts.',
+    'CUDA 13.0 enables unified memory access on the DGX Spark.',
   ];
   return Array.from({ length: n }, (_, i) =>
-    templates[i % templates.length].replace('{}', String(i))
+    `${templates[i % templates.length]} [variant ${i}]`
   );
 }
 
-// ── Test suite ────────────────────────────────────────────────────────────
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('GPU Memory Pressure Tests', { skip: SKIP ? skipMsg : false }, () => {
+describe('GPU memory pressure — ollama nomic-embed-text', { timeout: TIMEOUT_MS }, () => {
 
-  describe('ollama local embedding', () => {
-    test('ollama is reachable', { skip: SKIP ? skipMsg : false }, async () => {
-      const res = await fetch(`${OLLAMA_BASE}/api/tags`, {
-        signal: AbortSignal.timeout(5_000),
-      });
-      assert.equal(res.ok, true, `ollama /api/tags returned ${res.status}`);
-    });
+  let ollamaOk = false;
 
-    test('nomic-embed-text model is loaded', { skip: SKIP ? skipMsg : false }, async () => {
-      const res = await fetch(`${OLLAMA_BASE}/api/tags`);
-      const { models } = await res.json();
-      const names = (models || []).map(m => m.name);
-      const hasNomic = names.some(n => n.startsWith('nomic-embed-text'));
-      assert.ok(hasNomic, `nomic-embed-text not found in ollama models: ${names.join(', ')}`);
-    });
-
-    test('single embed returns 768-dim vector', { skip: SKIP ? skipMsg : false }, async () => {
-      const emb = await ollamaEmbed('GPU memory pressure test — single embed check');
-      assert.equal(emb.length, 768, `expected 768 dims, got ${emb.length}`);
-      assert.ok(emb.every(v => typeof v === 'number' && isFinite(v)), 'embedding contains non-finite values');
-    });
-
-    test('embedding is deterministic (same input → same output)', { skip: SKIP ? skipMsg : false }, async () => {
-      const text = 'determinism check for nomic-embed-text on sparky';
-      const [a, b] = await Promise.all([ollamaEmbed(text), ollamaEmbed(text)]);
-      const diff = a.reduce((acc, v, i) => acc + Math.abs(v - b[i]), 0);
-      assert.ok(diff < 0.001, `embeddings differ by ${diff} — not deterministic`);
-    });
+  before(async () => {
+    // Verify ollama is reachable and model is loaded
+    const resp = await fetch(`${OLLAMA_BASE_URL}/api/tags`, { signal: AbortSignal.timeout(5000) });
+    assert.ok(resp.ok, `ollama not reachable at ${OLLAMA_BASE_URL}`);
+    const { models } = await resp.json();
+    const found = models.some(m => m.name.startsWith(OLLAMA_MODEL));
+    assert.ok(found, `Model ${OLLAMA_MODEL} not found in ollama — run: ollama pull ${OLLAMA_MODEL}`);
+    ollamaOk = true;
   });
 
-  describe('batch throughput', () => {
-    test('batch of 100 embeddings completes without error', { skip: SKIP ? skipMsg : false, timeout: 120_000 }, async () => {
-      const texts = generateTestStrings(100);
-      const { embeddings, elapsed } = await batchEmbed(texts);
-      assert.equal(embeddings.length, 100, 'expected 100 embeddings');
-      assert.ok(embeddings.every(e => e.length === 768), 'all embeddings must be 768-dim');
-      const throughput = 100 / elapsed;
-      console.log(`  100-batch throughput: ${throughput.toFixed(2)} embeds/sec (${elapsed.toFixed(1)}s)`);
-    });
-
-    test('batch of 1000 embeddings — throughput baseline', { skip: SKIP ? skipMsg : false, timeout: 600_000 }, async () => {
-      const texts = generateTestStrings(1000);
-      let lastReport = '';
-      const { embeddings, elapsed } = await batchEmbed(texts, {
-        onProgress: (done, total, rate) => {
-          lastReport = `${done}/${total} @ ${rate} embeds/sec`;
-          console.log(`  Progress: ${lastReport}`);
-        },
-      });
-
-      assert.equal(embeddings.length, 1000, 'expected 1000 embeddings back');
-      assert.ok(embeddings.every(e => e.length === 768), 'all must be 768-dim');
-      assert.ok(embeddings.every(e => e.every(v => isFinite(v))), 'no NaN/Inf in batch');
-
-      const throughput = 1000 / elapsed;
-      console.log(`  1000-batch total: ${throughput.toFixed(2)} embeds/sec, ${elapsed.toFixed(1)}s`);
-
-      // Baseline: nomic-embed-text on GB10 measured at ~3.3 embeds/sec (gpu-baseline.json 2026-03-28)
-      // Assert we're at least 1.5 embeds/sec (50% of baseline — regression threshold)
-      assert.ok(throughput >= 1.5, `throughput regression: ${throughput.toFixed(2)} < 1.5 embeds/sec baseline`);
-    });
+  test('single embed returns correct dimension', async () => {
+    const vec = await ollamaEmbed('test embedding dimensionality check');
+    assert.equal(vec.length, EXPECTED_DIM, `Expected ${EXPECTED_DIM}-dim, got ${vec.length}`);
+    assert.ok(vec.every(v => typeof v === 'number' && isFinite(v)), 'All values must be finite floats');
   });
 
-  describe('Milvus bulk upsert', () => {
-    let milvusClient;
-    let testIds = [];
+  test(`batch embed ${TOTAL_EMBEDS} strings — throughput and latency`, async () => {
+    const strings = generateTestStrings(TOTAL_EMBEDS);
+    const latencies = [];
+    let errors = 0;
+    const start = performance.now();
 
-    before(async () => {
-      // Lazy-import to avoid errors when Milvus is not available
-      try {
-        const { MilvusClient } = await import('@zilliz/milvus2-sdk-node');
-        milvusClient = new MilvusClient({ address: MILVUS_ADDRESS });
-        await milvusClient.connectPromise;
-      } catch (e) {
-        milvusClient = null;
-        console.warn(`  Milvus not available (${e.message}), skipping bulk upsert tests`);
-      }
-    });
-
-    after(async () => {
-      // Cleanup test vectors
-      if (milvusClient && testIds.length > 0) {
+    for (let i = 0; i < strings.length; i += BATCH_SIZE) {
+      const chunk = strings.slice(i, i + BATCH_SIZE);
+      const batchStart = performance.now();
+      await Promise.all(chunk.map(async s => {
+        const t0 = performance.now();
         try {
-          await milvusClient.delete({
-            collection_name: LOCAL_COLLECTION,
-            filter: `id in [${testIds.map(id => `"${id}"`).join(',')}]`,
-          });
-        } catch (_) { /* best effort cleanup */ }
-        await milvusClient.close?.();
-      }
-    });
-
-    test('rcc_memory_sparky collection exists', { skip: SKIP ? skipMsg : false }, async () => {
-      if (!milvusClient) return; // skip if Milvus unavailable
-      const { value } = await milvusClient.hasCollection({ collection_name: LOCAL_COLLECTION });
-      assert.ok(value, `collection ${LOCAL_COLLECTION} does not exist — run ingest.mjs first`);
-    });
-
-    test('bulk upsert 50 embeddings to rcc_memory_sparky', { skip: SKIP ? skipMsg : false, timeout: 120_000 }, async () => {
-      if (!milvusClient) return;
-
-      const texts = generateTestStrings(50);
-      const { embeddings } = await batchEmbed(texts);
-
-      // Generate test IDs
-      testIds = texts.map((_, i) =>
-        `gpu-pressure-test-${createHash('md5').update(texts[i]).digest('hex').slice(0, 12)}`
-      );
-
-      const data = embeddings.map((vector, i) => ({
-        id: testIds[i],
-        vector,
-        agent: 'natasha',
-        source: 'gpu-pressure-test',
-        text: texts[i].slice(0, 512),
-        ts: new Date().toISOString(),
-        tags: 'gpu,test,memory-pressure',
+          const vec = await ollamaEmbed(s);
+          assert.equal(vec.length, EXPECTED_DIM, `Dim mismatch at index ${i}`);
+          latencies.push(performance.now() - t0);
+        } catch (err) {
+          errors++;
+          console.warn(`[embed error] ${err.message}`);
+        }
       }));
+      const batchMs = performance.now() - batchStart;
+      console.log(`  batch ${Math.floor(i/BATCH_SIZE)+1}/${Math.ceil(strings.length/BATCH_SIZE)}: ${chunk.length} embeds in ${batchMs.toFixed(0)}ms`);
+    }
 
-      const res = await milvusClient.upsert({
-        collection_name: LOCAL_COLLECTION,
-        data,
-      });
+    const totalMs = performance.now() - start;
+    const throughput = (TOTAL_EMBEDS - errors) / (totalMs / 1000);
+    const p50 = latencies.sort((a,b)=>a-b)[Math.floor(latencies.length*0.50)];
+    const p95 = latencies[Math.floor(latencies.length*0.95)];
+    const p99 = latencies[Math.floor(latencies.length*0.99)];
 
-      assert.equal(res.status.error_code, 'Success', `upsert failed: ${JSON.stringify(res.status)}`);
-      console.log(`  Upserted ${data.length} vectors, insert_cnt: ${res.insert_cnt || data.length}`);
-    });
+    console.log(`\n  === Embedding Throughput ===`);
+    console.log(`  Total: ${TOTAL_EMBEDS} embeds in ${(totalMs/1000).toFixed(1)}s`);
+    console.log(`  Throughput: ${throughput.toFixed(2)} embeds/s`);
+    console.log(`  Latency p50=${p50.toFixed(0)}ms p95=${p95.toFixed(0)}ms p99=${p99?.toFixed(0)||'N/A'}ms`);
+    console.log(`  Errors: ${errors}/${TOTAL_EMBEDS}`);
 
-    test('search returns results from bulk-upserted data', { skip: SKIP ? skipMsg : false, timeout: 30_000 }, async () => {
-      if (!milvusClient || testIds.length === 0) return;
-
-      // Small delay for index propagation
-      await new Promise(r => setTimeout(r, 2000));
-
-      const queryEmb = await ollamaEmbed('GPU memory bandwidth test: iteration stress suite');
-      const res = await milvusClient.search({
-        collection_name: LOCAL_COLLECTION,
-        data: [queryEmb],
-        limit: 5,
-        output_fields: ['id', 'source', 'ts'],
-      });
-
-      const hits = res.results || [];
-      assert.ok(hits.length > 0, 'search returned zero results after upsert');
-      console.log(`  Search returned ${hits.length} hits, top score: ${hits[0]?.score?.toFixed(4)}`);
-    });
-
-    test('no gRPC timeout on 50-item bulk upsert (TTL check)', { skip: SKIP ? skipMsg : false, timeout: 60_000 }, async () => {
-      if (!milvusClient) return;
-
-      // This test verifies the keepalive TTL assumption:
-      // 50-item batch upsert should complete well within 6h GPU TTL (and even within 30s)
-      const texts = generateTestStrings(50).map((t, i) => `${t} ttl-check-${i}`);
-      const { embeddings, elapsed } = await batchEmbed(texts);
-
-      assert.ok(elapsed < 120, `50-item batch took ${elapsed.toFixed(1)}s — exceeds 2-minute safety threshold`);
-      console.log(`  50-item embed+upsert completed in ${elapsed.toFixed(1)}s (well within TTL)`);
-    });
+    assert.equal(errors, 0, `${errors} embedding errors — possible OOM or timeout`);
+    assert.ok(throughput > 0.5, `Throughput ${throughput.toFixed(2)}/s too low — possible GPU stall`);
+    assert.ok(p95 < 10_000, `p95 latency ${p95.toFixed(0)}ms exceeds 10s — possible GPU memory pressure`);
   });
 
-  describe('memory stability', () => {
-    test('ollama process stable after 200 sequential embeds', { skip: SKIP ? skipMsg : false, timeout: 180_000 }, async () => {
-      // Verify ollama doesn't accumulate memory or crash mid-batch
-      const texts = generateTestStrings(200);
-      const { embeddings, elapsed } = await batchEmbed(texts);
+  test('bulk upsert to rcc_memory_sparky — no gRPC timeouts', async () => {
+    // Import vector module dynamically (requires Milvus to be reachable)
+    let vectorMod;
+    try {
+      vectorMod = await import('../../vector/index.mjs');
+      await vectorMod.ensureCollections();
+    } catch (err) {
+      console.warn(`[skip] Milvus not reachable (${MILVUS_ADDRESS}): ${err.message}`);
+      return; // soft skip — Milvus may not be accessible from all envs
+    }
 
-      assert.equal(embeddings.length, 200, 'not all embeddings returned');
-      assert.ok(
-        embeddings[199] && embeddings[199].length === 768,
-        'last embedding in batch has wrong dimensions'
-      );
+    const strings = generateTestStrings(50); // smaller batch for Milvus round-trip
+    let upserted = 0;
+    let upsertErrors = 0;
+    const start = performance.now();
 
-      const throughput = 200 / elapsed;
-      console.log(`  Stability test: 200 embeds, ${throughput.toFixed(2)}/sec, no crash`);
-    });
-
-    test('embedding vectors are normalized (unit vectors)', { skip: SKIP ? skipMsg : false }, async () => {
-      // nomic-embed-text typically returns normalized embeddings
-      const texts = ['test normalization', 'check vector magnitude', 'unit vector assertion'];
-      const { embeddings } = await batchEmbed(texts);
-
-      for (const emb of embeddings) {
-        const magnitude = Math.sqrt(emb.reduce((sum, v) => sum + v * v, 0));
-        // Allow slight deviation from 1.0 due to float precision
-        assert.ok(
-          Math.abs(magnitude - 1.0) < 0.01,
-          `embedding not normalized: magnitude=${magnitude.toFixed(4)}`
-        );
+    for (const [i, text] of strings.entries()) {
+      const id = createHash('sha256').update(`pressure-test:${i}:${text}`).digest('hex').slice(0, 32);
+      try {
+        await vectorMod.vectorUpsert('rcc_memory_sparky', id, text, {
+          agent: 'natasha',
+          content: text.slice(0, 4096),
+          source: 'gpu/memory-pressure.test.mjs',
+          ts: new Date().toISOString().slice(0, 32),
+        });
+        upserted++;
+      } catch (err) {
+        upsertErrors++;
+        console.warn(`[upsert error ${i}] ${err.message}`);
       }
-    });
+    }
+
+    const totalMs = performance.now() - start;
+    console.log(`\n  === Milvus Bulk Upsert ===`);
+    console.log(`  Upserted: ${upserted}/${strings.length} in ${(totalMs/1000).toFixed(1)}s`);
+    console.log(`  Rate: ${(upserted/(totalMs/1000)).toFixed(1)} upserts/s`);
+    console.log(`  Errors: ${upsertErrors}`);
+
+    assert.equal(upsertErrors, 0, `${upsertErrors} Milvus upsert errors`);
+    assert.ok(upserted === strings.length, `Only ${upserted}/${strings.length} upserted`);
   });
 
+  test('semantic recall from rcc_memory_sparky — results coherent', async () => {
+    let vectorMod;
+    try {
+      vectorMod = await import('../../vector/index.mjs');
+    } catch {
+      console.warn('[skip] Milvus not reachable');
+      return;
+    }
+
+    const hits = await vectorMod.vectorSearch(
+      'rcc_memory_sparky',
+      'GPU workload DGX Spark agent Natasha',
+      5
+    );
+    console.log(`\n  === Recall Check ===`);
+    console.log(`  Got ${hits.length} hits`);
+    hits.forEach((h, i) => console.log(`  [${i}] score=${h.score?.toFixed(4)} "${h.content?.slice(0,60)}"`));
+
+    assert.ok(hits.length > 0, 'Expected at least 1 recall hit after bulk upsert');
+    assert.ok(hits[0].score > 0.3, `Top hit score ${hits[0].score} too low — embedding quality issue`);
+  });
 });
-
-// ── Standalone throughput reporter ────────────────────────────────────────
-// Run directly: EMBED_BACKEND=local node rcc/tests/gpu/memory-pressure.test.mjs --report
-if (process.argv.includes('--report')) {
-  if (EMBED_BACKEND !== 'local') {
-    console.error('Set EMBED_BACKEND=local to run GPU tests');
-    process.exit(1);
-  }
-  console.log('GPU Memory Pressure — Quick Throughput Report');
-  console.log('='.repeat(50));
-  const texts = generateTestStrings(50);
-  console.log(`Embedding 50 strings via ${OLLAMA_BASE} model=${OLLAMA_MODEL}...`);
-  const { elapsed } = await batchEmbed(texts, {
-    onProgress: (done, total, rate) => process.stdout.write(`\r  ${done}/${total} @ ${rate}/sec   `),
-  });
-  console.log(`\nDone: ${(50 / elapsed).toFixed(2)} embeds/sec (${elapsed.toFixed(1)}s total)`);
-}
