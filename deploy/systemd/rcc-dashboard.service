@@ -1,0 +1,39 @@
+[Unit]
+Description=RCC Dashboard v2 (Rust/WASM)
+Documentation=https://github.com/jordanhubbard/rockyandfriends/blob/main/rcc/docs/dashboard-v2.md
+After=network.target rcc-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+EnvironmentFile=%h/.rcc/.env
+
+# Binary and static assets live in the RCC workspace
+WorkingDirectory=%h/.rcc/workspace/rcc/dashboard
+
+ExecStart=%h/.rcc/workspace/rcc/dashboard/target/release/dashboard-server
+
+# Port 8790 during parallel run; change to 8788 after cutover validation
+Environment=RCC_DASHBOARD_PORT=8790
+Environment=RCC_URL=http://localhost:8789
+Environment=DASHBOARD_DIST=%h/.rcc/workspace/rcc/dashboard/dist
+
+# Auth token and operator are sourced from EnvironmentFile above
+# RCC_AGENT_TOKEN=...
+# OPERATOR_HANDLE=jkh
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rcc-dashboard
+
+# Harden the service
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=%h/.rcc
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
