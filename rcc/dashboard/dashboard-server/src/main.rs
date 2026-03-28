@@ -222,6 +222,40 @@ async fn bus_stream(State(state): State<Arc<AppState>>) -> Response<Body> {
     }
 }
 
+// --- /sc/api/stream SSE passthrough (no timeout) ---
+async fn sc_stream(State(state): State<Arc<AppState>>) -> Response<Body> {
+    let url = format!("{}/api/stream", state.sc_url);
+    match state
+        .stream_client
+        .get(&url)
+        .header("Authorization", "Bearer sc-squirrelchat-admin-2026")
+        .header("Accept", "text/event-stream")
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let stream = resp.bytes_stream();
+            Response::builder()
+                .status(200)
+                .header("Content-Type", "text/event-stream")
+                .header("Cache-Control", "no-cache")
+                .header("Connection", "keep-alive")
+                .header("Access-Control-Allow-Origin", "*")
+                .body(Body::from_stream(stream))
+                .unwrap()
+        }
+        Err(e) => {
+            tracing::warn!("SC SSE upstream error: {}", e);
+            Response::builder()
+                .status(200)
+                .header("Content-Type", "text/event-stream")
+                .header("Cache-Control", "no-cache")
+                .body(Body::from(": sc upstream unavailable\n\n"))
+                .unwrap()
+        }
+    }
+}
+
 // --- /sc/* handlers (SquirrelChat proxy) ---
 async fn sc_get(
     State(state): State<Arc<AppState>>,
@@ -293,9 +327,10 @@ async fn health(State(state): State<Arc<AppState>>) -> Response<Body> {
         .unwrap_or(false);
 
     let body = format!(
-        r#"{{"ok":true,"uptime_seconds":{},"rcc_connected":{},"sc_connected":{},"version":"2.0.0"}}"#,
-        uptime_secs, rcc_ok, sc_ok
+        r#"{{"ok":true,"uptime_secs":{},"rcc_ok":{},"version":"2.0.0"}}"#,
+        uptime_secs, rcc_ok
     );
+    let _ = sc_ok; // checked but not exposed in the spec response
 
     Response::builder()
         .status(200)
@@ -360,8 +395,23 @@ async fn main() {
     let operator = std::env::var("OPERATOR_HANDLE").unwrap_or_else(|_| "jkh".to_string());
     let dist = std::env::var("DASHBOARD_DIST").unwrap_or_else(|_| "dist".to_string());
 
-    let state = build_state(rcc_url.clone(), sc_url.clone(), agent_token);
-    let app = build_app(state, &dist);
+    // Route priority (axum picks most-specific first):
+    //   /health      →  health check (no auth)
+    //   /bus/stream  →  SSE passthrough (no timeout)
+    //   /api/*       →  JSON proxy to RCC (GET open, POST/PATCH/DELETE require auth)
+    //   /bus/*       →  bus proxy to RCC (GET open, POST requires auth)
+    //   /sc/*        →  squirrelchat proxy (GET open, mutations require auth)
+    //   fallback     →  serve dist/ static files (SPA)
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/bus/stream", get(bus_stream))
+        .route("/api/*path", get(api_get).post(api_post).patch(api_patch).delete(api_delete))
+        .route("/bus/*path", get(bus_get).post(bus_post))
+        .route("/sc/api/stream", get(sc_stream))
+        .route("/sc/*path", get(sc_get).post(sc_post).patch(sc_patch).delete(sc_delete))
+        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+        .with_state(state)
+        .fallback_service(ServeDir::new(&dist).append_index_html_on_directories(true));
 
     tracing::info!(port, rcc_url, sc_url, operator, "RCC Dashboard v2 starting");
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))

@@ -1,10 +1,7 @@
 use leptos::*;
 
 use crate::components::{
-    activity_feed::ActivityFeed,
     agent_cards::AgentCards,
-    bus_send::BusSend,
-    changelog::Changelog,
     geek_view::GeekView,
     idea_incubator::IdeaIncubator,
     kanban::Kanban,
@@ -16,7 +13,7 @@ use crate::components::{
 
 #[component]
 pub fn App() -> impl IntoView {
-    // 0 = Dashboard, 1 = Geek View, 2 = Kanban, 3 = Chat
+    // 0 = Dashboard, 1 = Geek View, 2 = Kanban, 3 = SquirrelChat
     let (tab, set_tab) = create_signal(0u8);
 
     view! {
@@ -47,7 +44,7 @@ pub fn App() -> impl IntoView {
                         class="tab-btn"
                         class:tab-active=move || tab.get() == 3
                         on:click=move |_| set_tab.set(3)
-                    >"💬 Chat"</button>
+                    >"💬 SquirrelChat"</button>
                 </div>
             </header>
             <main class="dash-main">
@@ -60,7 +57,6 @@ pub fn App() -> impl IntoView {
                             <div class="dash-row dash-row-top">
                                 <AgentCards />
                                 <Metrics />
-                                <BusSend />
                             </div>
                             <div class="dash-row">
                                 <WorkQueue />
@@ -68,10 +64,6 @@ pub fn App() -> impl IntoView {
                             <div class="dash-row">
                                 <SquirrelBus />
                                 <IdeaIncubator />
-                                <ActivityFeed />
-                            </div>
-                            <div class="dash-row">
-                                <Changelog />
                             </div>
                         </div>
                     }.into_view(),

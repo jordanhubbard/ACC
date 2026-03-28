@@ -1,0 +1,633 @@
+/* ── SquirrelChat Layout ──────────────────────────────────────────────────── */
+
+.sc-layout {
+  display: flex;
+  height: calc(100vh - 52px); /* below header */
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+
+.sc-sidebar {
+  width: 220px;
+  min-width: 200px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.sc-sidebar-section {
+  padding: 12px 0 4px;
+  border-bottom: 1px solid var(--border2);
+}
+
+.sc-sidebar-section:last-child {
+  border-bottom: none;
+  flex: 1;
+}
+
+.sc-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.sc-channel-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  cursor: pointer;
+  color: var(--text-dim);
+  border-radius: 4px;
+  margin: 0 4px;
+  font-size: 13px;
+  transition: background 0.1s, color 0.1s;
+}
+
+.sc-channel-item:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+.sc-channel-active {
+  background: var(--surface2);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sc-unread {
+  background: var(--red);
+  color: #fff;
+  border-radius: 10px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 18px;
+  text-align: center;
+}
+
+.sc-agent-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.sc-presence {
+  font-size: 9px;
+  line-height: 1;
+}
+
+.sc-agent-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sc-project-item {
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-radius: 4px;
+  margin: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s;
+}
+
+.sc-project-item:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+.sc-mini-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 3px;
+  padding: 1px 5px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
+  transition: color 0.1s, border-color 0.1s;
+}
+
+.sc-mini-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+/* ── Main area ───────────────────────────────────────────────────────────── */
+
+.sc-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Chat view ───────────────────────────────────────────────────────────── */
+
+.sc-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.sc-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sc-channel-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.sc-conn-badge {
+  font-size: 11px;
+}
+
+.sc-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sc-no-messages {
+  color: var(--text-dimmer);
+  font-size: 12px;
+  text-align: center;
+  padding: 32px 0;
+}
+
+.sc-msg {
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+
+.sc-msg:hover {
+  background: var(--surface2);
+}
+
+.sc-msg:hover .sc-msg-actions {
+  opacity: 1;
+}
+
+.sc-msg-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.sc-msg-from {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--blue);
+}
+
+.sc-msg-ts {
+  font-size: 11px;
+  color: var(--text-dimmer);
+}
+
+.sc-msg-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.sc-react-btn,
+.sc-del-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  opacity: 0.7;
+  transition: opacity 0.1s, background 0.1s;
+}
+
+.sc-react-btn:hover,
+.sc-del-btn:hover {
+  opacity: 1;
+  background: var(--surface);
+}
+
+.sc-msg-content {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.sc-msg-body {
+  display: inline;
+}
+
+.sc-mention {
+  color: var(--blue);
+  font-weight: 700;
+}
+
+/* ── Input area ──────────────────────────────────────────────────────────── */
+
+.sc-input-area {
+  padding: 10px 18px 14px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.sc-mention-dropdown {
+  position: absolute;
+  bottom: calc(100% - 10px);
+  left: 18px;
+  right: 18px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.4);
+  z-index: 10;
+  overflow: hidden;
+}
+
+.sc-mention-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  transition: background 0.1s;
+}
+
+.sc-mention-item:hover {
+  background: var(--surface);
+  color: var(--blue);
+}
+
+.sc-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.sc-textarea {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 8px 10px;
+  resize: none;
+  min-height: 38px;
+  max-height: 120px;
+  line-height: 1.5;
+  transition: border-color 0.15s;
+}
+
+.sc-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.sc-textarea::placeholder {
+  color: var(--text-dimmer);
+}
+
+.sc-send-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.sc-send-btn:hover {
+  background: var(--blue);
+}
+
+.sc-sending {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── Project panel ───────────────────────────────────────────────────────── */
+
+.sc-project-panel {
+  padding: 20px 24px;
+  overflow-y: auto;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sc-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sc-panel-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.sc-close-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font);
+  transition: color 0.1s, border-color 0.1s;
+}
+
+.sc-close-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.sc-project-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sc-proj-desc {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sc-proj-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.sc-meta-item {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.sc-meta-label {
+  color: var(--text-dimmer);
+  margin-right: 2px;
+}
+
+.sc-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sc-tag {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.sc-files-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.sc-files-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.sc-dl-btn {
+  color: var(--blue);
+  text-decoration: none;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+
+.sc-dl-btn:hover {
+  background: var(--surface2);
+}
+
+.sc-empty-files {
+  color: var(--text-dimmer);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.sc-file-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border2);
+  font-size: 12px;
+}
+
+.sc-file-item:last-of-type {
+  border-bottom: none;
+}
+
+.sc-file-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 70%;
+}
+
+.sc-file-size {
+  color: var(--text-dimmer);
+  font-size: 11px;
+}
+
+.sc-upload-btn {
+  display: inline-block;
+  background: var(--surface2);
+  border: 1px dashed var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font);
+  text-align: center;
+  margin-top: 6px;
+  transition: border-color 0.1s, color 0.1s;
+}
+
+.sc-upload-btn:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+
+.sc-delete-btn {
+  background: none;
+  border: 1px solid var(--red);
+  color: var(--red);
+  border-radius: 4px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+  margin-top: auto;
+  align-self: flex-start;
+  transition: background 0.1s;
+}
+
+.sc-delete-btn:hover {
+  background: rgba(248, 81, 73, 0.12);
+}
+
+/* ── New project modal ───────────────────────────────────────────────────── */
+
+.sc-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.sc-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+.sc-modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.sc-modal-input,
+.sc-modal-textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 8px 10px;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+
+.sc-modal-input:focus,
+.sc-modal-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.sc-modal-textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.sc-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.sc-btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 7px 18px;
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.1s;
+}
+
+.sc-btn-primary:hover {
+  background: var(--blue);
+}
+
+.sc-btn-cancel {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 7px 14px;
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 13px;
+  transition: color 0.1s;
+}
+
+.sc-btn-cancel:hover {
+  color: var(--text);
+}
