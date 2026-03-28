@@ -37,7 +37,17 @@ This script:
 - Installs npm dependencies
 - Optionally installs systemd service (Linux)
 
-### 3. Configure your `.env`
+### 3. Configure OpenClaw gateway mode
+
+Before starting the gateway, set it to local mode:
+
+```bash
+openclaw config set gateway.mode local
+```
+
+This is **required** for agent operation. Without it the gateway may fail to start or route incorrectly. The onboard script (`/api/onboard`) does this automatically — only needed for manual setups.
+
+### 4. Configure your `.env`
 
 Edit `~/.rcc/.env`:
 

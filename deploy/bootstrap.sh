@@ -435,6 +435,9 @@ info "Starting OpenClaw gateway..."
 pkill -f "openclaw.*gateway" 2>/dev/null || true
 sleep 1
 
+# ── Set gateway.mode=local (required for agent operation) ─────────────────
+openclaw config set gateway.mode local 2>/dev/null || true
+
 _gateway_running() {
   curl -sf http://127.0.0.1:18789/health > /dev/null 2>&1
 }

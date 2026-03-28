@@ -964,11 +964,13 @@ chmod 600 ~/.rcc/.env
 
 # ── OpenClaw ─────────────────────────────────────────────────────────────────
 if command -v openclaw &>/dev/null; then
-  echo "→ openclaw found — restarting gateway..."
+  echo "→ openclaw found — configuring and restarting gateway..."
+  openclaw config set gateway.mode local 2>/dev/null || true
   openclaw gateway restart 2>/dev/null || openclaw gateway start
 else
   echo "→ Installing openclaw..."
   npm install -g openclaw 2>/dev/null || { echo "npm not found — please install Node.js first"; exit 1; }
+  openclaw config set gateway.mode local 2>/dev/null || true
   openclaw gateway start
 fi
 
