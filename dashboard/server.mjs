@@ -646,6 +646,19 @@ app.delete('/api/agents/:name/decommission', requireAuth, async (req, res) => {
   res.json({ ok: true, name, recommissioned: true });
 });
 
+// GET /api/agents/:name/capabilities — read agent capabilities from JSON file
+app.get('/api/agents/:name/capabilities', async (req, res) => {
+  const name = req.params.name.toLowerCase();
+  const capPath = join(__dirname, '..', 'rcc', 'agents', `${name}.capabilities.json`);
+  try {
+    if (!existsSync(capPath)) return res.status(404).json({ error: 'Capabilities not found for agent: ' + name });
+    const raw = await readFile(capPath, 'utf8');
+    res.json(JSON.parse(raw));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- Crash Report API ---
 
 app.post('/api/crash-report', requireAuth, async (req, res) => {
@@ -997,7 +1010,7 @@ function renderUnifiedPage() {
             ? '<div class="agent-meta" style="color:#8b949e">⚠️ ' + esc(hb.decommissionReason || 'decommissioned') + '</div>' : '';
           const cardOpacity = (stLabel === 'decommissioned') ? 'opacity:0.45;' : '';
           return '<div class="agent-card" style="' + cardOpacity + '">' +
-            '<div class="agent-name">' + emoji + ' ' + name.charAt(0).toUpperCase() + name.slice(1) + '</div>' +
+            '<div class="agent-name"><a href="/agent/' + encodeURIComponent(name) + '" style="color:inherit;text-decoration:none;">' + emoji + ' ' + name.charAt(0).toUpperCase() + name.slice(1) + '</a></div>' +
             '<div class="' + stClass + '">' + stEmoji + ' ' + stLabel + '</div>' +
             '<div class="agent-meta">Host: ' + esc(host) + '</div>' +
             '<div class="agent-meta">Last seen: ' + lastSeen + '</div>' +
@@ -1887,6 +1900,429 @@ function render({ nodes, edges }) {
 
 load();
 </script>
+</body>
+</html>`);
+});
+
+// --- Agent Detail Page ---
+app.get('/agent/:name', (req, res) => {
+  const name = req.params.name.toLowerCase();
+  res.type('html').send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent: ${name} — RCC</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"><\/script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+
+  /* Header */
+  .detail-header { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 24px 28px; margin-bottom: 24px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .detail-header .agent-emoji { font-size: 48px; line-height: 1; }
+  .detail-header .agent-info { flex: 1; min-width: 200px; }
+  .detail-header .agent-title { font-size: 28px; font-weight: 700; color: #f0f6fc; margin-bottom: 4px; }
+  .detail-header .status-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; margin-left: 10px; vertical-align: middle; }
+  .detail-header .meta-row { color: #8b949e; font-size: 13px; margin-top: 4px; }
+  .detail-header .meta-row span { margin-right: 18px; }
+  .back-link { color: #58a6ff; font-size: 13px; margin-bottom: 16px; display: inline-block; }
+
+  /* Sections */
+  .section { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px 24px; margin-bottom: 20px; }
+  .section-title { font-size: 16px; font-weight: 700; color: #f0f6fc; margin-bottom: 14px; border-bottom: 1px solid #21262d; padding-bottom: 8px; }
+
+  /* Sparkline */
+  .sparkline-container { width: 100%; overflow-x: auto; }
+  .sparkline-stats { display: flex; gap: 24px; margin-top: 12px; flex-wrap: wrap; }
+  .sparkline-stats .stat { text-align: center; }
+  .sparkline-stats .stat-value { font-size: 22px; font-weight: 700; color: #f0f6fc; }
+  .sparkline-stats .stat-label { font-size: 11px; color: #8b949e; margin-top: 2px; }
+
+  /* Capabilities */
+  .cap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .cap-item { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 12px 14px; }
+  .cap-item .cap-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .cap-item .cap-value { font-size: 15px; font-weight: 600; color: #f0f6fc; }
+  .gpu-hero { background: linear-gradient(135deg, #1a1e2e 0%, #0d1117 100%); border: 1px solid #3fb950; border-radius: 8px; padding: 16px 18px; margin-bottom: 14px; }
+  .gpu-hero .gpu-title { font-size: 14px; font-weight: 700; color: #3fb950; margin-bottom: 6px; }
+  .gpu-hero .gpu-detail { font-size: 13px; color: #c9d1d9; }
+  .gpu-none { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 14px; color: #484f58; font-size: 13px; margin-bottom: 14px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; color: #fff; margin: 2px 3px; }
+  .pill-tool { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+  .pill-task { background: #1f6feb33; color: #58a6ff; border: 1px solid #1f6feb55; }
+
+  /* Queue items */
+  .queue-group-title { font-size: 13px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin: 14px 0 8px 0; }
+  .queue-group-title:first-child { margin-top: 0; }
+  .q-card { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 10px 14px; margin-bottom: 6px; cursor: pointer; transition: border-color 0.15s; }
+  .q-card:hover { border-color: #58a6ff; }
+  .q-card .q-title { font-size: 13px; font-weight: 600; color: #c9d1d9; margin-bottom: 4px; }
+  .q-card .q-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pill-pending { background: #1f6feb; }
+  .pill-in-progress { background: #a371f7; }
+  .pill-blocked { background: #f85149; }
+  .pill-completed { background: #3fb950; }
+  .pill-deferred { background: #8b949e; }
+  .pill-idea { background: #d29922; }
+  .pill-priority-high { background: #f8514933; color: #f85149; border: 1px solid #f8514955; }
+  .pill-priority-medium { background: #d2992233; color: #d29922; border: 1px solid #d2992255; }
+  .pill-priority-low { background: #3fb95033; color: #3fb950; border: 1px solid #3fb95055; }
+  .q-age { font-size: 11px; color: #484f58; }
+  .q-empty { color: #484f58; font-size: 13px; padding: 10px 0; }
+
+  /* Bus messages */
+  .bus-msg { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 8px 12px; margin-bottom: 4px; }
+  .bus-msg .bus-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; font-size: 12px; }
+  .bus-msg .bus-route { color: #8b949e; font-size: 12px; }
+  .bus-msg .bus-body { font-size: 12px; color: #484f58; margin-top: 2px; max-height: 40px; overflow: hidden; text-overflow: ellipsis; }
+  .type-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; color: #fff; margin-left: 4px; }
+  .bus-empty { color: #484f58; font-size: 13px; padding: 10px 0; }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    .detail-header { padding: 16px; gap: 12px; }
+    .detail-header .agent-emoji { font-size: 36px; }
+    .detail-header .agent-title { font-size: 22px; }
+    .cap-grid { grid-template-columns: 1fr; }
+    .sparkline-stats { gap: 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <a href="/" class="back-link">← Back to Dashboard</a>
+  <div class="detail-header" id="agent-header">
+    <div class="agent-emoji" id="agent-emoji"></div>
+    <div class="agent-info">
+      <div class="agent-title" id="agent-title"></div>
+      <div class="meta-row" id="agent-meta"></div>
+    </div>
+  </div>
+
+  <!-- Section A: Heartbeat Timeline -->
+  <div class="section">
+    <div class="section-title">💓 Heartbeat Timeline</div>
+    <div class="sparkline-container" id="sparkline-container"></div>
+    <div class="sparkline-stats" id="sparkline-stats"></div>
+  </div>
+
+  <!-- Section B: Capabilities -->
+  <div class="section">
+    <div class="section-title">⚡ Capabilities</div>
+    <div id="capabilities-content"><span style="color:#484f58">Loading...</span></div>
+  </div>
+
+  <!-- Section C: Queue Items -->
+  <div class="section">
+    <div class="section-title">📋 Queue Items</div>
+    <div id="queue-content"><span style="color:#484f58">Loading...</span></div>
+  </div>
+
+  <!-- Section D: SquirrelBus Activity -->
+  <div class="section">
+    <div class="section-title">🐿️ Recent SquirrelBus Activity</div>
+    <div id="bus-content"><span style="color:#484f58">Loading...</span></div>
+  </div>
+</div>
+
+<script>
+const AGENT_NAME = ${JSON.stringify(name)};
+const EMOJIS = { rocky: '🐿️', bullwinkle: '🫎', natasha: '🕵️‍♀️', boris: '🕵️‍♂️' };
+const TYPE_COLORS = { text: '#58a6ff', memo: '#3fb950', blob: '#a371f7', heartbeat: '#8b949e', queue_sync: '#d29922', ping: '#3fb950', pong: '#3fb950', event: '#f85149', handoff: '#f0883e' };
+const STATUS_COLORS = { online: '#3fb950', stale: '#d29922', offline: '#f85149', decommissioned: '#484f58' };
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function timeAgo(ts) {
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60000) return Math.round(diff / 1000) + 's ago';
+  if (diff < 3600000) return Math.round(diff / 60000) + 'm ago';
+  if (diff < 86400000) return Math.round(diff / 3600000) + 'h ago';
+  return Math.round(diff / 86400000) + 'd ago';
+}
+
+function formatDuration(ms) {
+  if (ms < 60000) return Math.round(ms / 1000) + 's';
+  if (ms < 3600000) return Math.round(ms / 60000) + 'm';
+  return (ms / 3600000).toFixed(1) + 'h';
+}
+
+function getStatus(hb) {
+  if (hb.decommissioned || hb.status === 'decommissioned') return 'decommissioned';
+  if (hb.status === 'offline' || !hb.ts) return 'offline';
+  const age = Date.now() - new Date(hb.ts).getTime();
+  if (age < 45 * 60 * 1000) return 'online';
+  if (age < 4 * 60 * 60 * 1000) return 'stale';
+  return 'offline';
+}
+
+// === Load Header ===
+async function loadHeader() {
+  try {
+    const agents = await fetch('/api/agents').then(r => r.json());
+    const hb = agents[AGENT_NAME] || {};
+    const status = getStatus(hb);
+    const emoji = EMOJIS[AGENT_NAME] || '📨';
+    document.getElementById('agent-emoji').textContent = emoji;
+
+    const statusColor = STATUS_COLORS[status] || '#484f58';
+    document.getElementById('agent-title').innerHTML =
+      esc(AGENT_NAME.charAt(0).toUpperCase() + AGENT_NAME.slice(1)) +
+      ' <span class="status-badge" style="background:' + statusColor + '22;color:' + statusColor + ';border:1px solid ' + statusColor + '55;">' +
+      '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + statusColor + ';margin-right:5px;vertical-align:middle;"></span>' +
+      status + '</span>';
+
+    const host = hb.host || '—';
+    const lastSeen = hb.ts ? timeAgo(hb.ts) : 'never';
+    const queueDepth = hb.queueDepth != null ? hb.queueDepth + ' items' : '—';
+    document.getElementById('agent-meta').innerHTML =
+      '<span>🖥️ Host: <strong>' + esc(host) + '</strong></span>' +
+      '<span>🕐 Last seen: <strong>' + lastSeen + '</strong></span>' +
+      '<span>📦 Queue: <strong>' + esc(String(queueDepth)) + '</strong></span>';
+  } catch (e) { console.error('Header load error:', e); }
+}
+
+// === Load Heartbeat Sparkline ===
+async function loadSparkline() {
+  try {
+    const data = await fetch('/api/agents/' + encodeURIComponent(AGENT_NAME) + '/history?limit=100').then(r => r.json());
+    const container = document.getElementById('sparkline-container');
+    const statsEl = document.getElementById('sparkline-stats');
+
+    if (!data || data.length === 0) {
+      container.innerHTML = '<span style="color:#484f58">No heartbeat data available</span>';
+      statsEl.innerHTML = '';
+      return;
+    }
+
+    // Sort oldest first for timeline
+    data.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+    const width = Math.max(container.clientWidth || 700, 500);
+    const height = 80;
+    const margin = { top: 10, right: 15, bottom: 25, left: 15 };
+
+    container.innerHTML = '';
+    const svg = d3.select(container).append('svg')
+      .attr('width', width).attr('height', height)
+      .attr('viewBox', '0 0 ' + width + ' ' + height)
+      .style('max-width', '100%');
+
+    const times = data.map(d => new Date(d.ts));
+    const xScale = d3.scaleTime()
+      .domain([times[0], times[times.length - 1]])
+      .range([margin.left, width - margin.right]);
+
+    const GAP_THRESHOLD = 45 * 60 * 1000; // 45 minutes
+
+    // Draw gap regions
+    for (let i = 1; i < data.length; i++) {
+      const prev = new Date(data[i - 1].ts).getTime();
+      const curr = new Date(data[i].ts).getTime();
+      const gap = curr - prev;
+      if (gap > GAP_THRESHOLD) {
+        const color = gap > 2 * 60 * 60 * 1000 ? '#f8514944' : '#d2992233';
+        svg.append('rect')
+          .attr('x', xScale(new Date(prev)))
+          .attr('y', margin.top)
+          .attr('width', Math.max(xScale(new Date(curr)) - xScale(new Date(prev)), 2))
+          .attr('height', height - margin.top - margin.bottom)
+          .attr('fill', color)
+          .attr('rx', 2);
+      }
+    }
+
+    // Draw heartbeat dots
+    svg.selectAll('.hb-dot')
+      .data(data)
+      .enter()
+      .append('circle')
+      .attr('cx', d => xScale(new Date(d.ts)))
+      .attr('cy', height / 2)
+      .attr('r', 3)
+      .attr('fill', '#3fb950')
+      .attr('opacity', 0.8);
+
+    // X-axis
+    const xAxis = d3.axisBottom(xScale).ticks(6).tickFormat(d3.timeFormat('%H:%M'));
+    svg.append('g')
+      .attr('transform', 'translate(0,' + (height - margin.bottom) + ')')
+      .call(xAxis)
+      .selectAll('text').style('fill', '#484f58').style('font-size', '10px');
+    svg.selectAll('.domain, .tick line').style('stroke', '#21262d');
+
+    // Compute stats
+    const now = Date.now();
+    const last24h = data.filter(d => now - new Date(d.ts).getTime() < 86400000);
+    let longestGap = 0;
+    for (let i = 1; i < data.length; i++) {
+      const gap = new Date(data[i].ts).getTime() - new Date(data[i - 1].ts).getTime();
+      if (gap > longestGap) longestGap = gap;
+    }
+
+    // Current streak: time since last gap > threshold going backwards
+    let streakStart = data.length > 0 ? new Date(data[data.length - 1].ts).getTime() : now;
+    for (let i = data.length - 1; i > 0; i--) {
+      const gap = new Date(data[i].ts).getTime() - new Date(data[i - 1].ts).getTime();
+      if (gap > GAP_THRESHOLD) { streakStart = new Date(data[i].ts).getTime(); break; }
+      if (i === 1) streakStart = new Date(data[0].ts).getTime();
+    }
+    const streakDuration = data.length > 0 ? (new Date(data[data.length - 1].ts).getTime() - streakStart) : 0;
+
+    statsEl.innerHTML =
+      '<div class="stat"><div class="stat-value">' + last24h.length + '</div><div class="stat-label">heartbeats (24h)</div></div>' +
+      '<div class="stat"><div class="stat-value">' + formatDuration(longestGap) + '</div><div class="stat-label">longest gap</div></div>' +
+      '<div class="stat"><div class="stat-value">' + formatDuration(streakDuration) + '</div><div class="stat-label">current streak</div></div>' +
+      '<div class="stat"><div class="stat-value">' + data.length + '</div><div class="stat-label">total samples</div></div>';
+  } catch (e) { console.error('Sparkline error:', e); }
+}
+
+// === Load Capabilities ===
+async function loadCapabilities() {
+  try {
+    const resp = await fetch('/api/agents/' + encodeURIComponent(AGENT_NAME) + '/capabilities');
+    const el = document.getElementById('capabilities-content');
+    if (!resp.ok) {
+      el.innerHTML = '<span style="color:#484f58">No capabilities data available</span>';
+      return;
+    }
+    const cap = await resp.json();
+    let html = '';
+
+    // GPU section
+    if (cap.gpu && cap.gpu_model) {
+      html += '<div class="gpu-hero">' +
+        '<div class="gpu-title">🎮 GPU: ' + esc(cap.gpu_model) + '</div>' +
+        '<div class="gpu-detail">' +
+        (cap.gpu_vram_gb ? cap.gpu_vram_gb + ' GB VRAM' : '') +
+        (cap.gpu_count ? ' · ' + cap.gpu_count + ' GPU' + (cap.gpu_count > 1 ? 's' : '') : '') +
+        '</div></div>';
+    } else {
+      html += '<div class="gpu-none">🚫 No GPU</div>';
+    }
+
+    // Info grid
+    html += '<div class="cap-grid">';
+    html += '<div class="cap-item"><div class="cap-label">Architecture</div><div class="cap-value">' + esc(cap.arch || '—') + '</div></div>';
+    html += '<div class="cap-item"><div class="cap-label">Context Size</div><div class="cap-value">' + esc(cap.context_size || '—') + '</div></div>';
+    html += '<div class="cap-item"><div class="cap-label">Claude CLI</div><div class="cap-value">' + (cap.claude_cli ? '✅ Available' : '❌ No') + '</div></div>';
+    html += '</div>';
+
+    // Tools
+    if (cap.tools && cap.tools.length) {
+      html += '<div style="margin-top:14px;"><span style="color:#8b949e;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;">Tools</span><div style="margin-top:6px;">';
+      cap.tools.forEach(t => { html += '<span class="pill pill-tool">' + esc(t) + '</span>'; });
+      html += '</div></div>';
+    }
+
+    // Preferred tasks
+    if (cap.preferred_tasks && cap.preferred_tasks.length) {
+      html += '<div style="margin-top:12px;"><span style="color:#8b949e;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;">Preferred Tasks</span><div style="margin-top:6px;">';
+      cap.preferred_tasks.forEach(t => { html += '<span class="pill pill-task">' + esc(t) + '</span>'; });
+      html += '</div></div>';
+    }
+
+    el.innerHTML = html;
+  } catch (e) { console.error('Capabilities error:', e); }
+}
+
+// === Load Queue Items ===
+async function loadQueue() {
+  try {
+    const data = await fetch('/api/queue').then(r => r.json());
+    const items = (data.items || []).filter(i => i.assignee === AGENT_NAME || i.claimedBy === AGENT_NAME);
+    const el = document.getElementById('queue-content');
+
+    if (items.length === 0) {
+      el.innerHTML = '<div class="q-empty">No queue items assigned to this agent</div>';
+      return;
+    }
+
+    const statusOrder = ['in-progress', 'pending', 'blocked', 'deferred', 'idea', 'completed'];
+    const grouped = {};
+    items.forEach(i => {
+      const s = i.status || 'pending';
+      if (!grouped[s]) grouped[s] = [];
+      grouped[s].push(i);
+    });
+
+    let html = '';
+    statusOrder.forEach(status => {
+      if (!grouped[status] || grouped[status].length === 0) return;
+      html += '<div class="queue-group-title">' + esc(status.replace('-', ' ')) + ' (' + grouped[status].length + ')</div>';
+      grouped[status].forEach(item => {
+        const age = item.created ? timeAgo(item.created) : '—';
+        const pillClass = 'pill-' + (status || 'pending').replace(/\\s+/g, '-');
+        const prioClass = item.priority ? 'pill-priority-' + item.priority : '';
+        html += '<div class="q-card" onclick="window.location.href=\\'/\\'">' +
+          '<div class="q-title">' + esc(item.title || item.id || '—') + '</div>' +
+          '<div class="q-meta">' +
+          '<span class="pill ' + pillClass + '">' + esc(status) + '</span>' +
+          (item.priority ? '<span class="pill ' + prioClass + '">' + esc(item.priority) + '</span>' : '') +
+          '<span class="q-age">created ' + age + '</span>' +
+          '</div></div>';
+      });
+    });
+
+    el.innerHTML = html;
+  } catch (e) { console.error('Queue error:', e); }
+}
+
+// === Load Bus Activity ===
+async function loadBus() {
+  try {
+    const data = await fetch('/bus/messages?limit=50').then(r => r.json());
+    const msgs = (data || []).filter(m => m.from === AGENT_NAME || m.to === AGENT_NAME || m.to === 'all');
+    const el = document.getElementById('bus-content');
+
+    if (msgs.length === 0) {
+      el.innerHTML = '<div class="bus-empty">No recent bus activity for this agent</div>';
+      return;
+    }
+
+    // Show newest first
+    msgs.sort((a, b) => new Date(b.ts || b.timestamp) - new Date(a.ts || a.timestamp));
+
+    let html = '';
+    msgs.slice(0, 30).forEach(msg => {
+      const ts = msg.ts || msg.timestamp || '';
+      const time = ts ? new Date(ts).toLocaleTimeString() : '—';
+      const date = ts ? new Date(ts).toLocaleDateString() : '';
+      const from = msg.from || '?';
+      const to = msg.to || '?';
+      const type = msg.type || 'text';
+      const typeColor = TYPE_COLORS[type] || '#8b949e';
+      const body = msg.body || msg.text || msg.message || '';
+      const preview = typeof body === 'string' ? body.slice(0, 120) : JSON.stringify(body).slice(0, 120);
+      const fromEmoji = EMOJIS[from] || '📨';
+      const toEmoji = EMOJIS[to] || (to === 'all' ? '📡' : '📨');
+
+      html += '<div class="bus-msg">' +
+        '<div class="bus-header">' +
+        '<span class="bus-route">' + fromEmoji + ' ' + esc(from) + ' → ' + toEmoji + ' ' + esc(to) +
+        '<span class="type-badge" style="background:' + typeColor + '">' + esc(type) + '</span></span>' +
+        '<span style="color:#484f58;font-size:11px;">' + esc(date) + ' ' + esc(time) + '</span>' +
+        '</div>' +
+        (preview ? '<div class="bus-body">' + esc(preview) + '</div>' : '') +
+        '</div>';
+    });
+
+    el.innerHTML = html;
+  } catch (e) { console.error('Bus error:', e); }
+}
+
+// === Init & Auto-refresh ===
+async function loadAll() {
+  await Promise.all([loadHeader(), loadSparkline(), loadCapabilities(), loadQueue(), loadBus()]);
+}
+
+loadAll();
+setInterval(loadAll, 30000);
+<\/script>
 </body>
 </html>`);
 });
