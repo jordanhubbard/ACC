@@ -1,0 +1,27 @@
+[Unit]
+Description=AgentFS — content-addressed WASM module store (natasha/sparky)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jkh
+WorkingDirectory=/home/jkh/.openclaw/workspace/agentOS/services/agentfs
+ExecStart=/usr/bin/node index.mjs
+Restart=on-failure
+RestartSec=5
+
+Environment=AGENTFS_PORT=8791
+Environment=AGENTFS_TOKEN=wq-5dcad756f6d3e345c00b5cb3dfcbdedb
+Environment=MINIO_ENDPOINT=http://100.89.199.14:9000
+Environment=MINIO_ACCESS_KEY=rocky2197fb96dde4618aa17f
+Environment=MINIO_SECRET_KEY=e47696ac5fcd998be6f342bbc47d13bf5f2fcaebae0ba3e1
+Environment=AGENTFS_BUCKET=agentfs-modules
+Environment=AGENTFS_MAX_MB=64
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agentfs-natasha
+
+[Install]
+WantedBy=multi-user.target
