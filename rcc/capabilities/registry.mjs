@@ -32,7 +32,7 @@ import { dirname } from 'path';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-export const VALID_EXECUTORS = ['claude_cli', 'inference_key', 'gpu'];
+export const VALID_EXECUTORS = ['claude_cli', 'inference_key', 'gpu', 'llm_server'];
 export const VALID_STATUSES  = ['online', 'offline', 'busy'];
 
 // ── In-memory store ─────────────────────────────────────────────────────────

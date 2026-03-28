@@ -16,6 +16,7 @@ import { createHmac, timingSafeEqual, randomUUID } from 'crypto';
 import { Brain, createRequest } from '../brain/index.mjs';
 import { embed, upsert as vectorUpsert, search as vectorSearch, searchAll as vectorSearchAll, ensureCollections, collectionStats } from '../vector/index.mjs';
 import { Pump } from '../scout/pump.mjs';
+import * as llmRegistry from '../llm/registry.mjs';
 import { learnLesson, queryLessons, queryAllLessons, formatLessonsForContext, getTrendingLessons, formatTrendingForHeartbeat, getHeartbeatContext, receiveLessonFromBus, seedKnownLessons } from '../lessons/index.mjs';
 import { generateIdea } from '../ideation/ideation.mjs';
 
@@ -36,6 +37,7 @@ const REQUESTS_PATH   = process.env.REQUESTS_PATH   || './data/requests.json';
 const SECRETS_PATH       = process.env.SECRETS_PATH       || '../data/secrets.json';
 const CONVERSATIONS_PATH = process.env.CONVERSATIONS_PATH || './data/conversations.json';
 const USERS_PATH         = process.env.USERS_PATH         || './data/users.json';
+const LLM_REGISTRY_PATH  = process.env.LLM_REGISTRY_PATH  || './data/llm-registry.json';
 
 // ── Slack config ───────────────────────────────────────────────────────────
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
@@ -76,6 +78,7 @@ const STALE_THRESHOLDS = {
   claude_cli:    parseInt(process.env.STALE_CLAUDE_MS    || String(120 * 60 * 1000), 10), // 2h
   gpu:           parseInt(process.env.STALE_GPU_MS       || String(6  * 60 * 60 * 1000), 10), // 6h
   inference_key: parseInt(process.env.STALE_INFERENCE_MS || String(30 * 60 * 1000), 10), // 30min
+  llm_server:    parseInt(process.env.STALE_LLM_MS       || String(45 * 60 * 1000), 10), // 45min
   default:       parseInt(process.env.STALE_DEFAULT_MS   || String(60 * 60 * 1000), 10), // 1h
 };
 
@@ -612,6 +615,7 @@ async function handleRequest(req, res) {
     if (method === 'GET' && path === '/health') {
       const b = brain;
       const q = await readQueue();
+      const llmEndpoints = llmRegistry.serialize();
       return json(res, 200, {
         ok: true,
         uptime: Math.floor((Date.now() - START_TIME) / 1000),
@@ -619,6 +623,11 @@ async function handleRequest(req, res) {
         queueDepth: (q.items || []).filter(i => !['completed','cancelled'].includes(i.status)).length,
         lastBrainTick: b?.state?.lastTick || null,
         version: '0.1.0',
+        llm: {
+          endpointCount: llmEndpoints.length,
+          freshCount: llmEndpoints.filter(e => e.fresh).length,
+          modelCount: llmEndpoints.reduce((s, e) => s + e.models.length, 0),
+        },
       });
     }
 
@@ -630,11 +639,22 @@ async function handleRequest(req, res) {
     if (method === 'GET' && path === '/api/agents') {
       const agents = await readAgents();
       const caps   = await readCapabilities();
-      const result = Object.entries(agents).map(([name, agent]) => ({
-        ...agent,
-        capabilities: { ...(agent.capabilities || {}), ...(caps[name] || {}) },
-        heartbeat: heartbeats[name] || null,
-      }));
+      const result = Object.entries(agents).map(([name, agent]) => {
+        const llmEntry = llmRegistry.get(name);
+        return {
+          ...agent,
+          capabilities: { ...(agent.capabilities || {}), ...(caps[name] || {}) },
+          heartbeat: heartbeats[name] || null,
+          llm: llmEntry ? {
+            baseUrl:   llmEntry.baseUrl,
+            backend:   llmEntry.backend,
+            models:    llmEntry.models.map(m => m.name),
+            modelCount: llmEntry.models.length,
+            fresh:     (Date.now() - new Date(llmEntry.updatedAt).getTime()) < 30 * 60 * 1000,
+            updatedAt: llmEntry.updatedAt,
+          } : null,
+        };
+      });
       return json(res, 200, result);
     }
 
@@ -1056,6 +1076,7 @@ echo "✅ $AGENT_NAME is online. Token: ${agentToken}"
         if (tags.includes('gpu') || tags.includes('render') || tags.includes('simulation')) return 'gpu';
         if (tags.includes('reasoning') || tags.includes('code') || tags.includes('complex')) return 'claude_cli';
         if (tags.includes('heartbeat') || tags.includes('status') || tags.includes('poll')) return 'inference_key';
+        if (tags.includes('embedding') || tags.includes('local-llm') || tags.includes('peer-llm')) return 'llm_server';
         // Default: claude_cli for assignee-specific tasks, inference_key for housekeeping
         return (b.assignee && b.assignee !== 'all') ? 'claude_cli' : 'inference_key';
       };
@@ -2253,7 +2274,9 @@ echo "✅ $AGENT_NAME is online. Token: ${agentToken}"
       }
       // Dynamic: recent heartbeats summary
       const heartbeatSummary = Object.entries(heartbeats).map(([agent, hb]) => ({ agent, ts: hb.ts, status: hb.status || 'online' }));
-      return json(res, 200, { nodes: nodesWithStatus, edges, agents: agentsData, busMessages, heartbeatSummary });
+      // Dynamic: LLM endpoints
+      const llmEndpoints = llmRegistry.serialize();
+      return json(res, 200, { nodes: nodesWithStatus, edges, agents: agentsData, busMessages, heartbeatSummary, llmEndpoints });
     }
 
     // ── GET /api/geek/stream — SSE live traffic ───────────────────────────
@@ -3071,6 +3094,87 @@ echo "✅ $AGENT_NAME is online. Token: ${agentToken}"
       return json(res, 200, { ok: true, agent: name, entries });
     }
 
+    // ── GET /api/llms — list all advertised LLM endpoints ──────────────────
+    if (method === 'GET' && path === '/api/llms') {
+      const onlyFresh = url.searchParams.get('fresh') === '1';
+      const type      = url.searchParams.get('type') || null;
+      const backend   = url.searchParams.get('backend') || null;
+      let endpoints = llmRegistry.serialize();
+      if (onlyFresh) endpoints = endpoints.filter(e => e.fresh);
+      if (type)      endpoints = endpoints.filter(e => e.modelTypes?.includes(type) || e.models?.some(m => m.type === type));
+      if (backend)   endpoints = endpoints.filter(e => e.backend === backend);
+      return json(res, 200, endpoints);
+    }
+
+    // ── GET /api/llms/best — find best endpoint for model/type/tag ─────────
+    if (method === 'GET' && path === '/api/llms/best') {
+      const model  = url.searchParams.get('model')  || null;
+      const type   = url.searchParams.get('type')   || 'chat';
+      const tag    = url.searchParams.get('tag')    || null;
+      const agent  = url.searchParams.get('agent')  || null;
+
+      const result = llmRegistry.best({ model, type, tag, agent });
+      if (!result) return json(res, 404, { error: 'No matching LLM endpoint available', params: { model, type, tag } });
+      return json(res, 200, result);
+    }
+
+    // ── GET /api/llms/:agent — get one agent's advertised endpoint ──────────
+    const llmAgentMatch = path.match(/^\/api\/llms\/([^/]+)$/);
+    if (method === 'GET' && llmAgentMatch) {
+      const agent = decodeURIComponent(llmAgentMatch[1]);
+      const entry = llmRegistry.get(agent);
+      if (!entry) return json(res, 404, { error: 'LLM endpoint not found for agent' });
+      return json(res, 200, { ...entry, fresh: (Date.now() - new Date(entry.updatedAt).getTime()) < 30 * 60 * 1000 });
+    }
+
+    // ── POST /api/llms — agent advertises LLM endpoint(s) ──────────────────
+    // Requires agent auth. Agents call this at startup and periodically.
+    if (method === 'POST' && path === '/api/llms') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const body = await readBody(req);
+      try {
+        const entry = llmRegistry.advertise(body);
+        console.log(`[rcc-api] LLM advertised: ${entry.agent} → ${entry.models.length} model(s) at ${entry.baseUrl}`);
+        broadcastGeekEvent('llm_advertise', entry.agent, 'rcc', `${entry.agent} serving ${entry.models.map(m=>m.name).join(', ')}`);
+        return json(res, 200, { ok: true, entry });
+      } catch (err) {
+        return json(res, 400, { error: err.message });
+      }
+    }
+
+    // ── PATCH /api/llms/:agent — update status or model list ───────────────
+    if (method === 'PATCH' && llmAgentMatch) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const agent = decodeURIComponent(llmAgentMatch[1]);
+      const existing = llmRegistry.get(agent);
+      if (!existing) return json(res, 404, { error: 'LLM endpoint not found for agent' });
+      const body = await readBody(req);
+      const merged = { ...existing, ...body, agent };
+      try {
+        const entry = llmRegistry.advertise(merged);
+        return json(res, 200, { ok: true, entry });
+      } catch (err) {
+        return json(res, 400, { error: err.message });
+      }
+    }
+
+    // ── DELETE /api/llms/:agent — deregister LLM endpoint ──────────────────
+    if (method === 'DELETE' && llmAgentMatch) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const agent = decodeURIComponent(llmAgentMatch[1]);
+      const removed = llmRegistry.remove(agent);
+      return json(res, 200, { ok: true, removed });
+    }
+
+    // ── GET /api/llms/:agent/models — list models for one agent ────────────
+    const llmModelsMatch = path.match(/^\/api\/llms\/([^/]+)\/models$/);
+    if (method === 'GET' && llmModelsMatch) {
+      const agent = decodeURIComponent(llmModelsMatch[1]);
+      const entry = llmRegistry.get(agent);
+      if (!entry) return json(res, 404, { error: 'LLM endpoint not found for agent' });
+      return json(res, 200, entry.models);
+    }
+
     return json(res, 404, { error: 'Not found' });
 
   } catch (err) {
@@ -3106,8 +3210,18 @@ async function reloadAgentTokens() {
   }
 }
 
+// ── LLM Registry init ──────────────────────────────────────────────────────
+async function initLLMRegistry() {
+  const p = new URL(LLM_REGISTRY_PATH, import.meta.url).pathname;
+  llmRegistry.configure({ path: p });
+  await llmRegistry.load(p);
+  console.log('[rcc-api] LLM registry initialized');
+}
+
 if (process.argv[1] === new URL(import.meta.url).pathname) {
-  reloadAgentTokens().then(() => startServer());
+  reloadAgentTokens()
+    .then(() => initLLMRegistry())
+    .then(() => startServer());
   process.on('SIGTERM', () => process.exit(0));
   process.on('SIGINT',  () => process.exit(0));
 }
