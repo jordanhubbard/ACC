@@ -144,15 +144,11 @@ describe('Bootstrap flow', () => {
     assert.equal(r.status, 401);
   });
 
-  test('GET /api/bootstrap returns 401 without token param (auth guard fires before route handler)', async () => {
-    // BUG: GET /api/bootstrap is positioned AFTER the auth middleware in api/index.mjs.
-    // This means it returns 401 (Unauthorized) when called without an Authorization header,
-    // even before it can check for a missing ?token= param.
-    // The intended behavior (documented regression: commit 2302f1c) is that this endpoint
-    // should be reachable WITHOUT auth. See BUGS.md.
+  test('GET /api/bootstrap returns 400 without token param', async () => {
+    // Bootstrap endpoint is accessible without auth (it uses its own token-in-query-param scheme).
+    // Calling it without ?token= returns 400 (missing required param), not 401.
     const r = await req('/api/bootstrap');
-    // The auth guard at line 763 fires first → 401
-    assert.equal(r.status, 401);
+    assert.equal(r.status, 400);
   });
 
   // NOTE: Full bootstrap flow (token → GET /api/bootstrap) requires a github deploy key

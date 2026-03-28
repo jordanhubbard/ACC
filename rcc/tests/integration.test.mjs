@@ -184,8 +184,10 @@ describe('Live server — additional endpoints', () => {
     assert.ok(typeof r.body === 'object');
   });
 
-  test('GET /nonexistent returns 404', async () => {
-    const r = await liveReq('/nonexistent-endpoint-xyz');
+  test('GET /nonexistent returns 404 (authed)', async () => {
+    // Unauthenticated requests to unknown routes return 401 (auth check fires before routing).
+    // Test with auth to get the route-not-found 404.
+    const r = await liveAuthed('/nonexistent-endpoint-xyz');
     assert.equal(r.status, 404);
   });
 });

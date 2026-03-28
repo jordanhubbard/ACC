@@ -17,13 +17,11 @@ You are the workqueue processor for **Natasha**. You run periodically via cron.
 - You have Tailscale access. Both Tailscale IP and public IP work.
 - MinIO (Tailscale): `http://100.89.199.14:9000` — directly accessible
 - Milvus (local or via RCC): check `MILVUS_ADDRESS` in `~/.rcc/.env`
-- RCC endpoints (use Tailscale IP 100.89.199.14 from sparky — public IP 146.190.134.110 also works):
-  - Queue: `GET http://100.89.199.14:8789/api/queue`
-  - Dashboard: `http://100.89.199.14:8788/`
-  - **SquirrelBus send: `POST http://100.89.199.14:8788/bus/send`** ⚠️ PORT 8788, not 8789
-  - SquirrelBus poll: `GET http://100.89.199.14:8788/bus/messages?to=natasha&since=<ts>&limit=20`
-  - SquirrelBus heartbeat: `POST http://100.89.199.14:8788/bus/heartbeat`
-  - NOTE: /bus/* routes are on port **8788** (dashboard). Port 8789 is RCC API only.
+- RCC endpoints:
+  - Queue: `GET http://146.190.134.110:8789/api/queue`
+  - Dashboard: `http://146.190.134.110:8788/`
+  - SquirrelBus send: `POST http://146.190.134.110:8789/bus/send`
+  - SquirrelBus poll: `GET http://146.190.134.110:8789/bus/messages?to=natasha&since=<ts>&limit=20`
 
 ## Your Job
 
@@ -98,11 +96,25 @@ Natasha is the primary GPU agent. Prefer Natasha for:
 - Render pipeline tasks
 - Any task tagged with: `gpu`, `cuda`, `render`, `inference`, `image_gen`, `benchmark`
 
+## Heartbeat (CONFIRMED WORKING — 2026-03-28)
+
+- **Register:** `POST http://100.89.199.14:8789/api/agents/register` (use Tailscale IP)
+- **Heartbeat:** `PATCH http://100.89.199.14:8789/api/agents/natasha` with auth token
+- **Token:** stored in `~/.rcc/.env` as `RCC_AGENT_TOKEN` — use `rcc-agent-natasha-*` token
+- **⚠️ NOT:** `/api/heartbeat`, `/api/heartbeats`, or `/api/agents/natasha/heartbeat` — all 404
+
+```bash
+curl -X PATCH http://100.89.199.14:8789/api/agents/natasha \
+  -H "Authorization: Bearer $RCC_AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status":"active","lastSeen":"<ISO-TS>","host":"sparky"}'
+```
+
 ## Sync Protocol
 
 ### Rocky (do-host1)
 1. **Mattermost DM** — user_id: `natasha's rocky-channel-id` (check MEMORY.md)
-2. **SquirrelBus** — `POST http://146.190.134.110:8788/bus/send` with `{"to":"rocky","from":"natasha","message":"<payload>"}`
+2. **SquirrelBus** — `POST http://146.190.134.110:8789/bus/send` with `{"to":"rocky","from":"natasha","message":"<payload>"}` — ⚠️ returns 404 from sparky (known issue: wq-NAT-1774694350442)
 
 ### Bullwinkle (puck)
 1. **Mattermost DM** — user_id: `ww1wef9sktf8jg8be6q5zj1aye` (Bullwinkle's Mattermost user_id)
