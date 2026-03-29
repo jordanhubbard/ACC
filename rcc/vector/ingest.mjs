@@ -85,7 +85,12 @@ export async function ingestQueueItem(item) {
     if (!text || text.length < 10) return;
     const id = createHash('md5').update(`queue:${item.id}`).digest('hex');
     await vectorUpsert('rcc_queue', id, text, {
-      source: `queue:${item.id}`, type: 'queue', status: item.status, assignee: item.assignee
+      title:       (item.title || '').slice(0, 256),
+      description: (item.description || '').slice(0, 2048),
+      status:      (item.status || 'pending').slice(0, 32),
+      priority:    (item.priority || 'normal').slice(0, 16),
+      tags:        (Array.isArray(item.tags) ? item.tags.join(',') : (item.tags || '')).slice(0, 256),
+      ts:          new Date(item.created_at || Date.now()).toISOString().slice(0, 32),
     });
   } catch (err) {
     console.warn(`[ingest] Failed to ingest queue item ${item.id}:`, err.message);

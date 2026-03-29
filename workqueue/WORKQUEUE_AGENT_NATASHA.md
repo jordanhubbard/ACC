@@ -22,7 +22,11 @@ You are the workqueue processor for **Natasha**. You run periodically via cron o
 3. **Process** any `pending` items assigned to `natasha` or `all` (with routing check)
 4. **Sync** with peers (Rocky, Bullwinkle) via Mattermost DM
 5. **Merge** incoming items, dedup by `id` (higher itemVersion wins)
-6. **Generate** 1-2 improvement ideas if idle (tag `idea`, priority `low`)
+6. **Generate** 1-2 improvement ideas if idle (tag `idea`, priority `idea`)
+   ⚠️ **DEDUP BEFORE POSTING**: Use `workqueue/scripts/post-with-dedup.mjs` or
+   `check-dedup.mjs` before posting any new item. Skips if cosine similarity
+   > 0.85 to any existing pending/incubating item in Milvus rcc_queue collection.
+   This prevents the duplicate idea storms seen on 2026-03-29.
 7. **Write** updated `queue.json` back
 
 ## Processing Rules
