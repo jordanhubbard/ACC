@@ -16,6 +16,7 @@ jobs:
   build-wasm-aarch64:
     name: Build WASM on sparky (aarch64 GB10)
     runs-on: ubuntu-latest   # orchestrator — actual build runs on sparky via SSH
+    environment: CI_ACTIONS
 
     steps:
       - name: Checkout
