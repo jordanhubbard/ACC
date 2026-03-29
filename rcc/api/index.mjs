@@ -181,16 +181,18 @@ const BOOTSTRAP_TOKENS_PATH = process.env.BOOTSTRAP_TOKENS_PATH || './data/boots
 const bootstrapTokens = (() => {
   const m = new Map();
   try {
-    const raw = JSON.parse(fs.readFileSync(BOOTSTRAP_TOKENS_PATH, 'utf8'));
+    const raw = JSON.parse(readFileSync(BOOTSTRAP_TOKENS_PATH, 'utf8'));
     const now = Date.now();
     for (const [k, v] of Object.entries(raw)) {
       if (v.expiresAt > now && !v.used) m.set(k, v);
     }
-  } catch { /* file missing on first run */ }
+    console.log(`[bootstrap] Loaded ${m.size} token(s) from disk`);
+  } catch (e) { if (e.code !== 'ENOENT') console.error('[bootstrap] load failed:', e.message); }
   return m;
 })();
 function saveBootstrapTokens() {
-  try { fs.writeFileSync(BOOTSTRAP_TOKENS_PATH, JSON.stringify(Object.fromEntries(bootstrapTokens), null, 2)); } catch { }
+  try { writeFileSync(BOOTSTRAP_TOKENS_PATH, JSON.stringify(Object.fromEntries(bootstrapTokens), null, 2)); }
+  catch (e) { console.error('[bootstrap] save failed:', e.message); }
 }
 
 // ── Disappearance detection config ────────────────────────────────────────
