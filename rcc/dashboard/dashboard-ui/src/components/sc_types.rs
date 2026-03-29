@@ -3,12 +3,23 @@
 // Wire format matches squirrelchat/API.md exactly.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
+// ─── Reaction ────────────────────────────────────────────────────────────────
+
+/// Aggregated reaction as returned by the API.
+/// Backend stores per-user reactions internally and serves this shape.
+/// `[{ "emoji": "🔥", "count": 2, "by_me": true }, ...]`
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+pub struct ScReaction {
+    pub emoji: String,
+    pub count: u32,
+    /// Whether the current user has applied this reaction
+    #[serde(default)]
+    pub by_me: bool,
+}
 
 // ─── Message ─────────────────────────────────────────────────────────────────
 
-/// Wire format: `reactions` is a map from emoji string to list of user IDs.
-/// e.g. `{"🔥": ["rocky", "natasha"], "👍": ["bullwinkle"]}`
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct ScMessage {
     pub id: Option<String>,
@@ -21,13 +32,16 @@ pub struct ScMessage {
     pub text: Option<String>,
     pub channel: Option<String>,
     pub mentions: Option<Vec<String>>,
-    /// parent message id if this is a thread reply
-    pub thread_id: Option<String>,
+    /// parent message id if this is a thread reply (null if top-level)
+    pub parent_id: Option<String>,
     /// number of replies on a top-level message
     pub thread_count: Option<u32>,
-    /// emoji → list of user ids
+    /// aggregated reactions — `[{emoji, count, by_me}]`
     #[serde(default)]
-    pub reactions: HashMap<String, Vec<String>>,
+    pub reactions: Vec<ScReaction>,
+    /// attached files
+    #[serde(default)]
+    pub files: Vec<ScChannelFile>,
     /// unix ms if edited
     pub edited_at: Option<u64>,
     pub created_at: Option<u64>,
@@ -36,23 +50,18 @@ pub struct ScMessage {
 }
 
 impl ScMessage {
-    /// Returns true if the given user_id has reacted with this emoji.
-    pub fn user_reacted(&self, user_id: &str, emoji: &str) -> bool {
+    /// Returns true if the current user has reacted with this emoji.
+    pub fn by_me(&self, emoji: &str) -> bool {
         self.reactions
-            .get(emoji)
-            .map(|users| users.iter().any(|u| u == user_id))
-            .unwrap_or(false)
+            .iter()
+            .any(|r| r.emoji == emoji && r.by_me)
     }
 
-    /// Returns a sorted vec of (emoji, count) pairs for display.
-    pub fn reaction_counts(&self) -> Vec<(String, usize)> {
-        let mut counts: Vec<(String, usize)> = self
-            .reactions
-            .iter()
-            .map(|(emoji, users)| (emoji.clone(), users.len()))
-            .collect();
-        counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        counts
+    /// Returns sorted reactions by count descending (for display).
+    pub fn sorted_reactions(&self) -> Vec<&ScReaction> {
+        let mut sorted: Vec<&ScReaction> = self.reactions.iter().collect();
+        sorted.sort_by(|a, b| b.count.cmp(&a.count).then(a.emoji.cmp(&b.emoji)));
+        sorted
     }
 }
 
@@ -63,15 +72,17 @@ pub struct ScChannel {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
-    /// "channel" | "dm"
-    #[serde(rename = "type")]
+    /// "public" | "private" | "dm"
     pub kind: Option<String>,
-    /// DM participants
+    /// DM participants (user ids)
     pub participants: Option<Vec<String>>,
+    /// Full member list (populated by GET /api/channels/:id/members)
+    #[serde(default)]
+    pub members: Vec<ScUser>,
     pub created_at: Option<u64>,
     pub last_message_at: Option<u64>,
-    /// Local-only: unread count (not from wire, tracked client-side)
-    #[serde(skip)]
+    /// Unread message count (from wire on channel list response)
+    #[serde(default)]
     pub unread_count: u32,
 }
 
