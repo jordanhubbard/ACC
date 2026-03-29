@@ -43,6 +43,32 @@ You are the workqueue processor for **Natasha**. You run periodically via cron o
 - On completion: `status = "completed"`, fill `result` + `completedAt`, move to `completed` array
 - On failure after maxAttempts: `status = "failed"` with error in `result`
 
+## Coding Agent Dispatch
+
+Use `workqueue/scripts/run-coding-agent.sh` for all coding tasks. It automatically
+falls back when Claude is throttled or credits are exhausted:
+
+1. **Claude Code** (`claude --print --permission-mode bypassPermissions`) — primary
+2. **opencode → ollama** (`qwen2.5-coder:32b` on sparky, port 11434) — first fallback
+3. **opencode → Boris vLLM** (Nemotron-3 120B, port 18080 tunnel) — second fallback
+
+```bash
+~/.openclaw/workspace/workqueue/scripts/run-coding-agent.sh \
+  --repo ~/Src/my-project \
+  --prompt "Fix the bug in src/main.rs where..." \
+  [--model qwen2.5-coder:32b]
+```
+
+Env overrides:
+- `FORCE_OPENCODE=1` — skip Claude entirely
+- `OPENCODE_MODEL` — override ollama model (default: qwen2.5-coder:32b)
+- `BORIS_BASE_URL` — Boris vLLM endpoint (default: http://127.0.0.1:18080)
+- `CODING_AGENT_LOG` — log file path (default: /tmp/coding-agent.log)
+
+The result includes `BACKEND_USED=<backend>` in the log. Claude Credit exhaustion
+is detected by scanning output for: 429, rate limit, credit balance, token exhaust,
+quota exceeded, billing, overload.
+
 ## Natasha-Specific Capabilities
 
 ### GPU / Render Tasks
