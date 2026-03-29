@@ -12,6 +12,7 @@ use crate::components::{
     issues::Issues,
     kanban::Kanban,
     metrics::Metrics,
+    providers::Providers,
     squirrelbus::SquirrelBus,
     squirrelchat::SquirrelChat,
     work_queue::WorkQueue,
@@ -19,7 +20,7 @@ use crate::components::{
 
 #[component]
 pub fn App() -> impl IntoView {
-    // 0=Dashboard 1=GeekView 2=Kanban 3=SquirrelChat 4=Agents 5=Issues
+    // 0=Dashboard 1=GeekView 2=Kanban 3=SquirrelChat 4=Agents 5=Issues 6=Providers
     let (tab, set_tab) = create_signal(0u8);
 
     view! {
@@ -61,6 +62,11 @@ pub fn App() -> impl IntoView {
                         class:tab-active=move || tab.get() == 5
                         on:click=move |_| set_tab.set(5)
                     >"🐛 Issues"</button>
+                    <button
+                        class="tab-btn"
+                        class:tab-active=move || tab.get() == 6
+                        on:click=move |_| set_tab.set(6)
+                    >"🔌 Providers"</button>
                 </div>
             </header>
             <main class="dash-main">
@@ -71,6 +77,7 @@ pub fn App() -> impl IntoView {
                     3 => view! { <SquirrelChat /> }.into_view(),
                     4 => view! { <AgentDetail /> }.into_view(),
                     5 => view! { <Issues /> }.into_view(),
+                    6 => view! { <Providers /> }.into_view(),
                     _ => view! {
                         <div class="dash-main-content">
                             <div class="dash-row dash-row-top">

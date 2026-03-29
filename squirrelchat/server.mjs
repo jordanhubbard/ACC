@@ -149,6 +149,32 @@ async function handleSlashCommand(text) {
 // Health
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// Channels (dynamic — will be DB-backed soon)
+const DEFAULT_CHANNELS = [
+  { id: 'general', name: 'general', description: 'General discussion' },
+  { id: 'agents', name: 'agents', description: 'Agent coordination' },
+  { id: 'ops', name: 'ops', description: 'Operations & infra' },
+  { id: 'random', name: 'random', description: 'Off-topic' },
+];
+
+app.get('/api/channels', (req, res) => {
+  // TODO: Replace with DB-backed channels table
+  res.json(DEFAULT_CHANNELS);
+});
+
+// Current user identity
+app.get('/api/me', (req, res) => {
+  const token = (req.headers.authorization || '').replace('Bearer ', '');
+  // TODO: Look up user from RCC-issued token
+  // For now, return a default identity based on token presence
+  if (token === ADMIN_TOKEN) {
+    return res.json({ id: 'admin', name: 'admin', role: 'admin' });
+  }
+  // No token or unknown token — return guest with hint to set name
+  const name = req.query.name || null;
+  res.json({ id: name || 'anonymous', name: name || null, role: 'user', needsName: !name });
+});
+
 // Messages
 app.get('/api/messages', (req, res) => {
   const since = parseInt(req.query.since) || 0;
