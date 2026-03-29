@@ -10,8 +10,9 @@
 
 import { createServer } from 'http';
 import { readFile, writeFile, mkdir, chmod, appendFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, createReadStream as createRS } from 'fs';
 import { dirname } from 'path';
+import { createInterface } from 'readline';
 import { createHmac, timingSafeEqual, randomUUID } from 'crypto';
 import { Brain, createRequest } from '../brain/index.mjs';
 import { embed, upsert as vectorUpsert, search as vectorSearch, searchAll as vectorSearchAll, ensureCollections, collectionStats } from '../vector/index.mjs';
@@ -43,6 +44,72 @@ const TUNNEL_STATE_PATH  = process.env.TUNNEL_STATE_PATH  || './data/tunnel-stat
 const TUNNEL_USER        = process.env.TUNNEL_USER        || 'jkh';
 const TUNNEL_AUTH_KEYS   = process.env.TUNNEL_AUTH_KEYS   || (process.env.HOME + '/.ssh/authorized_keys');
 const TUNNEL_PORT_START  = parseInt(process.env.TUNNEL_PORT_START || '18080', 10);
+
+// ── SquirrelBus paths ──────────────────────────────────────────────────────
+const BUS_LOG_PATH   = process.env.BUS_LOG_PATH   || new URL('../../squirrelbus/bus.jsonl', import.meta.url).pathname;
+const ACK_LOG_PATH   = process.env.ACK_LOG_PATH   || new URL('../../squirrelbus/acks.jsonl', import.meta.url).pathname;
+const DEAD_LOG_PATH  = process.env.DEAD_LOG_PATH  || new URL('../../squirrelbus/dead-letter.jsonl', import.meta.url).pathname;
+
+// ── SquirrelBus in-memory state ────────────────────────────────────────────
+let _busSeq = 0;
+const _busSSEClients  = new Set();
+const _busPresence    = {};
+const _busAcks        = new Map();   // messageId → ack entry
+const _busDeadLetters = [];          // [{...msg, _deadReason, _deadAt}]
+
+// Seed seq from log on startup (async, best-effort)
+(async () => {
+  try {
+    if (!existsSync(BUS_LOG_PATH)) return;
+    const rl = createInterface({ input: createRS(BUS_LOG_PATH), crlfDelay: Infinity });
+    for await (const line of rl) {
+      try { const m = JSON.parse(line); if (m.seq > _busSeq) _busSeq = m.seq; } catch {}
+    }
+    console.log(`[bus] seq seeded at ${_busSeq}`);
+  } catch {}
+})();
+
+async function _busReadMessages({ from, to, limit = 100, since, type } = {}) {
+  const msgs = [];
+  try {
+    if (!existsSync(BUS_LOG_PATH)) return msgs;
+    const rl = createInterface({ input: createRS(BUS_LOG_PATH), crlfDelay: Infinity });
+    for await (const line of rl) {
+      try {
+        const m = JSON.parse(line);
+        if (from && m.from !== from) continue;
+        if (to && m.to !== to && m.to !== 'all') continue;
+        if (type && m.type !== type) continue;
+        if (since && new Date(m.ts) <= new Date(since)) continue;
+        msgs.push(m);
+      } catch {}
+    }
+  } catch {}
+  return msgs.slice(-limit).reverse();
+}
+
+async function _busAppend(msg) {
+  const full = {
+    id: msg.id || randomUUID(),
+    from: msg.from || 'unknown',
+    to: msg.to || 'all',
+    ts: msg.ts || new Date().toISOString(),
+    seq: ++_busSeq,
+    type: msg.type || 'text',
+    mime: msg.mime || 'text/plain',
+    enc: msg.enc || 'none',
+    body: msg.body || '',
+    ref: msg.ref || null,
+    subject: msg.subject || null,
+    ttl: msg.ttl ?? 604800,
+  };
+  await appendFile(BUS_LOG_PATH, JSON.stringify(full) + '\n', 'utf8');
+  for (const client of _busSSEClients) {
+    try { client.write(`data: ${JSON.stringify(full)}\n\n`); }
+    catch { _busSSEClients.delete(client); }
+  }
+  return full;
+}
 
 // ── Slack config ───────────────────────────────────────────────────────────
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
@@ -3420,6 +3487,287 @@ echo "✅ $AGENT_NAME is online. Token: ${agentToken}"
       if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
       const tunnelState = await readJsonFile(TUNNEL_STATE_PATH, { nextPort: TUNNEL_PORT_START, tunnels: {} });
       return json(res, 200, Object.values(tunnelState.tunnels));
+    }
+
+    // ── SquirrelBus routes ─────────────────────────────────────────────────
+
+    // GET /bus/messages
+    if (method === 'GET' && path === '/bus/messages') {
+      const { from, to, limit, since, type } = Object.fromEntries(url.searchParams);
+      const msgs = await _busReadMessages({ from, to, type, since, limit: limit ? parseInt(limit, 10) : 100 });
+      return json(res, 200, msgs);
+    }
+
+    // POST /bus/send
+    if (method === 'POST' && path === '/bus/send') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const msg = await _busAppend(body);
+      return json(res, 200, { ok: true, message: msg });
+    }
+
+    // GET /bus/stream — SSE
+    if (method === 'GET' && path === '/bus/stream') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
+      res.write('data: {"type":"connected"}\n\n');
+      _busSSEClients.add(res);
+      req.on('close', () => _busSSEClients.delete(res));
+      return; // keep connection open
+    }
+
+    // POST /bus/heartbeat
+    if (method === 'POST' && path === '/bus/heartbeat') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const from = body.from;
+      if (!from) return json(res, 400, { error: 'from required' });
+      _busPresence[from] = { agent: from, ts: new Date().toISOString(), status: 'online', ...body };
+      await _busAppend({ from, to: 'all', type: 'heartbeat', body: JSON.stringify({ status: 'online', ...body }), mime: 'application/json' });
+      return json(res, 200, { ok: true, presence: _busPresence });
+    }
+
+    // GET /bus/presence
+    if (method === 'GET' && path === '/bus/presence') {
+      return json(res, 200, _busPresence);
+    }
+
+    // POST /bus/ack
+    if (method === 'POST' && path === '/bus/ack') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const { messageId, agent } = body;
+      if (!messageId || !agent) return json(res, 400, { error: 'messageId and agent required' });
+      const ack = { messageId, agent, ts: new Date().toISOString() };
+      _busAcks.set(messageId, ack);
+      try { await appendFile(ACK_LOG_PATH, JSON.stringify(ack) + '\n', 'utf8'); } catch {}
+      return json(res, 200, { ok: true, ack });
+    }
+
+    // GET /bus/dead
+    if (method === 'GET' && path === '/bus/dead') {
+      return json(res, 200, _busDeadLetters);
+    }
+
+    // GET /bus/delivery-status
+    if (method === 'GET' && path === '/bus/delivery-status') {
+      const result = {};
+      for (const [id] of _busAcks) result[id] = 'acked';
+      for (const d of _busDeadLetters) result[d.id] = 'dead';
+      return json(res, 200, result);
+    }
+
+    // GET /bus/message/:id/status
+    if (method === 'GET' && path.startsWith('/bus/message/') && path.endsWith('/status')) {
+      const id = path.split('/')[3];
+      const ack  = _busAcks.get(id) || null;
+      const dead = _busDeadLetters.find(d => d.id === id) || null;
+      const ackState = dead ? 'dead' : ack ? 'acked' : 'fire-and-forget';
+      return json(res, 200, { id, ackState, ack, deadReason: dead?._deadReason ?? null });
+    }
+
+    // ── Missing API endpoints (ported from old Node dashboard) ────────────
+
+    // GET /api/metrics
+    if (method === 'GET' && path === '/api/metrics') {
+      const data = await readQueue();
+      const now = Date.now();
+      const windowMs = 24 * 60 * 60 * 1000;
+      const allItems = [...(data.items || []), ...(data.completed || [])];
+      const completed24h = allItems.filter(i => i.status === 'completed' && i.completedAt && (now - new Date(i.completedAt).getTime()) < windowMs);
+      const timings = completed24h.filter(i => i.created && i.completedAt).map(i => (new Date(i.completedAt).getTime() - new Date(i.created).getTime()) / 3600000);
+      const avg_ttc = timings.length > 0 ? parseFloat((timings.reduce((a, b) => a + b, 0) / timings.length).toFixed(2)) : null;
+      const blocked = (data.items || []).filter(i => i.status === 'blocked');
+      const pending = (data.items || []).filter(i => i.status === 'pending');
+      const inProgress = (data.items || []).filter(i => i.status === 'in-progress' || i.status === 'in_progress');
+      const pendingByAssignee = {};
+      for (const item of pending) { const a = item.assignee || 'unassigned'; pendingByAssignee[a] = (pendingByAssignee[a] || 0) + 1; }
+      const inProgressByAssignee = {};
+      for (const item of inProgress) { const a = item.assignee || 'unassigned'; inProgressByAssignee[a] = (inProgressByAssignee[a] || 0) + 1; }
+      const ideas = (data.items || []).filter(i => i.status === 'pending' && i.priority === 'idea');
+      return json(res, 200, {
+        ts: new Date().toISOString(),
+        items_completed_24h: completed24h.length,
+        avg_time_to_completion_h: avg_ttc,
+        blocked_count: blocked.length,
+        total_active: pending.length + inProgress.length + blocked.length,
+        pending_count: pending.length,
+        in_progress_count: inProgress.length,
+        idea_backlog: ideas.length,
+        pending_by_assignee: pendingByAssignee,
+        in_progress_by_assignee: inProgressByAssignee,
+        last_completed: completed24h.length > 0 ? completed24h.sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))[0] : null,
+      });
+    }
+
+    // GET /api/crash-report (POST — file crash as queue item)
+    if (method === 'POST' && path === '/api/crash-report') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const { service, error: errMsg, stack, sourceDir, ts: crashTs } = body;
+      if (!service || !errMsg) return json(res, 400, { error: 'Missing required fields: service, error' });
+      const timestamp = crashTs || String(Date.now());
+      const truncTitle = (errMsg || 'Unknown error').slice(0, 80);
+      const stackLines = (stack || '').split('\n').slice(0, 5).join('\n');
+      const task = {
+        id: `wq-crash-${timestamp}`,
+        itemVersion: 1,
+        created: new Date(parseInt(timestamp)).toISOString(),
+        source: 'system',
+        assignee: 'all',
+        priority: 'high',
+        status: 'pending',
+        title: `CRASH: ${service} — ${truncTitle}`,
+        description: `Unhandled exception in ${service}.`,
+        notes: `Error: ${errMsg}\nStack: ${stackLines}\nSource: ${sourceDir || 'unknown'}`,
+        tags: ['crash', 'auto-filed', service],
+        claimedBy: null, claimedAt: null, attempts: 0, maxAttempts: 1, lastAttempt: null, completedAt: null, result: null,
+      };
+      const data = await readQueue();
+      data.items = data.items || [];
+      data.items.push(task);
+      data.lastSync = new Date().toISOString();
+      await writeQueue(data);
+      return json(res, 200, { ok: true, taskId: task.id });
+    }
+
+    // GET /api/changelog?id=<itemId>
+    if (method === 'GET' && path === '/api/changelog') {
+      const itemId = url.searchParams.get('id') || '';
+      if (!itemId) return json(res, 400, { error: 'id query param required' });
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '30', 10), 100);
+      const data = await readQueue();
+      const allItems = [...(data.items || []), ...(data.completed || [])];
+      const item = allItems.find(i => i.id === itemId);
+      if (!item) return json(res, 404, { error: 'item not found', id: itemId });
+      const events = [];
+      if (item.notes) {
+        for (const line of item.notes.split('\n').filter(l => l.trim())) {
+          const isoMatch = line.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?)/);
+          const ts = isoMatch ? new Date(isoMatch[1]).toISOString() : null;
+          let type = 'note';
+          const lower = line.toLowerCase();
+          if (/\[promoted\]|promoted to task/.test(lower)) type = 'promotion';
+          else if (/unblocked/.test(lower)) type = 'unblocked';
+          else if (/claimed by/.test(lower)) type = 'claim';
+          else if (/operator comment/.test(lower)) type = 'comment';
+          events.push({ ts, type, detail: line.trim(), source: 'notes' });
+        }
+      }
+      // Journal entries
+      for (const entry of (item.journal || [])) {
+        events.push({ ts: entry.ts, type: entry.type || 'journal', detail: `${entry.author}: ${entry.text}`, source: 'journal' });
+      }
+      if (item.created) events.push({ ts: item.created, type: 'created', detail: `Item created (source: ${item.source || 'unknown'})`, source: 'field' });
+      if (item.claimedAt && item.claimedBy) events.push({ ts: item.claimedAt, type: 'claim', detail: `Claimed by ${item.claimedBy}`, source: 'field' });
+      if (item.completedAt) events.push({ ts: item.completedAt, type: 'completed', detail: `Completed (status: ${item.status})`, source: 'field' });
+      events.push({ ts: null, type: 'current_state', detail: `status=${item.status} assignee=${item.assignee || '—'} priority=${item.priority}`, source: 'snapshot' });
+      events.sort((a, b) => { if (!a.ts && !b.ts) return 0; if (!a.ts) return -1; if (!b.ts) return 1; return new Date(b.ts) - new Date(a.ts); });
+      const seen = new Set();
+      const deduped = events.filter(e => { const k = `${e.ts}|${e.detail}`; if (seen.has(k)) return false; seen.add(k); return true; });
+      return json(res, 200, { id: itemId, title: item.title || itemId, itemVersion: item.itemVersion || 1, totalEvents: deduped.length, changelog: deduped.slice(0, limit) });
+    }
+
+    // GET /api/digest
+    if (method === 'GET' && path === '/api/digest') {
+      const data = await readQueue();
+      const items = data.items || [];
+      const completed = data.completed || [];
+      const now = Date.now();
+      const D7 = 7 * 24 * 60 * 60 * 1000;
+      const H24 = 24 * 60 * 60 * 1000;
+      const agentNames = ['rocky', 'bullwinkle', 'natasha', 'boris'];
+      const agentEmojis = { rocky: '🐿️', bullwinkle: '🫎', natasha: '🕵️‍♀️', boris: '🕵️‍♂️' };
+
+      // Load heartbeats for status
+      const hbPath = new URL(AGENTS_PATH, import.meta.url).pathname;
+      let agentsData = {};
+      try { agentsData = JSON.parse(await readFile(hbPath, 'utf8')); } catch {}
+
+      function agentStatus(name) {
+        const hb = agentsData[name];
+        if (!hb || !hb.lastSeen) return 'unknown';
+        const age = now - new Date(hb.lastSeen).getTime();
+        if (age < 45 * 60 * 1000) return 'online';
+        if (age < 4 * 60 * 60 * 1000) return 'idle';
+        return 'offline';
+      }
+
+      const lines = [`📊 Agent Status Digest — ${new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC`, ''];
+      const agentsOut = {};
+
+      for (const name of agentNames) {
+        const claimedItems = [...items, ...completed].filter(i => i.claimedBy === name);
+        const done24h = claimedItems.filter(i => i.status === 'completed' && i.completedAt && (now - new Date(i.completedAt).getTime()) < H24).length;
+        const done7d  = claimedItems.filter(i => i.status === 'completed' && i.completedAt && (now - new Date(i.completedAt).getTime()) < D7).length;
+        const inProgress = items.filter(i => (i.status === 'in-progress') && (i.claimedBy === name || i.assignee === name));
+        const pending = items.filter(i => i.status === 'pending' && (i.assignee === name || i.assignee === 'all'));
+        const status = agentStatus(name);
+        const emoji = agentEmojis[name] || '📨';
+        lines.push(`${emoji} ${name.charAt(0).toUpperCase() + name.slice(1)} (${status}): ${done24h} done today, ${done7d} this week`);
+        inProgress.forEach(i => lines.push(`  ▸ In progress: [${i.id}] ${i.title}`));
+        pending.slice(0, 3).forEach(i => lines.push(`  ▸ Pending: [${i.id}] ${i.title}`));
+        if (pending.length > 3) lines.push(`  ▸ … and ${pending.length - 3} more pending`);
+        if (!inProgress.length && !pending.length) lines.push('  ▸ Nothing assigned');
+        lines.push('');
+        agentsOut[name] = { status, done24h, done7d, inProgress: inProgress.map(i => ({ id: i.id, title: i.title })), pending: pending.slice(0, 5).map(i => ({ id: i.id, title: i.title })) };
+      }
+
+      const totalPending  = items.filter(i => i.status === 'pending').length;
+      const totalClaimed  = items.filter(i => i.status === 'in-progress').length;
+      const totalIdeas    = items.filter(i => i.priority === 'idea').length;
+      lines.push(`Queue: ${totalPending} pending, ${totalClaimed} in-progress, ${totalIdeas} ideas, ${completed.length} completed total`);
+
+      return json(res, 200, {
+        digest: lines.join('\n'),
+        agents: agentsOut,
+        queueStats: { totalPending, totalClaimed, totalIdeas, totalCompleted: completed.length },
+        ts: new Date().toISOString(),
+      });
+    }
+
+    // GET /api/activity — bubble chart data (agents + projects + people)
+    if (method === 'GET' && path === '/api/activity') {
+      const data = await readQueue();
+      const allItems = [...(data.items || []), ...(data.completed || [])];
+      const now = Date.now();
+      const H1 = 3600000, H24 = 86400000, H72 = H24 * 3, D7 = H24 * 7;
+
+      function recencyScore(tsStr) {
+        if (!tsStr) return 0;
+        const age = now - new Date(tsStr).getTime();
+        if (age < H1) return 1.0; if (age < H24) return 0.8; if (age < H72) return 0.5; if (age < D7) return 0.2; return 0.05;
+      }
+      function recencyColor(s) { if (s >= 0.8) return '#f85149'; if (s >= 0.5) return '#e3b341'; if (s >= 0.2) return '#58a6ff'; return '#30363d'; }
+
+      const agentEmojis = { rocky: '🐿️', bullwinkle: '🫎', natasha: '🕵️‍♀️', boris: '🕵️‍♂️' };
+      const agentNames = ['rocky', 'bullwinkle', 'natasha', 'boris'];
+      const agentNodes = agentNames.map(name => {
+        const done = allItems.filter(i => i.claimedBy === name && i.status === 'completed');
+        const lastAct = done.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0))[0]?.completedAt;
+        const score = recencyScore(lastAct);
+        return { id: `agent:${name}`, kind: 'agent', label: name, emoji: agentEmojis[name] || '🤖', size: 20 + Math.min(done.length * 2, 60), score, color: recencyColor(score), meta: { completedItems: done.length, activeItems: allItems.filter(i => i.claimedBy === name && i.status === 'in-progress').length } };
+      });
+
+      let repos = [];
+      try { repos = JSON.parse(await readFile(new URL(REPOS_PATH, import.meta.url).pathname, 'utf8')); } catch {}
+      const projectNodes = repos.map(repo => {
+        const repoItems = allItems.filter(i => i.repo === repo.full_name || (i.tags || []).includes(repo.full_name));
+        const done = repoItems.filter(i => i.status === 'completed');
+        const lastAct = done.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0))[0]?.completedAt;
+        const score = recencyScore(lastAct);
+        return { id: `project:${repo.full_name}`, kind: 'project', label: repo.display_name || repo.full_name.split('/')[1], fullName: repo.full_name, emoji: repo.kind === 'team' ? '👥' : '👤', size: 18 + Math.min(done.length * 1.5, 70), score, color: recencyColor(score), meta: { kind: repo.kind, completedItems: done.length, lastActivity: lastAct } };
+      });
+
+      const jkhItems = allItems.filter(i => i.assignee === 'jkh');
+      const jkhScore = Math.max(recencyScore(jkhItems[0]?.created), 0.3);
+      const personNodes = [{ id: 'person:jkh', kind: 'person', label: 'jkh', emoji: '👤', size: 35 + jkhItems.length, score: jkhScore, color: recencyColor(jkhScore), meta: { role: 'owner', itemsAssigned: jkhItems.length } }];
+
+      const edges = [];
+      for (const a of agentNodes) {
+        for (const p of projectNodes) {
+          const count = allItems.filter(i => (i.claimedBy === a.label || i.assignee === a.label) && (i.repo === p.fullName || (i.tags || []).includes(p.fullName))).length;
+          if (count > 0) edges.push({ source: a.id, target: p.id, weight: count, kind: 'worked-on' });
+        }
+        edges.push({ source: 'person:jkh', target: a.id, weight: 3, kind: 'directs' });
+      }
+
+      return json(res, 200, { ts: new Date().toISOString(), nodes: [...agentNodes, ...projectNodes, ...personNodes], edges });
     }
 
     return json(res, 404, { error: 'Not found' });
