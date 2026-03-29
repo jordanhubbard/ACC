@@ -163,19 +163,43 @@ To add SquirrelBus peer-to-peer messaging between agents, set `BULLWINKLE_BUS_UR
 
 ---
 
-## The Agents (our prototype cast)
+## The Agents (the cast)
 
-These are the four agents I built this with. They are documented here because they're the origin story, not because the system requires them or is named after them anywhere in the code.
+These are the agents running on this deployment. The system doesn't hardcode any of these names — they're configuration.
 
-**Me (Rocky)** — cloud VM, always-on, the spine of the operation. I'm why the system is reliable even when everyone else is offline.
+**Rocky (me)** — cloud VM on DigitalOcean (`do-host1`, 146.190.134.110). Always-on, public IP. The hub: runs the RCC API, SquirrelBus, and the tunnel gateway for the Sweden containers. I'm why the system stays up when everyone else is offline.
 
-**Bullwinkle** — Mac laptop agent, local to the human's house. Warmer and more forgiving than me. Handles browser tasks, Mac-native tools, and anything requiring a real desktop.
+**Bullwinkle** — Mac mini agent (`puck.local`, Tailscale 100.87.68.11). Warmer than me. Handles browser tasks, Mac-native tools, deep dives. Reachable via Tailscale only.
 
-**Natasha** — GPU box with serious Blackwell compute. Handles renders, inference, and anything that benefits from raw GPU power.
+**Natasha** — DGX Spark Blackwell (`sparky.local`, Tailscale 100.87.229.125). GPU muscle — Whisper API, Ollama, GPU inference, WASM modules. Reachable via Tailscale only.
 
-**Boris** — dual-GPU machine in a remote datacenter, no Tailscale access. Joined last, broke the most assumptions, improved the system the most. If your architecture can handle Boris, it can handle anyone.
+**Boris, Peabody, Sherman, Snidely, Dudley** — GPU containers in a Swedish datacenter. Each has 4x L40 GPUs (190GB VRAM) and runs vLLM. **Critical architecture note: these containers have no inbound network access** — no Tailscale, no public IP, no resolvable hostname. They connect *out* to Rocky via reverse SSH tunnel. Rocky proxies everything for them. This is the model for any truly firewalled agent.
 
-None of these names appear in the code. You can call your agents whatever you want. The system doesn't care.
+None of these names appear in the code. The system accommodates whoever shows up.
+
+---
+
+## Sweden Container Architecture
+
+This is the part that broke the most assumptions and improved the system the most.
+
+Boris, Peabody, Sherman, Snidely, and Dudley are containers in a remote datacenter. No Tailscale. No inbound network access at all. When I first designed the system, I assumed "agent reachable" meant "has an IP address I can connect to." Boris proved that wrong.
+
+The solution: reverse SSH tunnels. Each Sweden container:
+1. Generates an SSH keypair on first boot
+2. Registers its pubkey with Rocky via `POST /api/tunnel/request`
+3. Rocky appends the key to the `tunnel` user's `authorized_keys`
+4. The container establishes a persistent reverse SSH tunnel: `ssh -N -R <port>:localhost:8080 tunnel@rocky`
+5. Rocky now has `localhost:<port>` → container's vLLM
+
+Rocky's tunnel port map:
+- `127.0.0.1:18080` → Boris (Nemotron-3 120B, active)
+- `127.0.0.1:18082` → Peabody (pre-allocated)
+- `127.0.0.1:18083+` → Sherman, Snidely, Dudley (auto-allocated on connect)
+
+Port allocation is managed automatically by `GET /api/agents/:name/tunnel-port` — agents call this on startup to get their assigned port.
+
+**Remote execution** works the same way: instead of Rocky SSHing *to* the containers, Rocky pushes signed JavaScript (or shell) payloads over SquirrelBus, the containers execute and POST results back. See the "Remote Execution" section below.
 
 ---
 
@@ -251,9 +275,54 @@ See `workqueue/README.md` for the full schema and `workqueue/WORKQUEUE_AGENT.md`
 
 ## SquirrelBus
 
-Direct P2P messaging between agents. The hub agent fans out messages to registered peers, logs to MinIO. Peers receive via HTTP push (install `squirrelbus-plugin` on each OpenClaw instance).
+Direct P2P messaging between agents. The hub agent fans out messages to registered peers. Peers receive via SSE stream or HTTP poll. Install `squirrelbus-plugin` on each OpenClaw instance for push delivery.
 
 See `squirrelbus/SPEC.md` for the protocol.
+
+---
+
+## Remote Execution
+
+RCC has a built-in remote execution system for running code on any connected agent — including agents with no inbound network access.
+
+**How it works:**
+
+```
+POST /api/exec  →  SquirrelBus (rcc.exec)  →  agent-listener.mjs  →  POST /api/exec/:id/result
+```
+
+1. An admin POSTs `{ code, target }` to `/api/exec`
+2. RCC signs the payload with HMAC-SHA256 and broadcasts it over SquirrelBus
+3. Each agent runs `rcc/exec/agent-listener.mjs`, which subscribes to the bus and handles `rcc.exec` messages
+4. The listener verifies the signature, executes the code in a sandboxed `vm.runInNewContext()`, and POSTs results back to `/api/exec/:id/result`
+
+**Send an exec:**
+```bash
+curl -X POST http://localhost:8789/api/exec \
+  -H "Authorization: Bearer $RCC_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"code": "console.log(require(\"os\").hostname())", "target": "peabody"}'
+```
+
+**Get results:**
+```bash
+curl http://localhost:8789/api/exec/$EXEC_ID \
+  -H "Authorization: Bearer $RCC_AGENT_TOKEN"
+```
+
+**Security:** All exec payloads are HMAC-SHA256 signed with `SQUIRRELBUS_TOKEN`. Unsigned or tampered payloads are silently dropped. The sandbox has a 10s hard timeout and no access to the filesystem or network — only safe globals (Math, Date, JSON, etc.). Shell exec mode (for system commands) is a planned enhancement.
+
+**Run the listener on each agent:**
+```bash
+SQUIRRELBUS_TOKEN=shared-secret \
+SQUIRRELBUS_URL=http://146.190.134.110:8788 \
+RCC_URL=http://146.190.134.110:8789 \
+RCC_AUTH_TOKEN=$AGENT_TOKEN \
+AGENT_NAME=myagent \
+  node rcc/exec/agent-listener.mjs
+```
+
+Logs: `~/.rcc/logs/remote-exec.jsonl`
 
 ---
 
