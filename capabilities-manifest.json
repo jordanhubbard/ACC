@@ -1,0 +1,87 @@
+{
+  "agent": "natasha",
+  "version": "1.0.0",
+  "published": "2026-03-24T09:37:00Z",
+  "host": {
+    "name": "sparky",
+    "tailscale": "sparky.tail407856.ts.net",
+    "os": "Linux 6.17.0-1008-nvidia",
+    "arch": "aarch64",
+    "hardware": "NVIDIA DGX Spark",
+    "gpu": {
+      "model": "NVIDIA GB10",
+      "driver": "580.126.09",
+      "cuda": true,
+      "rtx": true
+    }
+  },
+  "runtime": {
+    "model": "nvidia/azure/anthropic/claude-sonnet-4-6",
+    "executors": ["claude_sonnet", "claude_cli", "llm"],
+    "thinking": "adaptive",
+    "session_type": "main"
+  },
+  "tools": {
+    "core": ["read", "write", "edit", "exec", "process"],
+    "web": ["web_search", "web_fetch", "browser"],
+    "ai": ["tts", "canvas"],
+    "messaging": ["message"],
+    "infra": ["gateway", "cron", "nodes"],
+    "memory": ["memory_search", "memory_get"],
+    "orchestration": ["sessions_spawn", "sessions_send", "sessions_list", "sessions_history", "subagents", "session_status", "agents_list"]
+  },
+  "skills": [
+    "coding-agent",
+    "gh-issues",
+    "github",
+    "healthcheck",
+    "skill-creator",
+    "slack",
+    "tmux",
+    "weather"
+  ],
+  "channels": {
+    "slack": {
+      "workspace": "omgjkh",
+      "user_id": "U0AL0ECN4A1"
+    },
+    "mattermost": {
+      "server": "chat.yourmom.photos",
+      "user_id": "k8qtua6dbjfmfjk76o9bgaepua"
+    },
+    "telegram": {
+      "status": "configured"
+    },
+    "discord": {
+      "status": "configured"
+    }
+  },
+  "capabilities": {
+    "gpu_inference": true,
+    "cuda_workloads": true,
+    "long_context": true,
+    "code_execution": true,
+    "browser_automation": true,
+    "tts": true,
+    "image_generation": false,
+    "voice_transcription": false,
+    "github_prs": true,
+    "acp_spawn": true,
+    "subagent_orchestration": true,
+    "cron_scheduling": true
+  },
+  "preferred_work": [
+    "code_review",
+    "github_issues",
+    "orchestration",
+    "research",
+    "gpu_heavy_inference",
+    "browser_tasks",
+    "writing"
+  ],
+  "routing_hints": {
+    "prefer_for": ["gpu_inference", "browser_automation", "code_generation", "acp_tasks"],
+    "avoid_for": ["cpu_only_tasks_better_suited_to_rocky_or_bullwinkle"],
+    "max_concurrent_items": 2
+  }
+}
