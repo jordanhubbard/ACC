@@ -144,6 +144,7 @@ html, body {
 
 .agent-card.online  { border-left: 3px solid var(--green); }
 .agent-card.offline { border-left: 3px solid var(--red); opacity: 0.7; }
+.agent-card.stale   { border-left: 3px solid var(--orange); }
 .agent-card.decommissioned { border-left: 3px solid var(--text-dimmer); opacity: 0.5; }
 
 .agent-header {
@@ -161,6 +162,7 @@ html, body {
 }
 .dot-online        { background: var(--green); box-shadow: 0 0 4px var(--green); }
 .dot-offline       { background: var(--red); }
+.dot-stale         { background: var(--orange); box-shadow: 0 0 4px var(--orange); }
 .dot-decommissioned { background: var(--text-dimmer); }
 
 .agent-name {
@@ -248,6 +250,8 @@ html, body {
 .queue-row:hover td { background: var(--surface2); }
 .queue-row.expanded td { background: var(--surface2); }
 .queue-row.done td { opacity: 0.6; }
+.queue-row.row-decision td { background: rgba(88,166,255,0.05); }
+.queue-row.row-decision td:first-child { border-left: 3px solid var(--blue); }
 
 .col-id { width: 130px; }
 .item-id {
