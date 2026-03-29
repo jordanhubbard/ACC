@@ -305,6 +305,9 @@ pub fn SquirrelChat() -> impl IntoView {
     let (mention_query, set_mention_query) = create_signal(Option::<String>::None);
     let (unread, set_unread) =
         create_signal(std::collections::HashMap::<String, u32>::new());
+    // Tracks channels where the current user has been @mentioned
+    let (mentions_unread, set_mentions_unread) =
+        create_signal(std::collections::HashMap::<String, u32>::new());
     let (sc_connected, set_sc_connected) = create_signal(false);
     let (show_new_project, set_show_new_project) = create_signal(false);
     let (new_proj_name, set_new_proj_name) = create_signal(String::new());
@@ -405,12 +408,27 @@ pub fn SquirrelChat() -> impl IntoView {
                         ScWsFrame::Message { message } => {
                             let ch = message.channel.clone().unwrap_or_default();
                             let cur = selected_channel.get_untracked();
+                            // Check if current user is @mentioned in this message
+                            let my_id = identity.get_untracked().id.clone();
+                            let my_name = identity.get_untracked().name.clone();
+                            let msg_text = message.text.as_deref().unwrap_or("");
+                            let is_mention = message.mentions.iter().any(|m| {
+                                m == &my_id || m == &my_name
+                                    || m == &format!("@{}", my_id)
+                                    || m == &format!("@{}", my_name)
+                            }) || msg_text.contains(&format!("@{}", my_id))
+                              || msg_text.contains(&format!("@{}", my_name));
                             if ch == cur || ch.is_empty() {
                                 set_messages.update(|msgs| msgs.push(message));
                             } else {
                                 set_unread.update(|u| {
-                                    *u.entry(ch).or_insert(0) += 1;
+                                    *u.entry(ch.clone()).or_insert(0) += 1;
                                 });
+                                if is_mention {
+                                    set_mentions_unread.update(|u| {
+                                        *u.entry(ch).or_insert(0) += 1;
+                                    });
+                                }
                             }
                         }
                         ScWsFrame::Reaction { message_id, reactions } => {
@@ -506,13 +524,21 @@ pub fn SquirrelChat() -> impl IntoView {
                                 on:click=move |_| {
                                     set_selected_channel.set(ch_id2.clone());
                                     set_unread.update(|u| { u.remove(&ch_id2.clone()); });
+                                    set_mentions_unread.update(|u| { u.remove(&ch_id2.clone()); });
                                     set_selected_project.set(None);
                                 }
                             >
                                 <span>"#" {ch_name}</span>
                                 {move || {
                                     let n = unread.get().get(&ch_id3).copied().unwrap_or(0);
-                                    if n > 0 {
+                                    let m = mentions_unread.get().get(&ch_id3).copied().unwrap_or(0);
+                                    if m > 0 {
+                                        view! {
+                                            <span class="sc-unread sc-unread-mention" title="You were mentioned">
+                                                "@" {n}
+                                            </span>
+                                        }.into_view()
+                                    } else if n > 0 {
                                         view! { <span class="sc-unread">{n}</span> }.into_view()
                                     } else {
                                         ().into_view()
@@ -773,7 +799,17 @@ pub fn SquirrelChat() -> impl IntoView {
                                             let reactions = msg.reactions.clone();
                                             let reply_count = msg.reply_count;
                                             let current_user = identity.get_untracked().id.clone();
+                                            let current_user_name = identity.get_untracked().name.clone();
                                             let msg_for_thread = msg.clone();
+
+                                            // Detect if current user is mentioned in this message
+                                            let text_str = msg.text.as_deref().unwrap_or("");
+                                            let is_mentioned = msg.mentions.iter().any(|m| {
+                                                m == &current_user || m == &current_user_name
+                                                    || m == &format!("@{}", current_user)
+                                                    || m == &format!("@{}", current_user_name)
+                                            }) || text_str.contains(&format!("@{}", current_user))
+                                              || text_str.contains(&format!("@{}", current_user_name));
 
                                             // Per-message picker visibility
                                             let picker_visible = create_memo(move |_| {
@@ -782,7 +818,10 @@ pub fn SquirrelChat() -> impl IntoView {
                                             let (picker_vis_read, _) = create_signal(false);
 
                                             view! {
-                                                <div class="sc-msg">
+                                                <div
+                                                    class="sc-msg"
+                                                    class:sc-msg-mention=is_mentioned
+                                                >
                                                     <div class="sc-msg-header">
                                                         <span class="sc-msg-from">{from}</span>
                                                         <span class="sc-msg-ts">{ts}</span>
