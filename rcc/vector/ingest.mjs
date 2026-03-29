@@ -111,7 +111,9 @@ export async function ingestLesson(lesson) {
 
 /**
  * Ingest a SquirrelChat message into the active memory collection.
- * Routes to rcc_memory_sparky (768-dim) when EMBED_BACKEND=local.
+ * Routes to rcc_memory_sparky (768-dim, GPU) when EMBED_BACKEND=local,
+ * or rcc_memory (3072-dim, Azure) otherwise.
+ * On sparky, set EMBED_BACKEND=local for zero-cost GPU-accelerated ingest.
  */
 export async function ingestMessage(msg) {
   try {
@@ -120,12 +122,39 @@ export async function ingestMessage(msg) {
     if (!text || text.length < 5) return;
     const id = createHash('md5').update(`squirrelchat:${msg.id}:${msg.ts}`).digest('hex');
     await vectorUpsert(MEMORY_COLLECTION, id, text.slice(0, 1000), {
-      source: `squirrelchat:${msg.id}`,
-      type: 'squirrelchat',
-      from_agent: msg.from_agent || 'unknown',
-      channel: msg.channel || 'chat'
+      agent:      (msg.from_agent || 'unknown').slice(0, 32),
+      content:    text.slice(0, 4096),
+      source:     `squirrelchat:${msg.id || 'unknown'}`,
+      ts:         new Date(msg.ts || Date.now()).toISOString().slice(0, 32),
     });
   } catch (err) {
     console.warn(`[ingest] Failed to ingest message ${msg.id}:`, err.message);
+  }
+}
+
+/**
+ * Semantic search over ingested SquirrelChat messages.
+ * Uses the same collection as ingestMessage (local or remote depending on EMBED_BACKEND).
+ * @param {string} query   - Natural language search query
+ * @param {number} limit   - Max results (default 5)
+ * @param {string} agent   - Filter by agent name (optional)
+ * @returns {Promise<object[]>} - Array of matching message snippets with scores
+ */
+export async function recallSquirrelChat(query, limit = 5, agent = '') {
+  try {
+    await ensureReady();
+    const { vectorSearch } = await import('./index.mjs');
+    const filter = agent ? `agent == "${agent}"` : '';
+    const hits = await vectorSearch(MEMORY_COLLECTION, query, limit, filter);
+    return hits.map(h => ({
+      content: h.content,
+      agent: h.agent,
+      source: h.source,
+      ts: h.ts,
+      score: h.score,
+    }));
+  } catch (err) {
+    console.warn(`[ingest] recallSquirrelChat failed:`, err.message);
+    return [];
   }
 }
