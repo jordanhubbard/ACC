@@ -77,6 +77,12 @@
   text-align: center;
 }
 
+/* Mention unread badge — yellow to distinguish from regular unread */
+.sc-unread.sc-unread-mention {
+  background: var(--yellow, #f5c518);
+  color: #000;
+}
+
 .sc-agent-item {
   display: flex;
   align-items: center;
@@ -195,6 +201,17 @@
 
 .sc-msg:hover {
   background: var(--surface2);
+}
+
+/* Message row highlight when current user is @mentioned */
+.sc-msg.sc-msg-mention {
+  background: color-mix(in srgb, var(--yellow, #f5c518) 12%, transparent);
+  border-left: 3px solid var(--yellow, #f5c518);
+  padding-left: 9px;
+}
+
+.sc-msg.sc-msg-mention:hover {
+  background: color-mix(in srgb, var(--yellow, #f5c518) 20%, transparent);
 }
 
 .sc-msg:hover .sc-msg-actions {
