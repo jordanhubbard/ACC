@@ -162,6 +162,25 @@ fn format_ts_short(ts: &str) -> String {
     }
 }
 
+/// Format age in seconds as a human-readable "Xh Ym ago" string.
+fn format_age(secs: u64) -> String {
+    if secs == u64::MAX {
+        return "unknown".to_string();
+    }
+    if secs < 60 {
+        return format!("{}s ago", secs);
+    }
+    if secs < 3600 {
+        let m = secs / 60;
+        let s = secs % 60;
+        if s == 0 { format!("{}m ago", m) } else { format!("{}m {}s ago", m, s) }
+    } else {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        if m == 0 { format!("{}h ago", h) } else { format!("{}h {}m ago", h, m) }
+    }
+}
+
 fn event_icon(event: &str) -> &'static str {
     match event {
         "heartbeat" => "💓",
@@ -377,18 +396,28 @@ pub fn AgentDetail() -> impl IntoView {
                                                                 </div>
                                                             }
                                                         })}
-                                                    {d
-                                                        .ts
-                                                        .as_deref()
-                                                        .map(|ts| {
-                                                            let display = format_ts_short(ts);
+                                                    {
+                                                        // Show last_seen with age; fall back to ts
+                                                        let ls = d.last_seen.clone().or_else(|| d.ts.clone());
+                                                        ls.map(|ts| {
+                                                            let display = format_ts_short(&ts);
+                                                            let age = secs_since(&ts);
+                                                            let age_str = format_age(age);
+                                                            let stale = age > 7200;
                                                             view! {
                                                                 <div class="meta-row">
-                                                                    <span class="meta-key">"last heartbeat"</span>
-                                                                    <span class="meta-val">{display}</span>
+                                                                    <span class="meta-key">"last seen"</span>
+                                                                    <span class="meta-val">
+                                                                        {display}
+                                                                        " "
+                                                                        <span class=if stale { "age-stale" } else { "age-ok" }>
+                                                                            {"("}{age_str}{")"}
+                                                                        </span>
+                                                                    </span>
                                                                 </div>
                                                             }
-                                                        })}
+                                                        })
+                                                    }
                                                 </div>
                                             </div>
                                         }
