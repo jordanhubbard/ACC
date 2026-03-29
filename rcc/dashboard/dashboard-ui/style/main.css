@@ -803,6 +803,8 @@ html, body {
 .meta-key { font-size: 11px; color: var(--text-dimmer); min-width: 100px; }
 .meta-val { font-size: 12px; color: var(--text); }
 .meta-val.code { font-family: monospace; font-size: 11px; color: var(--accent); }
+.age-ok   { font-size: 11px; color: var(--text-dimmer); }
+.age-stale { font-size: 11px; color: var(--orange); font-weight: 600; }
 
 .section-sub { padding: 0; }
 .sub-title { font-size: 12px; font-weight: 600; color: var(--text-dim); margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.05em; }
