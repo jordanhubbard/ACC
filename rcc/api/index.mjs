@@ -600,6 +600,31 @@ async function slackPost(endpoint, payload) {
   return resp.json();
 }
 
+/**
+ * Set the Slack channel topic and description (purpose) based on project metadata.
+ * Topic:   "<description> | GitHub: <url> | Issues: <tracker> | RCC: <rcc_url>"
+ * Purpose: "<display_name> project channel. Post requests here — channel context = project context."
+ * Fire-and-forget — errors are logged but do not fail the caller.
+ */
+async function setSlackChannelMeta(channelId, project) {
+  if (!SLACK_BOT_TOKEN || !channelId || !project) return;
+
+  const parts = [];
+  if (project.description) parts.push(project.description);
+  if (project.github_url)  parts.push(`GitHub: ${project.github_url}`);
+  if (project.issue_tracker) parts.push(`Issues: ${project.issue_tracker}`);
+  if (project.rcc_url)     parts.push(`RCC: ${project.rcc_url}`);
+  const topic   = parts.join(' | ');
+  const purpose = `${project.display_name || project.id} project channel. Post requests here — channel context = project context.`;
+
+  await Promise.all([
+    slackPost('conversations.setTopic', { channel: channelId, topic }).catch(e =>
+      console.warn(`[rcc-api] setTopic ${channelId}: ${e.message}`)),
+    slackPost('conversations.setPurpose', { channel: channelId, purpose }).catch(e =>
+      console.warn(`[rcc-api] setPurpose ${channelId}: ${e.message}`)),
+  ]);
+}
+
 /** Format queue summary for Slack */
 async function formatQueueSummary() {
   const qdata = await readQueue();
@@ -1889,6 +1914,9 @@ echo "✅ $AGENT_NAME is online. Token: ${agentToken}"
           await pump.patchRepo(fullName, { ownership: repo.ownership });
         }
       }
+      // Set channel topic and description to reflect project metadata
+      await setSlackChannelMeta(body.channel_id, project).catch(e =>
+        console.warn(`[rcc-api] setSlackChannelMeta ${body.channel_id}: ${e.message}`));
       return json(res, 200, { ok: true, project });
     }
 
