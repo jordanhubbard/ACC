@@ -1,6 +1,7 @@
 /// CodingAgent — web UI front-end for charmbracelet/crush sessions
 ///
-/// Connects to crush-server (sparky:8793) which wraps the crush CLI.
+/// Connects to crush-server (sparky:8793 or do-host1:8794) which wraps the crush CLI.
+/// The server URL is derived at runtime from window.location.hostname — no hardcoded IPs.
 /// Features:
 ///   - Session list with refresh
 ///   - Session detail / message history
@@ -17,11 +18,24 @@ use super::diff_view::{DiffView, looks_like_diff, extract_diff};
 
 // ── Config ─────────────────────────────────────────────────────────────────
 
-const CRUSH_SERVER: &str = "http://100.87.229.125:8793"; // sparky Tailscale IP
+/// Derive crush-server base URL at runtime from window.location.hostname.
+/// - If served from sparky (100.87.229.125 or sparky.*), use port 8793.
+/// - If served from do-host1 (146.190.134.110), use port 8794 (fallback).
+/// - Falls back to hardcoded sparky IP if window is unavailable.
+fn crush_base_url() -> String {
+    let hostname = web_sys::window()
+        .and_then(|w| w.location().hostname().ok())
+        .unwrap_or_default();
+    let port = if hostname.contains("146.190.134.110") || hostname == "do-host1" {
+        8794 // do-host1 fallback crush-server port
+    } else {
+        8793 // sparky (default)
+    };
+    format!("http://{}:{}", hostname, port)
+}
 
-// Try localhost first (same host), fall back to Tailscale
 fn crush_url(path: &str) -> String {
-    format!("{}{}", CRUSH_SERVER, path)
+    format!("{}{}", crush_base_url(), path)
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────
