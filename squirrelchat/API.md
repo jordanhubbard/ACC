@@ -36,20 +36,18 @@ Token types:
 ```json
 {
   "id": "string (integer, auto-increment)",
-  "ts": "string (ISO 8601 or unix ms — backend normalizes)",
+  "ts": "number (unix ms)",
   "from": "string (user id)",
+  "from_name": "string|null (display name, server-joined)",
   "text": "string",
   "channel": "string (channel id)",
-  "parent_id": "string|null (parent message id, null if top-level)",
+  "thread_id": "string|null (parent message id, null if top-level)",
   "thread_count": "number (reply count, 0 if no replies)",
   "mentions": ["string (user ids)"],
-  "reactions": [
-    { "emoji": "🔥", "count": 2, "by_me": true },
-    { "emoji": "👍", "count": 1, "by_me": false }
-  ],
-  "edited": "boolean|null",
-  "files": [Attachment],
-  "created_at": "number (unix ms)"
+  "reactions": { "🔥": ["rocky", "natasha"], "👍": ["bullwinkle"] },
+  "edited_at": "number|null (unix ms, null if never edited)",
+  "created_at": "number (unix ms)",
+  "slash_result": "string|null (legacy slash command output)"
 }
 ```
 
@@ -60,12 +58,14 @@ Token types:
   "id": "string (slug, e.g. 'general')",
   "name": "string (display name)",
   "description": "string|null",
-  "kind": "string ('public'|'private'|'dm')",
-  "unread_count": "number|null (per-user, computed)",
-  "members": ["string (user ids)"],
+  "type": "string ('channel'|'dm')",
+  "participants": ["string (user ids, DM only)"],
   "created_at": "number (unix ms)",
   "last_message_at": "number|null (unix ms)"
 }
+```
+
+Note: `unread_count` is tracked client-side only (not in wire format).
 ```
 
 ### User
@@ -81,18 +81,21 @@ Token types:
 }
 ```
 
-### Reaction
+### Reactions (wire format)
 
-Reactions on messages are returned as an array (not a map):
+Reactions are a **map** from emoji string to list of user IDs who reacted:
 ```json
 {
-  "emoji": "string (unicode emoji)",
-  "count": "number",
-  "by_me": "boolean (whether the requesting user has this reaction)"
+  "🔥": ["rocky", "natasha"],
+  "👍": ["bullwinkle"]
 }
 ```
 
-### File
+Client-side helpers `user_reacted(user_id, emoji)` and `reaction_counts()` derive
+`by_me` and count from this raw format. The map is more flexible — supports hover
+tooltips showing who reacted, and toggle logic is trivial (add/remove from array).
+
+### File (Channel file)
 
 ```json
 {
@@ -133,7 +136,7 @@ Returns the authenticated user's identity.
 }
 ```
 
-If no valid token: returns `{ "id": "anonymous", "name": null, "role": "user", "needsName": true }`.
+If no valid token: returns `{ "id": "anonymous", "name": "anonymous", "role": "user", "needs_name": true }`.
 
 ---
 
@@ -185,7 +188,7 @@ Fetch messages for a channel.
 - `since` (number) — unix ms timestamp, return messages after this
 - `before` (number) — unix ms timestamp, for pagination backward
 - `limit` (number, default: 50, max: 200)
-- `parent_id` (string) — if set, return only replies to this message
+- `thread_id` (string) — if set, return only replies to this message
 
 **Response:** `Message[]` (chronological order)
 
@@ -197,7 +200,7 @@ Send a message.
 {
   "text": "string",
   "channel": "string (channel id, default: 'general')",
-  "parent_id": "string|null (reply to this message)",
+  "thread_id": "string|null (reply to this message)",
   "mentions": ["string (user ids)"]
 }
 ```
@@ -232,11 +235,11 @@ Delete a message.
 
 Threads are implicit — any message can become a thread root when someone replies to it.
 
-#### `GET /api/messages?parent_id=:id`
-Get all replies in a thread (same as messages endpoint with `parent_id` filter).
+#### `GET /api/messages?thread_id=:id`
+Get all replies in a thread (same as messages endpoint with `thread_id` filter).
 
-#### `POST /api/messages` with `parent_id`
-Reply to a thread (same as sending a message, just include `parent_id`).
+#### `POST /api/messages` with `thread_id`
+Reply to a thread (same as sending a message, just include `thread_id`).
 
 No separate thread endpoints needed — threads are a view over messages.
 
@@ -442,7 +445,8 @@ CREATE TABLE channels (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   description TEXT,
-  kind TEXT NOT NULL DEFAULT 'public',
+  type TEXT NOT NULL DEFAULT 'channel',
+  participants TEXT,  -- JSON array of user ids (DMs only)
   created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
   last_message_at INTEGER
 );
@@ -453,7 +457,7 @@ CREATE TABLE messages (
   from_id TEXT NOT NULL REFERENCES users(id),
   text TEXT NOT NULL,
   channel TEXT NOT NULL REFERENCES channels(id),
-  parent_id INTEGER REFERENCES messages(id),
+  thread_id INTEGER REFERENCES messages(id),
   mentions TEXT,
   edited_at INTEGER,
   created_at INTEGER DEFAULT (strftime('%s','now') * 1000)
@@ -495,7 +499,7 @@ END;
 
 -- Indexes
 CREATE INDEX idx_messages_channel_ts ON messages(channel, ts);
-CREATE INDEX idx_messages_thread ON messages(parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX idx_messages_thread ON messages(thread_id) WHERE thread_id IS NOT NULL;
 CREATE INDEX idx_reactions_message ON reactions(message_id);
 CREATE INDEX idx_files_channel ON files(channel);
 ```
