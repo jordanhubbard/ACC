@@ -1228,7 +1228,16 @@ async function handleRequest(req, res) {
         agentToken = agents[entry.agent].token;
       } else {
         agentToken = `rcc-agent-${entry.agent}-${randomUUID().slice(0, 8)}`;
-        agents[entry.agent] = { ...(agents[entry.agent] || {}), token: agentToken, registeredAt: new Date().toISOString() };
+        agents[entry.agent] = {
+          ...(agents[entry.agent] || {}),
+          name: entry.agent,
+          host: entry.host || 'unknown',
+          type: entry.type || 'full',
+          token: agentToken,
+          registeredAt: new Date().toISOString(),
+          capabilities: agents[entry.agent]?.capabilities || {},
+          billing: agents[entry.agent]?.billing || { claude_cli: 'fixed', inference_key: 'metered', gpu: 'fixed' },
+        };
         await writeAgents(agents);
         AUTH_TOKENS.add(agentToken);
       }
@@ -1284,7 +1293,16 @@ async function handleRequest(req, res) {
         agentToken = agents[entry.agent].token; // resurrection — reuse token
       } else {
         agentToken = `rcc-agent-${entry.agent}-${randomUUID().slice(0, 8)}`;
-        agents[entry.agent] = { ...(agents[entry.agent] || {}), token: agentToken, registeredAt: new Date().toISOString() };
+        agents[entry.agent] = {
+          ...(agents[entry.agent] || {}),
+          name: entry.agent,
+          host: entry.host || 'unknown',
+          type: entry.type || 'full',
+          token: agentToken,
+          registeredAt: new Date().toISOString(),
+          capabilities: agents[entry.agent]?.capabilities || {},
+          billing: agents[entry.agent]?.billing || { claude_cli: 'fixed', inference_key: 'metered', gpu: 'fixed' },
+        };
         await writeAgents(agents);
         AUTH_TOKENS.add(agentToken);
       }
@@ -1736,17 +1754,30 @@ else
   openclaw gateway start
 fi
 ${vllmBlock}
+# ── Register identity with RCC ───────────────────────────────────────────────
+echo "→ Registering identity with RCC..."
+AGENT_HOSTNAME=\$(hostname)
+curl -s -X POST "$RCC_URL/api/agents/register" \\
+  -H "Authorization: Bearer ${agentToken}" \\
+  -H "Content-Type: application/json" \\
+  -d "{
+    \\"name\\": \\"$AGENT_NAME\\",
+    \\"host\\": \\"\$AGENT_HOSTNAME\\",
+    \\"type\\": \\"full\\"
+  }" | python3 -c "import json,sys; d=json.load(sys.stdin); print('   ✅ registered' if d.get('ok') else '   ⚠️  register: ' + str(d))" 2>/dev/null || echo "   ℹ️  (already registered — token reused)"
+
 # ── Heartbeat ────────────────────────────────────────────────────────────────
 echo "→ Posting heartbeat..."
-sleep 3
+sleep 2
 curl -s -X POST "$RCC_URL/api/heartbeat/$AGENT_NAME" \\
   -H "Authorization: Bearer ${agentToken}" \\
   -H "Content-Type: application/json" \\
-  -d "{\\"agent\\":\\"$AGENT_NAME\\",\\"role\\":\\"$AGENT_ROLE\\",\\"host\\":\\"$(hostname)\\",\\"status\\":\\"online\\",\\"pullRev\\":\\"$PULL_REV\\"}" | grep -q '"ok":true' && echo "   ✅ heartbeat posted" || echo "   ⚠️  heartbeat failed (agent may still be starting)"
+  -d "{\\"agent\\":\\"$AGENT_NAME\\",\\"role\\":\\"$AGENT_ROLE\\",\\"host\\":\\"\$AGENT_HOSTNAME\\",\\"status\\":\\"online\\",\\"pullRev\\":\\"$PULL_REV\\"}" | grep -q '"ok":true' && echo "   ✅ heartbeat posted" || echo "   ⚠️  heartbeat failed (agent may still be starting)"
 
 echo ""
 echo "✅ $AGENT_NAME is online."
 echo "   Role:  $AGENT_ROLE"
+echo "   Host:  \$AGENT_HOSTNAME"
 echo "   Token: ${agentToken}"
 ${agentRole === 'vllm-worker' ? `echo ""
 echo "   vLLM checklist:"
@@ -3663,7 +3694,16 @@ echo "   4. Check tunnel: systemctl --user status rcc-vllm-tunnel"` : ''}
         agentToken = agents[entry.agent].token;
       } else {
         agentToken = `rcc-agent-${entry.agent}-${randomUUID().slice(0, 8)}`;
-        agents[entry.agent] = { ...(agents[entry.agent] || {}), token: agentToken, registeredAt: new Date().toISOString() };
+        agents[entry.agent] = {
+          ...(agents[entry.agent] || {}),
+          name: entry.agent,
+          host: entry.host || 'unknown',
+          type: entry.type || 'full',
+          token: agentToken,
+          registeredAt: new Date().toISOString(),
+          capabilities: agents[entry.agent]?.capabilities || {},
+          billing: agents[entry.agent]?.billing || { claude_cli: 'fixed', inference_key: 'metered', gpu: 'fixed' },
+        };
         await writeAgents(agents);
         AUTH_TOKENS.add(agentToken);
       }
