@@ -7,6 +7,7 @@ use crate::components::{
     bus_send::BusSend,
     changelog::Changelog,
     geek_view::GeekView,
+    health_banner::HealthBanner,
     idea_incubator::IdeaIncubator,
     issues::Issues,
     kanban::Kanban,
@@ -63,6 +64,7 @@ pub fn App() -> impl IntoView {
                 </div>
             </header>
             <main class="dash-main">
+                <HealthBanner />
                 {move || match tab.get() {
                     1 => view! { <GeekView /> }.into_view(),
                     2 => view! { <Kanban /> }.into_view(),

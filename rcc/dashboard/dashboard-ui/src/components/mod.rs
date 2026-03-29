@@ -1,4 +1,5 @@
 pub mod activity_feed;
+pub mod health_banner;
 pub mod agent_cards;
 pub mod issues;
 pub mod agent_detail;

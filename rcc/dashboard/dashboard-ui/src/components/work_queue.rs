@@ -92,10 +92,21 @@ pub fn WorkQueue() -> impl IntoView {
 
     let queue = create_resource(move || tick.get(), |_| fetch_queue());
 
+    fn priority_rank(p: &str) -> u8 {
+        match p {
+            "critical" => 0,
+            "high"     => 1,
+            "medium"   => 2,
+            "low"      => 3,
+            "idea"     => 9,
+            _          => 5,
+        }
+    }
+
     let filtered_items = move || {
         let q = queue.get().unwrap_or_default();
         let f = filter.get().to_lowercase();
-        let items: Vec<QueueItem> = q
+        let mut items: Vec<QueueItem> = q
             .items
             .into_iter()
             .filter(|item| {
@@ -121,6 +132,17 @@ pub fn WorkQueue() -> impl IntoView {
                     || status.to_lowercase().contains(&f)
             })
             .collect();
+
+        // Sort: jkh decision items first, then by priority rank, then by created_at
+        items.sort_by(|a, b| {
+            let a_jkh = a.assignee.as_deref().map(|x| x.to_lowercase() == "jkh").unwrap_or(false);
+            let b_jkh = b.assignee.as_deref().map(|x| x.to_lowercase() == "jkh").unwrap_or(false);
+            if a_jkh != b_jkh { return b_jkh.cmp(&a_jkh); } // jkh first
+            let a_rank = priority_rank(a.priority.as_deref().unwrap_or("medium"));
+            let b_rank = priority_rank(b.priority.as_deref().unwrap_or("medium"));
+            a_rank.cmp(&b_rank)
+        });
+
         items
     };
 
@@ -230,18 +252,20 @@ pub fn WorkQueue() -> impl IntoView {
                                         .assignee
                                         .clone()
                                         .unwrap_or_default();
+                                    let is_jkh = assignee.to_lowercase() == "jkh";
                                     let title = item.title.clone();
                                     let body = item.body.clone().unwrap_or_default();
                                     view! {
                                         <tr
                                             class=move || {
-                                                if expanded_id.get().as_deref()
+                                                let base = if expanded_id.get().as_deref()
                                                     == Some(id_class.as_str())
                                                 {
                                                     "queue-row expanded"
                                                 } else {
                                                     "queue-row"
-                                                }
+                                                };
+                                                if is_jkh { format!("{} row-decision", base) } else { base.to_string() }
                                             }
                                             on:click=move |_| {
                                                 let cur = expanded_id.get();

@@ -132,8 +132,34 @@ pub fn AgentCards() -> impl IntoView {
                             .find(|a| a.name.as_deref() == Some(&name))
                             .cloned();
 
+                        // Staleness check: even if onlineStatus="online", flag if >2h since last heartbeat
+                        let now_sec = (js_sys::Date::now() as u64) / 1000;
+                        let hb_age_secs = hb.ts.as_deref()
+                            .and_then(|ts| {
+                                // Reuse parse logic inline
+                                let (dp, tp) = ts.split_once('T')?;
+                                let mut d = dp.split('-');
+                                let y: u64 = d.next()?.parse().ok()?;
+                                let m: u64 = d.next()?.parse().ok()?;
+                                let day: u64 = d.next()?.parse().ok()?;
+                                let tc = tp.trim_end_matches('Z');
+                                let mut t = tc.split(':');
+                                let h: u64 = t.next()?.parse().ok()?;
+                                let mi: u64 = t.next()?.parse().ok()?;
+                                let s: f64 = t.next().unwrap_or("0").parse().ok()?;
+                                let days = days_since_epoch(y, m, day);
+                                Some(now_sec.saturating_sub(days * 86400 + h * 3600 + mi * 60 + s as u64))
+                            })
+                            .unwrap_or(u64::MAX);
+
                         let online = hb.online.unwrap_or(false);
-                        let status_class = if online { "online" } else { "offline" };
+                        let status_class = if !online {
+                            "offline"
+                        } else if hb_age_secs > 7200 {
+                            "stale"   // online but heartbeat is >2h old
+                        } else {
+                            "online"
+                        };
 
                         let ts_display = hb.ts.as_deref()
                             .map(relative_time)
@@ -223,7 +249,13 @@ pub fn AgentCards() -> impl IntoView {
                                     } else { view! { <span></span> }.into_view() }}
                                 </div>
                                 <div class="agent-ts">
-                                    {if online {
+                                    {if status_class == "stale" {
+                                        view! {
+                                            <span style="color:var(--orange);font-size:10px;">
+                                                "⚠ stale · "
+                                            </span>
+                                        }.into_view()
+                                    } else if online {
                                         view! {
                                             <span style="color:var(--green,#3fb950);font-size:10px;">
                                                 "● online · "
