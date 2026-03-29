@@ -336,6 +336,20 @@ function isAdminAuthed(req) {
 }
 
 // ── Queue I/O ──────────────────────────────────────────────────────────────
+// ── Queue mutex — prevents concurrent read-mutate-write races ─────────────
+// Node.js is single-threaded, but interleaved async I/O can cause two claim
+// requests to both read 'pending', both pass the guard, and both write back.
+// A simple promise-chain mutex collapses concurrent calls into serial order.
+let _queueMutexTail = Promise.resolve();
+
+async function withQueueLock(fn) {
+  // Append to the tail of the chain; each caller waits for prior work to finish
+  const next = _queueMutexTail.then(() => fn()).catch(err => { throw err; });
+  // Always advance tail (even if fn throws) so subsequent callers aren't blocked
+  _queueMutexTail = next.catch(() => {});
+  return next;
+}
+
 async function readQueue() {
   const p = new URL(QUEUE_PATH, import.meta.url).pathname;
   if (!existsSync(p)) return { items: [], completed: [] };
@@ -1666,37 +1680,45 @@ echo "   4. Check tunnel: systemctl --user status rcc-vllm-tunnel"` : ''}
     }
 
     // ── POST /api/item/:id/claim — agent claims an item ──────────────────
+    // Runs inside withQueueLock so concurrent claims are serialized; the
+    // second agent always sees the first agent's write and gets a 409.
     const itemClaimMatch = path.match(/^\/api\/item\/([^/]+)\/claim$/);
     if (method === 'POST' && itemClaimMatch) {
       const id = decodeURIComponent(itemClaimMatch[1]);
       const body = await readBody(req);
       const agent = body.agent || body._author;
       if (!agent) return json(res, 400, { error: 'agent required' });
-      const q = await readQueue();
-      const item = q.items?.find(i => i.id === id);
-      if (!item) return json(res, 404, { error: 'Item not found' });
-      // Guard: already claimed by someone else and not stale
-      if (item.claimedBy && item.claimedBy !== agent && item.status === 'in-progress') {
-        const threshold = STALE_THRESHOLDS[item.preferred_executor] || STALE_THRESHOLDS.default;
-        const age = Date.now() - new Date(item.claimedAt).getTime();
-        if (age < threshold) {
-          return json(res, 409, { error: `Already claimed by ${item.claimedBy}`, claimedBy: item.claimedBy, claimedAt: item.claimedAt });
+      return withQueueLock(async () => {
+        const q = await readQueue();
+        const item = q.items?.find(i => i.id === id);
+        if (!item) return json(res, 404, { error: 'Item not found' });
+        // Guard: already claimed by someone else and not stale
+        if (item.claimedBy && item.claimedBy !== agent && item.status === 'in-progress') {
+          const threshold = STALE_THRESHOLDS[item.preferred_executor] || STALE_THRESHOLDS.default;
+          const age = Date.now() - new Date(item.claimedAt).getTime();
+          if (age < threshold) {
+            return json(res, 409, { error: `Already claimed by ${item.claimedBy}`, claimedBy: item.claimedBy, claimedAt: item.claimedAt });
+          }
         }
-      }
-      const now = new Date().toISOString();
-      const prevAgent = item.claimedBy;
-      item.claimedBy = agent;
-      item.claimedAt = now;
-      item.keepaliveAt = now;
-      item.status = 'in-progress';
-      item.attempts = (item.attempts || 0) + 1;
-      if (!item.journal) item.journal = [];
-      item.journal.push({ ts: now, author: agent, type: 'claim', text: prevAgent ? `Claimed (previous: ${prevAgent})` : 'Claimed' });
-      if (!item.events) item.events = [];
-      item.events.push({ ts: now, agent, type: 'claim', note: body.note || null });
-      item.itemVersion = (item.itemVersion || 0) + 1;
-      await writeQueue(q);
-      return json(res, 200, { ok: true, item });
+        // Guard: item must be pending (or stale in-progress handled above)
+        if (item.status !== 'pending' && item.status !== 'in-progress') {
+          return json(res, 409, { error: `Item is ${item.status}, cannot claim` });
+        }
+        const now = new Date().toISOString();
+        const prevAgent = item.claimedBy;
+        item.claimedBy = agent;
+        item.claimedAt = now;
+        item.keepaliveAt = now;
+        item.status = 'in-progress';
+        item.attempts = (item.attempts || 0) + 1;
+        if (!item.journal) item.journal = [];
+        item.journal.push({ ts: now, author: agent, type: 'claim', text: prevAgent ? `Claimed (previous: ${prevAgent})` : 'Claimed' });
+        if (!item.events) item.events = [];
+        item.events.push({ ts: now, agent, type: 'claim', note: body.note || null });
+        item.itemVersion = (item.itemVersion || 0) + 1;
+        await writeQueue(q);
+        return json(res, 200, { ok: true, item });
+      });
     }
 
     // ── POST /api/item/:id/complete — agent marks item done ───────────────
