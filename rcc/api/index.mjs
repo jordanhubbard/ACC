@@ -2080,12 +2080,12 @@ echo "   4. Check tunnel: systemctl --user status rcc-vllm-tunnel"` : ''}
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.TOKENHUB_ADMIN_TOKEN}` },
               body: JSON.stringify({ id: `nemotron-${body.name.toLowerCase()}`, provider_id: providerId, weight: 8, max_context_tokens: 262144, enabled: true }),
             });
-            console.log(\`[rcc-api] Registered \${body.name} as TokenHub provider \${providerId} on port \${tunnel.port}\`);
+            console.log(`[rcc-api] Registered ${body.name} as TokenHub provider ${providerId} on port ${tunnel.port}`);
           } catch (thErr) {
-            console.warn(\`[rcc-api] TokenHub registration failed for \${body.name}: \${thErr.message}\`);
+            console.warn(`[rcc-api] TokenHub registration failed for ${body.name}: ${thErr.message}`);
           }
         } else {
-          console.log(\`[rcc-api] \${body.name} has vLLM but no tunnel assigned yet — skipping TokenHub registration\`);
+          console.log(`[rcc-api] ${body.name} has vLLM but no tunnel assigned yet — skipping TokenHub registration`);
         }
       }
 
