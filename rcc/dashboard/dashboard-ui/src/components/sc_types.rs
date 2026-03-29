@@ -3,12 +3,11 @@
 // Wire format matches squirrelchat-server (Rust/Axum) models.rs exactly.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // ─── Message ─────────────────────────────────────────────────────────────────
 
-/// Wire format from squirrelchat-server's `Message` struct.
-/// `reactions` is `HashMap<emoji, Vec<agent_id>>` — e.g. `{"🔥": ["rocky", "natasha"]}`.
+/// Wire format from squirrelchat-server's `MessageWire` struct.
+/// `reactions` is `Vec<ScReaction>` — aggregated `{emoji, count, agents}`.
 /// `from_agent` is the user/agent id.
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct ScMessage {
@@ -27,9 +26,9 @@ pub struct ScMessage {
     /// number of replies on a top-level message
     #[serde(default)]
     pub reply_count: i64,
-    /// emoji → list of agent ids who reacted
+    /// Aggregated reactions: [{emoji, count, agents}]
     #[serde(default)]
-    pub reactions: HashMap<String, Vec<String>>,
+    pub reactions: Vec<ScReaction>,
     /// legacy slash command result field
     pub slash_result: Option<String>,
 }
@@ -38,20 +37,15 @@ impl ScMessage {
     /// Returns true if the given user has reacted with this emoji.
     pub fn user_reacted(&self, user_id: &str, emoji: &str) -> bool {
         self.reactions
-            .get(emoji)
-            .map(|users| users.iter().any(|u| u == user_id))
-            .unwrap_or(false)
+            .iter()
+            .any(|r| r.emoji == emoji && r.agents.iter().any(|u| u == user_id))
     }
 
-    /// Returns a sorted vec of (emoji, count) pairs for display.
-    pub fn reaction_counts(&self) -> Vec<(String, usize)> {
-        let mut counts: Vec<(String, usize)> = self
-            .reactions
-            .iter()
-            .map(|(emoji, users)| (emoji.clone(), users.len()))
-            .collect();
-        counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        counts
+    /// Returns reactions sorted by count descending for display.
+    pub fn sorted_reactions(&self) -> Vec<&ScReaction> {
+        let mut sorted: Vec<&ScReaction> = self.reactions.iter().collect();
+        sorted.sort_by(|a, b| b.count.cmp(&a.count).then(a.emoji.cmp(&b.emoji)));
+        sorted
     }
 
     /// Format the message timestamp as HH:MM:SS for display.

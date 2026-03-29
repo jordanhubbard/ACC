@@ -17,6 +17,31 @@ use crate::components::sc_channel_modal::CreateChannelModal;
 
 // format_msg_ts is now ScMessage::format_ts() — no standalone helper needed
 
+use crate::components::sc_types::ScReaction;
+
+/// Optimistic toggle of a reaction on a message's Vec<ScReaction>.
+/// Adds user to the reaction if not present, removes if present.
+fn toggle_reaction(reactions: &mut Vec<ScReaction>, emoji: &str, user_id: &str) {
+    if let Some(r) = reactions.iter_mut().find(|r| r.emoji == emoji) {
+        if let Some(pos) = r.agents.iter().position(|u| u == user_id) {
+            r.agents.remove(pos);
+            r.count = r.agents.len();
+            if r.count == 0 {
+                reactions.retain(|r| r.emoji != emoji);
+            }
+        } else {
+            r.agents.push(user_id.to_string());
+            r.count = r.agents.len();
+        }
+    } else {
+        reactions.push(ScReaction {
+            emoji: emoji.to_string(),
+            count: 1,
+            agents: vec![user_id.to_string()],
+        });
+    }
+}
+
 fn render_text_with_mentions(text: &str) -> impl IntoView {
     let parts: Vec<leptos::View> = text
         .split(' ')
@@ -391,10 +416,7 @@ pub fn SquirrelChat() -> impl IntoView {
                         ScWsFrame::Reaction { message_id, reactions } => {
                             set_messages.update(|msgs| {
                                 if let Some(msg) = msgs.iter_mut().find(|m| m.id == Some(message_id)) {
-                                    msg.reactions.clear();
-                                    for r in &reactions {
-                                        msg.reactions.insert(r.emoji.clone(), r.agents.clone());
-                                    }
+                                    msg.reactions = reactions.clone();
                                 }
                             });
                         }
@@ -846,15 +868,7 @@ pub fn SquirrelChat() -> impl IntoView {
                                                                         set_messages.update(|msgs| {
                                                                             if let Some(m) = msgs.iter_mut().find(|m| m.id == Some(mid)) {
                                                                                 let user_id = identity.get_untracked().id;
-                                                                                let users = m.reactions.entry(emoji.clone()).or_default();
-                                                                                if let Some(pos) = users.iter().position(|u| u == &user_id) {
-                                                                                    users.remove(pos);
-                                                                                    if users.is_empty() {
-                                                                                        m.reactions.remove(&emoji);
-                                                                                    }
-                                                                                } else {
-                                                                                    users.push(user_id);
-                                                                                }
+                                                                                toggle_reaction(&mut m.reactions, &emoji, &user_id);
                                                                             }
                                                                         });
                                                                     })
@@ -890,15 +904,7 @@ pub fn SquirrelChat() -> impl IntoView {
                                                             set_messages.update(|msgs| {
                                                                 if let Some(m) = msgs.iter_mut().find(|m| m.id == Some(mid)) {
                                                                     let user_id = identity.get_untracked().id;
-                                                                    let users = m.reactions.entry(emoji.clone()).or_default();
-                                                                    if let Some(pos) = users.iter().position(|u| u == &user_id) {
-                                                                        users.remove(pos);
-                                                                        if users.is_empty() {
-                                                                            m.reactions.remove(&emoji);
-                                                                        }
-                                                                    } else {
-                                                                        users.push(user_id);
-                                                                    }
+                                                                    toggle_reaction(&mut m.reactions, &emoji, &user_id);
                                                                 }
                                                             });
                                                         })

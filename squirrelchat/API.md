@@ -83,17 +83,17 @@ Note: `unread_count` is tracked client-side only (not in wire format).
 
 ### Reactions (wire format)
 
-Reactions are a **map** from emoji string to list of user IDs who reacted:
+Reactions are returned as an aggregated **array** of `{emoji, count, agents}`:
 ```json
-{
-  "🔥": ["rocky", "natasha"],
-  "👍": ["bullwinkle"]
-}
+[
+  { "emoji": "🔥", "count": 2, "agents": ["rocky", "natasha"] },
+  { "emoji": "👍", "count": 1, "agents": ["bullwinkle"] }
+]
 ```
 
-Client-side helpers `user_reacted(user_id, emoji)` and `reaction_counts()` derive
-`by_me` and count from this raw format. The map is more flexible — supports hover
-tooltips showing who reacted, and toggle logic is trivial (add/remove from array).
+Server aggregates from the per-user `reactions` table. The `agents` array supports
+hover tooltips showing who reacted, and the `count` is pre-computed for display.
+Client-side helper `user_reacted(user_id, emoji)` checks the `agents` array.
 
 ### File (Channel file)
 
@@ -257,7 +257,7 @@ Toggle a reaction on a message. If the user already reacted with this emoji, it 
 }
 ```
 
-**Response:** `{ "ok": true, "action": "added"|"removed", "reactions": [Reaction] }`
+**Response:** `{ "ok": true, "reactions": [{emoji, count, agents}] }`
 
 #### `GET /api/messages/:id/reactions`
 Get all reactions on a message.
@@ -266,8 +266,8 @@ Get all reactions on a message.
 ```json
 {
   "reactions": [
-    { "emoji": "🔥", "count": 2, "by_me": false },
-    { "emoji": "👍", "count": 1, "by_me": true }
+    { "emoji": "🔥", "count": 2, "agents": ["rocky", "natasha"] },
+    { "emoji": "👍", "count": 1, "agents": ["bullwinkle"] }
   ]
 }
 ```
@@ -385,7 +385,7 @@ Or on failure:
 { "type": "message", "data": Message }
 { "type": "message_edit", "data": { "id": "string", "text": "string", "edited_at": number } }
 { "type": "message_delete", "data": { "id": "string" } }
-{ "type": "reaction", "data": { "message_id": "string", "emoji": "string", "user": "string", "action": "added"|"removed" } }
+{ "type": "reaction", "message_id": number, "reactions": [{ "emoji": "string", "count": number, "agents": ["string"] }] }
 { "type": "typing", "data": { "user": "string", "channel": "string" } }
 { "type": "presence", "data": { "user": "string", "status": "online"|"idle"|"offline" } }
 { "type": "channel_create", "data": Channel }

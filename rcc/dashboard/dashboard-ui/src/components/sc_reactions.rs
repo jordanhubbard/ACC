@@ -2,8 +2,7 @@
 // Bullwinkle (Track A UI) — imports from sc_types.rs
 
 use leptos::*;
-use std::collections::HashMap;
-use crate::components::sc_types::REACTION_EMOJIS;
+use crate::components::sc_types::{ScReaction, REACTION_EMOJIS};
 
 // ─── Emoji Picker ────────────────────────────────────────────────────────────
 
@@ -51,7 +50,7 @@ pub fn EmojiPicker(
 /// `current_user` is the user id for highlight (shows which reactions the user has applied).
 #[component]
 pub fn ReactionsBar(
-    reactions: HashMap<String, Vec<String>>,
+    reactions: Vec<ScReaction>,
     current_user: String,
     message_id: i64,
     on_toggle: Callback<(i64, String)>,
@@ -60,17 +59,12 @@ pub fn ReactionsBar(
         return view! { <span /> }.into_view();
     }
 
-    // Sort by count descending, then emoji alphabetically
-    let mut sorted: Vec<(String, Vec<String>)> = reactions.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
-
-    let pills: Vec<_> = sorted
+    let pills: Vec<_> = reactions
         .into_iter()
-        .map(|(emoji, users)| {
-            let count = users.len();
-            let user_reacted = users.iter().any(|u| u == &current_user);
-            let tooltip = users.join(", ");
-            let emoji_clone = emoji.clone();
+        .map(|r| {
+            let user_reacted = r.agents.iter().any(|u| u == &current_user);
+            let tooltip = r.agents.join(", ");
+            let emoji_clone = r.emoji.clone();
             let msg_id = message_id;
 
             view! {
@@ -83,8 +77,8 @@ pub fn ReactionsBar(
                         on_toggle.call((msg_id, emoji_clone.clone()));
                     }
                 >
-                    <span class="sc-reaction-emoji">{emoji.clone()}</span>
-                    <span class="sc-reaction-count">{count}</span>
+                    <span class="sc-reaction-emoji">{r.emoji.clone()}</span>
+                    <span class="sc-reaction-count">{r.count}</span>
                 </button>
             }
         })
