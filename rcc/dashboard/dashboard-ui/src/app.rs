@@ -8,6 +8,7 @@ use crate::components::{
     changelog::Changelog,
     geek_view::GeekView,
     idea_incubator::IdeaIncubator,
+    issues::Issues,
     kanban::Kanban,
     metrics::Metrics,
     squirrelbus::SquirrelBus,
@@ -17,17 +18,17 @@ use crate::components::{
 
 #[component]
 pub fn App() -> impl IntoView {
-    // 0 = Dashboard, 1 = Geek View, 2 = Kanban, 3 = SquirrelChat, 4 = Agent Detail
+    // 0=Dashboard 1=GeekView 2=Kanban 3=SquirrelChat 4=Agents 5=Issues
     let (tab, set_tab) = create_signal(0u8);
 
     view! {
         <div class="dashboard">
             <header class="dash-header">
                 <div class="dash-logo">
-                    <span class="logo-icon">"⚡"</span>
+                    <span class="logo-icon">"🐿️"</span>
                     <span class="logo-text">"Rocky Command Center"</span>
                 </div>
-                <div class="dash-subtitle">"v2 — Rust/WASM"</div>
+                <div class="dash-subtitle">"v3 — Rust/WASM + GH Issues"</div>
                 <div class="dash-tabs">
                     <button
                         class="tab-btn"
@@ -54,6 +55,11 @@ pub fn App() -> impl IntoView {
                         class:tab-active=move || tab.get() == 4
                         on:click=move |_| set_tab.set(4)
                     >"🤖 Agents"</button>
+                    <button
+                        class="tab-btn"
+                        class:tab-active=move || tab.get() == 5
+                        on:click=move |_| set_tab.set(5)
+                    >"🐛 Issues"</button>
                 </div>
             </header>
             <main class="dash-main">
@@ -62,6 +68,7 @@ pub fn App() -> impl IntoView {
                     2 => view! { <Kanban /> }.into_view(),
                     3 => view! { <SquirrelChat /> }.into_view(),
                     4 => view! { <AgentDetail /> }.into_view(),
+                    5 => view! { <Issues /> }.into_view(),
                     _ => view! {
                         <div class="dash-main-content">
                             <div class="dash-row dash-row-top">

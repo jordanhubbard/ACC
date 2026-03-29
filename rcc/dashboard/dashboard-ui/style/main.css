@@ -849,3 +849,57 @@ html, body {
 .btn-danger:hover { background: var(--red, #dc3232); color: #fff; }
 
 .decom-msg { font-size: 12px; color: var(--text-dim); margin: 8px 0 0; }
+
+/* ── Issues Panel ─────────────────────────────────────────────────────── */
+.issues-panel { padding: 16px; display: flex; flex-direction: column; gap: 12px; max-width: 1100px; }
+.issues-header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.issues-header h2 { margin: 0; font-size: 18px; color: var(--text); }
+.issues-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.issues-controls select {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 4px 8px; font-size: 12px; cursor: pointer;
+}
+.state-toggle { display: flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.toggle-btn {
+  background: var(--bg2); border: none; color: var(--text-dim); padding: 4px 10px;
+  font-size: 12px; cursor: pointer; transition: background 0.1s, color 0.1s;
+}
+.toggle-btn.toggle-active { background: var(--accent); color: #fff; }
+.toggle-btn:hover:not(.toggle-active) { background: var(--bg3); }
+.sync-btn {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 4px 12px; font-size: 12px; cursor: pointer;
+  transition: background 0.1s;
+}
+.sync-btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.sync-btn:disabled { opacity: 0.5; cursor: default; }
+.sync-msg { font-size: 12px; color: var(--text-dim); }
+.sync-info { font-size: 11px; color: var(--text-dimmer); }
+.issue-count { font-size: 12px; color: var(--text-dim); }
+.issues-list { display: flex; flex-direction: column; gap: 4px; }
+.issues-empty { color: var(--text-dim); font-size: 13px; padding: 24px 0; text-align: center; }
+.issue-row {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px 12px; display: flex; flex-direction: column; gap: 4px;
+  transition: border-color 0.1s;
+}
+.issue-row:hover { border-color: var(--accent); }
+.issue-main { display: flex; align-items: center; gap: 8px; }
+.issue-icon { font-size: 14px; flex-shrink: 0; }
+.issue-title {
+  color: var(--text); text-decoration: none; font-size: 13px; font-weight: 500;
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.issue-title:hover { color: var(--accent); text-decoration: underline; }
+.wq-badge {
+  font-size: 10px; background: rgba(139,148,158,0.15); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px; color: var(--text-dim); flex-shrink: 0;
+}
+.issue-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.issue-repo { font-size: 11px; color: var(--text-dimmer); font-family: monospace; }
+.issue-label {
+  font-size: 10px; background: rgba(56,139,253,0.15); border: 1px solid rgba(56,139,253,0.3);
+  border-radius: 10px; padding: 1px 6px; color: #388bfd;
+}
+.issue-date { font-size: 11px; color: var(--text-dimmer); margin-left: auto; }
+.issue-author { font-size: 11px; color: var(--text-dimmer); }

@@ -1,5 +1,6 @@
 pub mod activity_feed;
 pub mod agent_cards;
+pub mod issues;
 pub mod agent_detail;
 pub mod bus_send;
 pub mod changelog;

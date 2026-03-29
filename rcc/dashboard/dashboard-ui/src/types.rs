@@ -72,6 +72,48 @@ pub struct GitCommitAuthor {
     pub date: Option<String>,
 }
 
+// ── GitHub Issues ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GhIssue {
+    pub id: i64,
+    pub repo: String,
+    pub title: String,
+    pub state: String,
+    pub labels: Option<String>,
+    pub url: Option<String>,
+    pub author: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub wq_id: Option<String>,
+    pub milestone: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GhIssuesResponse {
+    pub ok: Option<bool>,
+    pub issues: Vec<GhIssue>,
+    pub count: Option<u32>,
+    pub last_sync: Option<SyncLog>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SyncLog {
+    pub repo: Option<String>,
+    pub synced_at: Option<String>,
+    pub count: Option<u32>,
+    pub status: Option<String>,
+}
+
+// ── Projects ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Project {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub enabled: Option<bool>,
+}
+
 // ── Metrics ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
