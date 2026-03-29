@@ -1174,7 +1174,7 @@ SSHCFG
       const envLines = [`RCC_AGENT_TOKEN=${agentToken}`, `RCC_URL=${RCC_PUBLIC_URL}`, `AGENT_NAME=${entry.agent}`, `AGENT_ROLE=${agentRole}`];
       const skipKeys = new Set(['deployKey', 'repoUrl']);
       for (const [k, v] of Object.entries(secrets)) {
-        if (!skipKeys.has(k) && v) envLines.push(`${k}=${v}`);
+        if (!skipKeys.has(k) && v && typeof v !== 'object') envLines.push(`${k}=${v}`);
       }
       const envBlock = envLines.join('\n');
 
