@@ -209,3 +209,36 @@ tasks, preserving Claude for reasoning-heavy work.
 4. Should Rocky and Bullwinkle be able to route inference *through* sparky
    (as a local inference proxy), or should each agent only use its own host's
    local models?
+
+---
+
+## STT Addendum (2026-03-29)
+
+### Local Whisper STT — Already Wired
+
+OpenClaw has a built-in `whisper-cli` provider in `src/media-understanding/runner.ts`.
+Activation requires:
+1. `whisper-cli` on PATH → symlinked `~/.local/bin/whisper-cli → ~/Src/whisper.cpp/build/bin/whisper-cli` ✅
+2. `WHISPER_CPP_MODEL` env var → set in `~/.config/systemd/user/openclaw-gateway.service` ✅
+3. `tools.media.audio.providers: ['whisper-cpp', 'openai']` in `openclaw.json` ✅
+
+### STT Provider Priority (same prefer_local pattern as LLM)
+
+```
+audio input → try whisper-cli (local, sparky GB10, large-v3)
+              → if hasBinary("whisper-cli") && model exists: use it (6.5× real-time, free)
+              → else fall back to openai/deepgram/groq (metered)
+```
+
+### Capabilities Enabled
+
+- **Voice notes** (mobile → nodes → sparky STT → text → agent)
+- **SquirrelChat voice messages** — transcribe before indexing to Milvus
+- **Meeting transcription** — POST audio to `sparky.local:8792/inference` directly
+- **Whisper HTTP API** — `POST http://sparky.local:8792/inference` (multipart, `file=@audio.wav`)
+  Returns `{"text": "..."}`. Supports `response_format=json|text|srt|vtt`.
+
+### No restart-in-session risk
+
+Use `gateway config.patch` tool for any future config changes — never `systemctl restart`
+from within an active session (kills own connection).
