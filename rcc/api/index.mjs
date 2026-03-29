@@ -1205,11 +1205,8 @@ echo "└───────────────────────�
 echo "→ Installing system deps..."
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -q
-sudo apt-get install -y -q aria2 rsync python3-pip python3-venv tmux curl wget git openssh-client nodejs npm || true
-# Prefer NodeSource LTS if the distro nodejs is too old
-if ! node --version 2>/dev/null | grep -qE '^v(18|20|22|24)'; then
-  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
-fi
+# Install system deps (no npm here — NodeSource nodejs already includes npm)
+sudo apt-get install -y -q aria2 rsync python3-pip python3-venv tmux curl wget git openssh-client || true
 
 # ── 2. CUDA check ─────────────────────────────────────────────────────────
 echo "→ Checking CUDA..."
@@ -1317,10 +1314,9 @@ print(' '.join(seeders))
     source "$VLLM_VENV/bin/activate"
     python3 -c "
 from huggingface_hub import snapshot_download
-import os
 snapshot_download(
   repo_id='nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8',
-  local_dir=os.environ['VLLM_MODEL_DIR'],
+  local_dir='\$VLLM_MODEL_DIR',
   local_dir_use_symlinks=False,
   resume_download=True,
 )
