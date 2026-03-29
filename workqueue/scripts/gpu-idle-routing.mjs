@@ -15,6 +15,7 @@ import { execSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { DecisionJournal } from '../../rcc/decision-journal/index.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKSPACE = join(__dirname, '../..');
@@ -140,6 +141,26 @@ if (!gpu || gpu.util_pct === null) {
 state.lastUtil = gpu?.util_pct ?? null;
 state.acceptGpuTasks = acceptGpuTasks;
 saveState(state);
+
+// Log routing decision to DecisionJournal for drift detection
+try {
+  const journal = new DecisionJournal({ agent: 'natasha', silent: true });
+  await journal.log({
+    principle_used: 'gpu-idle-routing',
+    confidence: gpu ? 0.95 : 0.3,
+    was_conflict: false,
+    outcome: acceptGpuTasks ? 'accept_gpu_tasks=true' : 'accept_gpu_tasks=false',
+    context: {
+      util_pct: gpu?.util_pct ?? null,
+      idle_since: state.idleSince,
+      reason,
+      cycle: state.cycleCount,
+    },
+  });
+} catch (e) {
+  // Non-fatal — don't let journal errors break routing
+  console.warn('[gpu-idle-routing] DecisionJournal write failed:', e.message);
+}
 
 const payload = {
   agent: 'natasha',
