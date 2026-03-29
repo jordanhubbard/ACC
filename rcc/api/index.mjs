@@ -1508,6 +1508,25 @@ echo "🐿️  RCC Onboard — $AGENT_NAME (role: $AGENT_ROLE)"
 echo "    RCC: $RCC_URL"
 echo ""
 ${deployKeyBlock}
+# ── System deps (Node.js required for openclaw + work queue + hot-patch) ─────
+echo "→ Checking Node.js..."
+if ! node --version 2>/dev/null | grep -qE '^v(18|20|22|24)'; then
+  echo "  Node.js not found or too old — installing via NodeSource..."
+  export DEBIAN_FRONTEND=noninteractive
+  sudo apt-get update -q
+  sudo apt-get install -y -q curl git || true
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+  sudo apt-get install -y nodejs
+  echo "  ✅ Node.js $(node --version) installed"
+else
+  echo "  ✅ Node.js $(node --version) OK"
+fi
+# Ensure git is present (needed for repo clone + hot-patch)
+if ! command -v git &>/dev/null; then
+  export DEBIAN_FRONTEND=noninteractive
+  sudo apt-get update -q && sudo apt-get install -y -q git
+fi
+
 # ── Workspace ────────────────────────────────────────────────────────────────
 if [ -d "$WORKSPACE/.git" ]; then
   echo "→ Repo exists — pulling latest..."
