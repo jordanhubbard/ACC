@@ -2,14 +2,20 @@
  * rcc/exec/agent-listener.mjs — SquirrelBus subscriber + remote code executor
  *
  * Listens on SquirrelBus for `rcc.exec` messages, verifies HMAC signatures,
- * executes code in a sandboxed vm.runInNewContext() with a 10s timeout,
- * captures output, and POSTs results back to the RCC API.
+ * executes code in a sandboxed vm.runInNewContext() (JS mode) or via
+ * child_process.execFile (shell mode), and POSTs results back to the RCC API.
+ *
+ * Execution modes (set via envelope.mode):
+ *   "js"    (default) — vm.runInNewContext() sandbox, 10s timeout
+ *   "shell" — execFile via /bin/sh -c with allowlisted commands, 30s timeout
  *
  * Security rules (NON-NEGOTIABLE):
  * - NEVER execute unsigned or tampered code
- * - NEVER use eval() — only vm.runInNewContext()
+ * - In JS mode: NEVER use eval() — only vm.runInNewContext()
+ * - In shell mode: NEVER allow interactive shells, pipes to sh, or injected tokens
+ * - Shell commands validated against SHELL_ALLOWLIST (prefix match)
  * - ALWAYS log every execution attempt to ~/.rcc/logs/remote-exec.jsonl
- * - 10 second hard timeout
+ * - ALLOW_SHELL_EXEC env must be explicitly set to "true" to enable shell mode
  *
  * Environment variables:
  *   SQUIRRELBUS_TOKEN  — shared secret for HMAC verification (required)
@@ -17,17 +23,35 @@
  *   RCC_URL            — RCC API base URL (default: http://localhost:8789)
  *   RCC_AUTH_TOKEN     — bearer token for RCC API (required)
  *   AGENT_NAME         — agent identifier (default: 'unknown')
+ *   ALLOW_SHELL_EXEC   — set to "true" to enable shell mode (default: disabled)
+ *   SHELL_ALLOWLIST    — comma-separated command prefixes allowed in shell mode
+ *                        (default: "systemctl status,journalctl,df,free,uptime,
+ *                         nvidia-smi,node --version,npm ls,git status,
+ *                         ls,cat,echo,ps aux,curl -s")
  */
 
 import vm from 'vm';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { mkdir, appendFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { verifyPayload } from './index.mjs';
 
+const execFileAsync = promisify(execFile);
+
 // ── Config ─────────────────────────────────────────────────────────────────
-const SQUIRRELBUS_URL = process.env.SQUIRRELBUS_URL || 'http://localhost:8788';
+const SQUIRRELBUS_URL   = process.env.SQUIRRELBUS_URL || 'http://localhost:8788';
+const ALLOW_SHELL_EXEC  = process.env.ALLOW_SHELL_EXEC === 'true';
+const DEFAULT_ALLOWLIST = [
+  'systemctl status', 'journalctl', 'df ', 'df\t', 'free', 'uptime',
+  'nvidia-smi', 'node --version', 'node -v', 'npm ls', 'git status',
+  'ls ', 'ls\t', 'cat ', 'echo ', 'ps aux', 'curl -s',
+];
+const SHELL_ALLOWLIST   = process.env.SHELL_ALLOWLIST
+  ? process.env.SHELL_ALLOWLIST.split(',').map(s => s.trim())
+  : DEFAULT_ALLOWLIST;
 const RCC_URL         = process.env.RCC_URL         || 'http://localhost:8789';
 const RCC_AUTH_TOKEN  = process.env.RCC_AUTH_TOKEN  || process.env.RCC_AUTH_TOKENS?.split(',')[0] || '';
 const AGENT_NAME      = process.env.AGENT_NAME      || 'unknown';
@@ -90,6 +114,51 @@ function executeCode(code) {
   };
 }
 
+// ── Shell executor ─────────────────────────────────────────────────────────
+/**
+ * Execute a shell command string via /bin/sh -c with a 30s timeout.
+ * Only allowed if ALLOW_SHELL_EXEC=true and command matches SHELL_ALLOWLIST.
+ */
+async function executeShell(command) {
+  if (!ALLOW_SHELL_EXEC) {
+    return { ok: false, error: 'Shell exec is disabled on this agent (ALLOW_SHELL_EXEC not set)' };
+  }
+
+  // Allowlist check — command must start with one of the allowed prefixes
+  const normalized = command.trim();
+  const allowed = SHELL_ALLOWLIST.some(prefix => normalized.startsWith(prefix));
+  if (!allowed) {
+    return {
+      ok:    false,
+      error: `Shell command rejected: not in SHELL_ALLOWLIST. Allowed prefixes: ${SHELL_ALLOWLIST.join(', ')}`,
+    };
+  }
+
+  // Block obvious injection patterns
+  const dangerous = /(\|.*sh|&&\s*sh|;\s*sh|`|eval|exec\s)/;
+  if (dangerous.test(normalized)) {
+    return { ok: false, error: 'Shell command rejected: contains disallowed pattern' };
+  }
+
+  try {
+    const { stdout, stderr } = await execFileAsync('/bin/sh', ['-c', normalized], {
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024, // 1MB
+    });
+    return {
+      ok:     true,
+      output: (stdout + (stderr ? '\n[stderr]\n' + stderr : '')).trim(),
+      result: stdout.trim().slice(0, 200) || undefined,
+    };
+  } catch (err) {
+    return {
+      ok:     false,
+      error:  err.message,
+      output: err.stdout || '',
+    };
+  }
+}
+
 // ── Handle a single rcc.exec message ──────────────────────────────────────
 async function handleExecMessage(message) {
   // Parse body
@@ -105,6 +174,7 @@ async function handleExecMessage(message) {
   const target   = envelope.target   || 'all';
   const code     = envelope.code     || '';
   const replyTo  = envelope.replyTo  || null;
+  const mode     = envelope.mode     || 'js'; // 'js' or 'shell'
 
   // ── Target filter ─────────────────────────────────────────────────────
   if (target !== 'all' && target !== AGENT_NAME) {
@@ -143,7 +213,7 @@ async function handleExecMessage(message) {
 
   // ── Execute ───────────────────────────────────────────────────────────
   const startMs = Date.now();
-  const execResult = executeCode(code);
+  const execResult = mode === 'shell' ? await executeShell(code) : executeCode(code);
   const durationMs = Date.now() - startMs;
 
   // ── Log result ────────────────────────────────────────────────────────
@@ -152,6 +222,7 @@ async function handleExecMessage(message) {
     execId,
     agent:      AGENT_NAME,
     target,
+    mode,
     status:     execResult.ok ? 'ok' : 'error',
     durationMs,
     output:     execResult.output,
