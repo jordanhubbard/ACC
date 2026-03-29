@@ -68,17 +68,31 @@ fn with_auth(req: gloo_net::http::RequestBuilder) -> gloo_net::http::RequestBuil
 // ─── Async fetchers ───────────────────────────────────────────────────────────
 
 async fn fetch_sc_messages(channel: String) -> Vec<ScMessage> {
-    let url = format!("/sc/api/messages?channel={}&limit=50", channel);
-    let Ok(req) = with_auth(gloo_net::http::Request::get(&url)).build() else {
-        return vec![];
-    };
+    // Primary: Axum squirrelchat-server on 8793
+    let url = format!("http://localhost:8793/api/messages?channel={}&limit=50", channel);
+    let Ok(req) = gloo_net::http::Request::get(&url).build() else { return vec![] };
     let Ok(resp) = req.send().await else { return vec![] };
-    resp.json::<Vec<ScMessage>>().await.unwrap_or_default()
+    if resp.ok() {
+        return resp.json::<Vec<ScMessage>>().await.unwrap_or_default();
+    }
+    // Fallback: Node.js server.mjs via dashboard proxy
+    let url2 = format!("/sc/api/messages?channel={}&limit=50", channel);
+    let Ok(req2) = with_auth(gloo_net::http::Request::get(&url2)).build() else { return vec![] };
+    let Ok(resp2) = req2.send().await else { return vec![] };
+    resp2.json::<Vec<ScMessage>>().await.unwrap_or_default()
 }
 
-/// Fetch dynamic channel list; falls back to DEFAULT_CHANNELS if the endpoint
-/// doesn't exist yet (e.g. before Track A lands the /sc/api/channels route).
+/// Fetch channel list from Axum server; falls back to Node proxy, then hardcoded defaults.
 async fn fetch_sc_channels() -> Vec<ScChannel> {
+    // Primary: Axum squirrelchat-server on 8793
+    if let Ok(resp) = gloo_net::http::Request::get("http://localhost:8793/api/channels").send().await {
+        if resp.ok() {
+            if let Ok(chs) = resp.json::<Vec<ScChannel>>().await {
+                if !chs.is_empty() { return chs; }
+            }
+        }
+    }
+    // Fallback: Node proxy
     let Ok(req) = with_auth(gloo_net::http::Request::get("/sc/api/channels")).build() else {
         return default_channels();
     };
@@ -127,12 +141,20 @@ async fn fetch_sc_identity() -> ScIdentity {
 }
 
 async fn fetch_sc_agents() -> Vec<ScUser> {
+    // Primary: Axum squirrelchat-server on 8793
+    if let Ok(resp) = gloo_net::http::Request::get("http://localhost:8793/api/agents").send().await {
+        if resp.ok() {
+            if let Ok(users) = resp.json::<Vec<ScUser>>().await {
+                if !users.is_empty() { return users; }
+            }
+        }
+    }
+    // Fallback: Node proxy
     let Ok(req) = with_auth(gloo_net::http::Request::get("/sc/api/agents")).build() else {
         return vec![];
     };
     let Ok(resp) = req.send().await else { return vec![] };
     resp.json::<Vec<ScUser>>().await.unwrap_or_else(|_| {
-        // Legacy fallback: server returns old {name, online, status} shape
         FALLBACK_AGENT_NAMES
             .iter()
             .map(|n| ScUser {
@@ -192,14 +214,23 @@ fn trigger_send(
             "text": text_clone,
             "channel": channel_clone,
         });
-        let req_builder = gloo_net::http::Request::post("/sc/api/messages");
-        let req_builder = if let Some(tok) = &token {
-            req_builder.header("Authorization", &format!("Bearer {}", tok))
-        } else {
-            req_builder
+        // Post to Axum server; fallback to Node proxy
+        let posted = {
+            let req_builder = gloo_net::http::Request::post("http://localhost:8793/api/messages");
+            if let Ok(req) = req_builder.json(&payload) {
+                req.send().await.map(|r| r.ok()).unwrap_or(false)
+            } else { false }
         };
-        if let Ok(req) = req_builder.json(&payload) {
-            let _ = req.send().await;
+        if !posted {
+            let req_builder = gloo_net::http::Request::post("/sc/api/messages");
+            let req_builder = if let Some(tok) = &token {
+                req_builder.header("Authorization", &format!("Bearer {}", tok))
+            } else {
+                req_builder
+            };
+            if let Ok(req) = req_builder.json(&payload) {
+                let _ = req.send().await;
+            }
         }
         set_messages.update(|msgs| {
             msgs.push(ScMessage {
@@ -292,25 +323,50 @@ pub fn SquirrelChat() -> impl IntoView {
         set_projects.set(proj);
     });
 
-    // ── SSE stream for live messages ──────────────────────────────────────────
+    // ── WebSocket connection to squirrelchat-server ───────────────────────────
+    // Constructs ws://<host>:8793/api/ws from window.location.
+    // TODO: when dashboard-server proxies /sc/ws → 8793, switch to relative path.
     {
-        if let Ok(es) = web_sys::EventSource::new("/sc/api/stream") {
-            let es_cleanup = es.clone();
+        let ws_url = web_sys::window()
+            .and_then(|w| w.location().hostname().ok())
+            .map(|host| format!("ws://{}:8793/api/ws", host))
+            .unwrap_or_else(|| "ws://localhost:8793/api/ws".to_string());
 
+        if let Ok(ws) = web_sys::WebSocket::new(&ws_url) {
+            let ws_cleanup = ws.clone();
+
+            // onopen — mark connected
             let open_cb = Closure::<dyn FnMut()>::new(move || {
                 set_sc_connected.set(true);
             });
-            es.set_onopen(Some(open_cb.as_ref().unchecked_ref()));
+            ws.set_onopen(Some(open_cb.as_ref().unchecked_ref()));
             open_cb.forget();
 
+            // onclose / onerror — mark disconnected
+            let close_cb = Closure::<dyn FnMut(_)>::new(move |_: web_sys::CloseEvent| {
+                set_sc_connected.set(false);
+            });
+            ws.set_onclose(Some(close_cb.as_ref().unchecked_ref()));
+            close_cb.forget();
+
+            let err_cb = Closure::<dyn FnMut(_)>::new(move |_: web_sys::ErrorEvent| {
+                set_sc_connected.set(false);
+            });
+            ws.set_onerror(Some(err_cb.as_ref().unchecked_ref()));
+            err_cb.forget();
+
+            // onmessage — dispatch ServerFrame variants
             let msg_cb = Closure::<dyn FnMut(_)>::new(move |e: web_sys::MessageEvent| {
                 let data = e.data().as_string().unwrap_or_default();
-                if data.starts_with(':') || data.is_empty() {
+                if data.is_empty() {
                     return;
                 }
-                // Try parsing as ServerFrame (Rust Axum server) first
                 if let Ok(frame) = serde_json::from_str::<ScWsFrame>(&data) {
                     match frame {
+                        ScWsFrame::Connected { session_id: _ } => {
+                            // Connected frame fires immediately on handshake
+                            set_sc_connected.set(true);
+                        }
                         ScWsFrame::Message { message } => {
                             let ch = message.channel.clone().unwrap_or_default();
                             let cur = selected_channel.get_untracked();
@@ -323,7 +379,6 @@ pub fn SquirrelChat() -> impl IntoView {
                             }
                         }
                         ScWsFrame::Reaction { message_id, reactions } => {
-                            // Update reactions on the matching message
                             set_messages.update(|msgs| {
                                 if let Some(msg) = msgs.iter_mut().find(|m| m.id == Some(message_id)) {
                                     msg.reactions.clear();
@@ -350,41 +405,13 @@ pub fn SquirrelChat() -> impl IntoView {
                         }
                         _ => {}
                     }
-                    return;
-                }
-                // Legacy SSE fallback (Node.js server format)
-                #[derive(Deserialize)]
-                struct SseEvent {
-                    #[serde(rename = "type")]
-                    event_type: Option<String>,
-                    #[serde(flatten)]
-                    msg: ScMessage,
-                }
-                if let Ok(ev) = serde_json::from_str::<SseEvent>(&data) {
-                    if ev.event_type.as_deref() == Some("message") {
-                        let ch = ev.msg.channel.clone().unwrap_or_default();
-                        let cur = selected_channel.get_untracked();
-                        if ch == cur || ch.is_empty() {
-                            set_messages.update(|msgs| msgs.push(ev.msg));
-                        } else {
-                            set_unread.update(|u| {
-                                *u.entry(ch).or_insert(0) += 1;
-                            });
-                        }
-                    }
                 }
             });
-            es.set_onmessage(Some(msg_cb.as_ref().unchecked_ref()));
+            ws.set_onmessage(Some(msg_cb.as_ref().unchecked_ref()));
             msg_cb.forget();
 
-            let err_cb = Closure::<dyn FnMut(_)>::new(move |_: web_sys::ErrorEvent| {
-                set_sc_connected.set(false);
-            });
-            es.set_onerror(Some(err_cb.as_ref().unchecked_ref()));
-            err_cb.forget();
-
             on_cleanup(move || {
-                es_cleanup.close();
+                let _ = ws_cleanup.close();
             });
         }
     }
