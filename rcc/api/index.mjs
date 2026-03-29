@@ -9,6 +9,8 @@
  */
 
 import { createServer } from 'http';
+import * as _http from 'http';
+import * as _https from 'https';
 import { readFile, writeFile, mkdir, chmod, appendFile } from 'fs/promises';
 import { existsSync, createReadStream as createRS, readFileSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
@@ -45,6 +47,52 @@ const TUNNEL_STATE_PATH  = process.env.TUNNEL_STATE_PATH  || './data/tunnel-stat
 const TUNNEL_USER        = process.env.TUNNEL_USER        || 'jkh';
 const TUNNEL_AUTH_KEYS   = process.env.TUNNEL_AUTH_KEYS   || '/home/tunnel/.ssh/authorized_keys';
 const TUNNEL_PORT_START  = parseInt(process.env.TUNNEL_PORT_START || '18080', 10);
+
+// ── Services map ───────────────────────────────────────────────────────────
+const SERVICES_CATALOG = [
+  { id: 'rcc-dashboard',    name: 'RCC Dashboard',      url: 'http://146.190.134.110:8789/projects', desc: 'Agent work queue + project tracker',      host: 'do-host1' },
+  { id: 'squirrelbus',      name: 'SquirrelBus Viewer', url: 'http://146.190.134.110:8788/bus',      desc: 'Inter-agent message bus',                  host: 'do-host1' },
+  { id: 'whisper-api',      name: 'Whisper API',        url: 'http://sparky.local:8792',             desc: 'Speech-to-text (sparky GB10)',              host: 'sparky'   },
+  { id: 'agentfs',          name: 'AgentFS',            url: 'http://sparky.local:8791',             desc: 'Content-addressed WASM module store',       host: 'sparky'   },
+  { id: 'usdagent',         name: 'usdagent',           url: 'http://sparky.local:8000',             desc: 'LLM-backed USD 3D asset generator',         host: 'sparky'   },
+  { id: 'milvus',           name: 'Milvus',             url: 'http://100.89.199.14:19121',           desc: 'Vector database (do-host1)',                host: 'do-host1' },
+  { id: 'ollama',           name: 'Ollama',             url: 'http://sparky.local:11434',            desc: 'Local LLM inference',                      host: 'sparky'   },
+];
+const SERVICES_CACHE = { data: null, ts: 0 };
+const SERVICES_CACHE_TTL = 30_000; // 30 seconds
+
+/** Probe a single URL with a 2-second timeout; returns { online, latency_ms } */
+function probeService(rawUrl) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    let parsed;
+    try { parsed = new URL(rawUrl); } catch { return resolve({ online: false, latency_ms: null }); }
+    const lib = parsed.protocol === 'https:' ? _https : _http;
+    const opts = { hostname: parsed.hostname, port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80), path: parsed.pathname || '/', method: 'HEAD', timeout: 2000 };
+    const req = lib.request(opts, (r) => {
+      r.resume(); // drain
+      resolve({ online: true, latency_ms: Date.now() - start });
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ online: false, latency_ms: null }); });
+    req.on('error', () => resolve({ online: false, latency_ms: null }));
+    req.end();
+  });
+}
+
+async function getServicesStatus() {
+  if (SERVICES_CACHE.data && (Date.now() - SERVICES_CACHE.ts) < SERVICES_CACHE_TTL) {
+    return SERVICES_CACHE.data;
+  }
+  const results = await Promise.all(
+    SERVICES_CATALOG.map(async (svc) => {
+      const { online, latency_ms } = await probeService(svc.url);
+      return { ...svc, online, latency_ms };
+    })
+  );
+  SERVICES_CACHE.data = results;
+  SERVICES_CACHE.ts = Date.now();
+  return results;
+}
 
 // ── SquirrelBus paths ──────────────────────────────────────────────────────
 const BUS_LOG_PATH   = process.env.BUS_LOG_PATH   || new URL('../../squirrelbus/bus.jsonl', import.meta.url).pathname;
@@ -569,7 +617,7 @@ const HTML_STYLE = `
 
 function projectsListHtml() {
   return `<!DOCTYPE html><html lang="en"><head>${HTML_STYLE}<title>Projects — RCC</title></head><body>
-  <div class="nav"><a href="/">← RCC</a></div>
+  <div class="nav"><a href="/">← RCC</a> &nbsp;·&nbsp; <a href="/services">Services</a></div>
   <h1>Projects</h1>
   <p class="subtitle">All registered projects tracked by Rocky Command Center</p>
   <div id="root"><p class="spinner">Loading…</p></div>
@@ -593,6 +641,59 @@ function projectsListHtml() {
       if(other.length) sections.push(\`<div class="project-grid">\${other.map(renderCard).join('')}</div>\`);
       root.innerHTML=sections.join('');
     }).catch(e=>{document.getElementById('root').innerHTML='<p class="error">Failed to load projects: '+e.message+'</p>';});
+  </script></body></html>`;
+}
+
+function servicesHtml() {
+  return `<!DOCTYPE html><html lang="en"><head>${HTML_STYLE}
+  <style>
+    .svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem;margin-top:1rem}
+    .svc-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1.25rem 1.5rem;display:flex;flex-direction:column;gap:.5rem}
+    .svc-card:hover{border-color:#58a6ff}
+    .svc-header{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
+    .svc-name{font-size:1rem;font-weight:700}
+    .svc-desc{font-size:.85rem;color:#8b949e;line-height:1.45}
+    .svc-footer{display:flex;align-items:center;justify-content:space-between;margin-top:.25rem;font-size:.8rem}
+    .svc-url a{color:#58a6ff;word-break:break-all}
+    .host-tag{background:#21262d;border:1px solid #30363d;border-radius:4px;padding:.1rem .45rem;font-size:.72rem;color:#8b949e}
+    .status-dot{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;margin-right:.3rem}
+    .status-online{background:#3fb950}
+    .status-offline{background:#f85149}
+    .status-unknown{background:#8b949e}
+    .status-badge-online{color:#3fb950;font-size:.78rem;font-weight:600}
+    .status-badge-offline{color:#f85149;font-size:.78rem;font-weight:600}
+    .status-badge-unknown{color:#8b949e;font-size:.78rem}
+    .latency{color:#8b949e;font-size:.72rem;margin-left:.3rem}
+  </style>
+  <title>Services — RCC</title></head><body>
+  <div class="nav"><a href="/projects">Projects</a> &nbsp;·&nbsp; <a href="/">← RCC</a></div>
+  <h1>Services</h1>
+  <p class="subtitle">Agent infrastructure — live status probed every 30 seconds</p>
+  <div id="root"><p class="spinner">Loading…</p></div>
+  <script>
+    function renderCard(s){
+      const online=s.online;
+      const dotClass=online===null?'status-unknown':online?'status-online':'status-offline';
+      const badgeClass=online===null?'status-badge-unknown':online?'status-badge-online':'status-badge-offline';
+      const badgeText=online===null?'unknown':online?'online':'offline';
+      const latency=online&&s.latency_ms!=null?'<span class="latency">'+s.latency_ms+'ms</span>':'';
+      return \`<div class="svc-card">
+        <div class="svc-header">
+          <span class="svc-name">\${s.name}</span>
+          <span class="\${badgeClass}"><span class="status-dot \${dotClass}"></span>\${badgeText}\${latency}</span>
+        </div>
+        <div class="svc-desc">\${s.desc}</div>
+        <div class="svc-footer">
+          <div class="svc-url"><a href="\${s.url}" target="_blank">\${s.url}</a></div>
+          <span class="host-tag">\${s.host}</span>
+        </div>
+      </div>\`;
+    }
+    fetch('/api/services/status').then(r=>r.json()).then(services=>{
+      const root=document.getElementById('root');
+      if(!services.length){root.innerHTML='<p class="error">No services configured.</p>';return;}
+      root.innerHTML='<div class="svc-grid">'+services.map(renderCard).join('')+'</div>';
+    }).catch(e=>{document.getElementById('root').innerHTML='<p class="error">Failed to load: '+e.message+'</p>';});
   </script></body></html>`;
 }
 
@@ -1051,6 +1152,13 @@ async function handleRequest(req, res) {
     if (method === 'GET' && projectUiMatch) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
       res.end(projectDetailHtml(decodeURIComponent(projectUiMatch[1])));
+      return;
+    }
+
+    // ── UI: GET /services — services map page ────────────────────────────
+    if (method === 'GET' && path === '/services') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      res.end(servicesHtml());
       return;
     }
 
@@ -1631,6 +1739,12 @@ echo "   4. Check tunnel: systemctl --user status rcc-vllm-tunnel"` : ''}
         if (!p) return json(res, 404, { error: 'Provider not found' });
         return json(res, 200, p);
       }
+    }
+
+    // ── GET /api/services/status — public; live probe with 30s cache ─────
+    if (method === 'GET' && path === '/api/services/status') {
+      const statuses = await getServicesStatus();
+      return json(res, 200, statuses);
     }
 
     // ── Auth-required endpoints ───────────────────────────────────────────
