@@ -6,20 +6,13 @@ use wasm_bindgen::prelude::*;
 // All SC data structures live in sc_types.rs — import from there, not here.
 
 use crate::components::sc_types::{
-    ScChannel, ScFile, ScIdentity, ScMessage, ScProject, ScUser,
+    ScChannel, ScFile, ScIdentity, ScMessage, ScProject, ScUser, ScWsFrame,
     DEFAULT_CHANNELS, FALLBACK_AGENT_NAMES,
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Format a unix-ms timestamp as HH:MM:SS for display.
-fn format_msg_ts(ts_ms: u64) -> String {
-    let secs = ts_ms / 1000;
-    let h = (secs / 3600) % 24;
-    let m = (secs / 60) % 60;
-    let s = secs % 60;
-    format!("{:02}:{:02}:{:02}", h, m, s)
-}
+// format_msg_ts is now ScMessage::format_ts() — no standalone helper needed
 
 fn render_text_with_mentions(text: &str) -> impl IntoView {
     let parts: Vec<leptos::View> = text
@@ -101,7 +94,7 @@ fn default_channels() -> Vec<ScChannel> {
         .map(|(id, name)| ScChannel {
             id: id.to_string(),
             name: name.to_string(),
-            kind: Some("public".to_string()),
+            channel_type: Some("public".to_string()),
             ..Default::default()
         })
         .collect()
@@ -211,11 +204,9 @@ fn trigger_send(
         set_messages.update(|msgs| {
             msgs.push(ScMessage {
                 id: None,
-                from: Some(sender_name.clone()),
+                from_agent: Some(sender_name.clone()),
                 text: Some(text_clone),
                 channel: Some(channel_clone),
-                ts: None,
-                mentions: None,
                 ..Default::default()
             });
         });
@@ -236,7 +227,7 @@ pub fn SquirrelChat() -> impl IntoView {
             .map(|(id, name)| ScChannel {
                 id: id.to_string(),
                 name: name.to_string(),
-                kind: Some("public".to_string()),
+                channel_type: Some("public".to_string()),
                 ..Default::default()
             })
             .collect::<Vec<_>>(),
@@ -317,6 +308,51 @@ pub fn SquirrelChat() -> impl IntoView {
                 if data.starts_with(':') || data.is_empty() {
                     return;
                 }
+                // Try parsing as ServerFrame (Rust Axum server) first
+                if let Ok(frame) = serde_json::from_str::<ScWsFrame>(&data) {
+                    match frame {
+                        ScWsFrame::Message { message } => {
+                            let ch = message.channel.clone().unwrap_or_default();
+                            let cur = selected_channel.get_untracked();
+                            if ch == cur || ch.is_empty() {
+                                set_messages.update(|msgs| msgs.push(message));
+                            } else {
+                                set_unread.update(|u| {
+                                    *u.entry(ch).or_insert(0) += 1;
+                                });
+                            }
+                        }
+                        ScWsFrame::Reaction { message_id, reactions } => {
+                            // Update reactions on the matching message
+                            set_messages.update(|msgs| {
+                                if let Some(msg) = msgs.iter_mut().find(|m| m.id == Some(message_id)) {
+                                    msg.reactions.clear();
+                                    for r in &reactions {
+                                        msg.reactions.insert(r.emoji.clone(), r.agents.clone());
+                                    }
+                                }
+                            });
+                        }
+                        ScWsFrame::Presence { agent, online } => {
+                            set_agents.update(|agents| {
+                                if let Some(a) = agents.iter_mut().find(|a| a.id == agent) {
+                                    a.online = online;
+                                    a.status = if online { "online".to_string() } else { "offline".to_string() };
+                                }
+                            });
+                        }
+                        ScWsFrame::Channel { action: _, channel } => {
+                            set_channels.update(|chs| {
+                                if !chs.iter().any(|c| c.id == channel.id) {
+                                    chs.push(channel);
+                                }
+                            });
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+                // Legacy SSE fallback (Node.js server format)
                 #[derive(Deserialize)]
                 struct SseEvent {
                     #[serde(rename = "type")]
@@ -517,12 +553,14 @@ pub fn SquirrelChat() -> impl IntoView {
                                             </span>
                                         })}
                                     </div>
-                                    {proj.tags.as_ref().map(|tags| {
-                                        let tag_views: Vec<_> = tags.iter().map(|t| view! {
+                                    {if !proj.tags.is_empty() {
+                                        let tag_views: Vec<_> = proj.tags.iter().map(|t| view! {
                                             <span class="sc-tag">{t.clone()}</span>
                                         }).collect();
-                                        view! { <div class="sc-tags">{tag_views}</div> }
-                                    })}
+                                        Some(view! { <div class="sc-tags">{tag_views}</div> })
+                                    } else {
+                                        None
+                                    }}
                                 </div>
 
                                 // Files
@@ -542,7 +580,7 @@ pub fn SquirrelChat() -> impl IntoView {
                                         } else {
                                             files.into_iter().map(|f| view! {
                                                 <div class="sc-file-item">
-                                                    <span class="sc-file-name">{f.name.clone()}</span>
+                                                    <span class="sc-file-name">{f.filename.clone()}</span>
                                                     {f.size.map(|s| view! {
                                                         <span class="sc-file-size">{format!("{} B", s)}</span>
                                                     })}
@@ -662,10 +700,8 @@ pub fn SquirrelChat() -> impl IntoView {
                                             }.into_view();
                                         }
                                         msgs.into_iter().enumerate().map(|(i, msg)| {
-                                            let ts = msg.ts
-                                                .map(format_msg_ts)
-                                                .unwrap_or_default();
-                                            let from = msg.from.clone()
+                                            let ts = if msg.ts > 0 { msg.format_ts() } else { String::new() };
+                                            let from = msg.from_agent.clone()
                                                 .unwrap_or_else(|| "?".to_string());
                                             let text = msg.text.clone().unwrap_or_default();
                                             view! {
