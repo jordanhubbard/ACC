@@ -1174,7 +1174,11 @@ SSHCFG
       const envLines = [`RCC_AGENT_TOKEN=${agentToken}`, `RCC_URL=${RCC_PUBLIC_URL}`, `AGENT_NAME=${entry.agent}`, `AGENT_ROLE=${agentRole}`];
       const skipKeys = new Set(['deployKey', 'repoUrl']);
       for (const [k, v] of Object.entries(secrets)) {
-        if (!skipKeys.has(k) && v && typeof v !== 'object') envLines.push(`${k}=${v}`);
+        if (!skipKeys.has(k) && v && typeof v !== 'object') {
+          // Normalize key: slashes/dashes → underscores, uppercase — bash var names must be [A-Z0-9_]
+          const envKey = k.replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase();
+          envLines.push(`${envKey}=${v}`);
+        }
       }
       const envBlock = envLines.join('\n');
 
