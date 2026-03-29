@@ -18,31 +18,6 @@ pub struct Message {
     pub slash_result: Option<String>,
 }
 
-// ── Reaction ─────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Reaction {
-    pub emoji: String,
-    pub count: usize,
-    pub agents: Vec<String>,
-}
-
-impl Reaction {
-    /// Build a Reaction list from the HashMap format.
-    pub fn from_map(map: &HashMap<String, Vec<String>>) -> Vec<Reaction> {
-        let mut out: Vec<Reaction> = map
-            .iter()
-            .map(|(emoji, agents)| Reaction {
-                emoji: emoji.clone(),
-                count: agents.len(),
-                agents: agents.clone(),
-            })
-            .collect();
-        out.sort_by(|a, b| a.emoji.cmp(&b.emoji));
-        out
-    }
-}
-
 // ── Channel ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,14 +71,42 @@ pub struct FileInfo {
 
 // ── WS frames (server → client) ───────────────────────────────────────────────
 
+/// Reaction event carrying the full updated reactions map.
+/// Matches ScReactionEvent in sc_types.rs: { message_id, reactions: HashMap<emoji, Vec<user_id>> }
+#[derive(Debug, Clone, Serialize)]
+pub struct ReactionEventData {
+    pub message_id: String,
+    pub reactions: HashMap<String, Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerFrame {
-    Message { message: Message },
-    Reaction { message_id: i64, reactions: Vec<Reaction> },
-    Presence { agent: String, online: bool },
-    Channel { action: String, channel: Channel },
+    Message { data: Message },
+    MessageEdit { data: MessageEditData },
+    MessageDelete { data: MessageDeleteData },
+    Reaction { data: ReactionEventData },
+    Presence { data: PresenceData },
+    ChannelCreate { data: Channel },
     Connected { session_id: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageEditData {
+    pub id: String,
+    pub text: String,
+    pub edited_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageDeleteData {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PresenceData {
+    pub user: String,
+    pub status: String,
 }
 
 // ── WS frames (client → server) ───────────────────────────────────────────────
