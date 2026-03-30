@@ -2223,8 +2223,8 @@ echo "┌───────────────────────�
 echo "│  Phase 7: vLLM Setup                                    │"
 echo "└─────────────────────────────────────────────────────────┘"
 
-VLLM_MODEL_ID="Qwen/Qwen2.5-72B-Instruct-AWQ"
-VLLM_MODEL_DIR="/tmp/models/Qwen/Qwen2.5-72B-Instruct-AWQ"
+VLLM_MODEL_ID="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8"
+VLLM_MODEL_DIR="/tmp/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8"
 VLLM_PORT=8080
 VLLM_SERVED_MODEL_NAME="nemotron"
 
@@ -2245,7 +2245,7 @@ deactivate
 echo "  ✅ vLLM installed in \$VLLM_VENV"
 
 # Model download (peer-to-peer with HuggingFace fallback)
-echo "→ Acquiring model: \$VLLM_MODEL_ID (~38GB AWQ, fits 49GB L40)"
+echo "→ Acquiring model: \$VLLM_MODEL_ID (~128GB FP8, requires 4x L40 (196GB))"
 mkdir -p "\$VLLM_MODEL_DIR"
 
 if [ -f "\$VLLM_MODEL_DIR/config.json" ]; then
@@ -2306,7 +2306,7 @@ print(' '.join(seeders))
     source "\$VLLM_VENV/bin/activate"
     python3 -c "
 from huggingface_hub import snapshot_download
-snapshot_download(repo_id='Qwen/Qwen2.5-72B-Instruct-AWQ',
+snapshot_download(repo_id='nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8',
   local_dir='\$VLLM_MODEL_DIR', local_dir_use_symlinks=False, resume_download=True)
 print('Download complete')
 "
@@ -2320,7 +2320,7 @@ echo "→ Setting up model seeder (port 18081)..."
 SEEDER_SCRIPT="\$HOME/.rcc/model-seeder.sh"
 cat > "\$SEEDER_SCRIPT" << 'SEEDEOF'
 #!/usr/bin/env bash
-MODEL_DIR="/tmp/models/Qwen/Qwen2.5-72B-Instruct-AWQ"
+MODEL_DIR="/tmp/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8"
 PORT=18081
 PID_FILE="\$HOME/.rcc/model-seeder.pid"
 if [ -f "\$PID_FILE" ] && kill -0 "\$(cat \$PID_FILE)" 2>/dev/null; then
@@ -2456,11 +2456,11 @@ echo "│  Phase 9: vLLM Service                                  │"
 echo "└─────────────────────────────────────────────────────────┘"
 
 VLLM_VENV="\$HOME/.vllm-venv"
-VLLM_MODEL_DIR="/tmp/models/Qwen/Qwen2.5-72B-Instruct-AWQ"
+VLLM_MODEL_DIR="/tmp/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8"
 TP_SIZE=\$(nvidia-smi --list-gpus 2>/dev/null | wc -l || echo 1)
 
 # Container-aware vLLM service setup: systemd user > supervisord > nohup
-VLLM_START_CMD="\$VLLM_VENV/bin/python3 -m vllm.entrypoints.openai.api_server --model \$VLLM_MODEL_DIR --served-model-name qwen2.5-72b --port 8080 --tensor-parallel-size \$TP_SIZE --max-model-len 262144 --enforce-eager --trust-remote-code"
+VLLM_START_CMD="\$VLLM_VENV/bin/python3 -m vllm.entrypoints.openai.api_server --model \$VLLM_MODEL_DIR --served-model-name nemotron --port 8080 --tensor-parallel-size \$TP_SIZE --max-model-len 262144 --enforce-eager --trust-remote-code"
 
 # Re-use HAS_SYSTEMD / HAS_SUPERVISORD detected in phase 8 (or re-detect)
 if [ -z "\${HAS_SYSTEMD:-}" ]; then
