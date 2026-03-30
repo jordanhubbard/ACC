@@ -81,14 +81,20 @@ jobs:
         run: |
           ssh sparky-tunnel "
             set -euo pipefail
-            export PATH=\"\$HOME/.local/bin:\$PATH\"
             DIST=\"\$HOME/.openclaw/workspace/rcc/dashboard/dist\"
             TARBALL=\"/tmp/wasm-dist-$GITHUB_SHA.tar.gz\"
             tar -czf \"\$TARBALL\" -C \"\$DIST\" .
             echo \"Artifact: \$(du -sh \$TARBALL)\"
-            mc alias set minio http://100.89.199.14:9000 rocky2197fb96dde4618aa17f e47696ac5fcd998be6f342bbc47d13bf5f2fcaebae0ba3e1 2>/dev/null || true
-            mc cp \"\$TARBALL\" minio/agents/natasha/wasm-dist-latest.tar.gz
-            mc cp \"\$TARBALL\" minio/agents/natasha/wasm-dist-$GITHUB_SHA.tar.gz
+            curl -sf -X PUT \
+              -H 'Content-Type: application/octet-stream' \
+              --data-binary @\"\$TARBALL\" \
+              'http://100.89.199.14:9000/agents/natasha/wasm-dist-latest.tar.gz' \
+              -u 'rocky2197fb96dde4618aa17f:e47696ac5fcd998be6f342bbc47d13bf5f2fcaebae0ba3e1'
+            curl -sf -X PUT \
+              -H 'Content-Type: application/octet-stream' \
+              --data-binary @\"\$TARBALL\" \
+              'http://100.89.199.14:9000/agents/natasha/wasm-dist-$GITHUB_SHA.tar.gz' \
+              -u 'rocky2197fb96dde4618aa17f:e47696ac5fcd998be6f342bbc47d13bf5f2fcaebae0ba3e1'
             echo 'Published to MinIO'
           "
 
