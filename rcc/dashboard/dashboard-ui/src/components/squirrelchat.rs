@@ -1,12 +1,11 @@
 use leptos::*;
-use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 
 // ─── Types (imported from shared module) ─────────────────────────────────────
 // All SC data structures live in sc_types.rs — import from there, not here.
 
 use crate::components::sc_types::{
-    ScAttachment, ScChannel, ScFile, ScIdentity, ScMessage, ScPresenceMap, ScProject, ScUser,
+    ScChannel, ScFile, ScIdentity, ScMessage, ScPresenceMap, ScProject, ScUser,
     ScWsFrame, DEFAULT_CHANNELS, FALLBACK_AGENT_NAMES,
 };
 
@@ -123,7 +122,7 @@ fn render_inline_markdown(text: &str) -> impl IntoView {
     let line_count = lines.len();
     let rendered: Vec<View> = lines.into_iter().enumerate().map(|(i, line)| {
         let mut parts: Vec<View> = Vec::new();
-        let mut chars = line.char_indices().peekable();
+        let _chars = line.char_indices().peekable();
         let bytes = line.as_bytes();
         let len = line.len();
         let mut pos = 0usize;
@@ -209,6 +208,7 @@ fn render_inline_markdown(text: &str) -> impl IntoView {
     view! { <span>{rendered}</span> }
 }
 
+#[allow(dead_code)]
 fn render_text_with_mentions(text: &str) -> impl IntoView {
     let parts: Vec<leptos::View> = text
         .split(' ')
@@ -764,6 +764,7 @@ pub fn SquirrelChat() -> impl IntoView {
                                 });
                             }
                         }
+                        #[allow(unreachable_patterns)]
                         _ => {}
                     }
                 }
@@ -1118,7 +1119,7 @@ pub fn SquirrelChat() -> impl IntoView {
                         placeholder="🔍 Search messages..."
                         prop:value=move || search_query.get()
                         on:input=move |ev| {
-                            use leptos::ev::Event;
+                            
                             let val = event_target_value(&ev);
                             set_search_query.set(val.clone());
                             if val.trim().is_empty() {
@@ -1459,10 +1460,10 @@ pub fn SquirrelChat() -> impl IntoView {
                                               || text_str.contains(&format!("@{}", current_user_name));
 
                                             // Per-message picker visibility
-                                            let picker_visible = create_memo(move |_| {
+                                            let _picker_visible = create_memo(move |_| {
                                                 picker_msg_id.get() == Some(msg_id)
                                             });
-                                            let (picker_vis_read, _) = create_signal(false);
+                                            let (_picker_vis_read, _) = create_signal(false);
 
                                             view! {
                                                 <div
@@ -1902,7 +1903,7 @@ pub fn SquirrelChat() -> impl IntoView {
                                                     let ch = selected_channel.get_untracked();
                                                     let user = identity.get_untracked().id.clone();
                                                     let set_att = set_attach_data;
-                                                    let set_msgs = set_messages;
+                                                    let _set_msgs = set_messages;
                                                     let set_inp = set_input_text;
                                                     spawn_local(async move {
                                                         let msg_text = if text.trim().is_empty() {

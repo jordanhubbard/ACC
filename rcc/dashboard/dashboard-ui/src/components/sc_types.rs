@@ -51,6 +51,7 @@ pub struct ScAttachment {
     pub created_at: i64,
 }
 
+#[allow(dead_code)]
 impl ScMessage {
     /// Returns true if the given user has reacted with this emoji.
     pub fn user_reacted(&self, user_id: &str, emoji: &str) -> bool {
@@ -120,6 +121,7 @@ pub struct ScUser {
     pub last_seen: Option<i64>,
 }
 
+#[allow(dead_code)]
 impl ScUser {
     pub fn presence_icon(&self) -> &'static str {
         if self.online {
@@ -134,6 +136,7 @@ impl ScUser {
 }
 
 /// Legacy alias — kept until all callers migrate to ScUser
+#[allow(dead_code)]
 pub type ScAgent = ScUser;
 
 // ─── Presence ─────────────────────────────────────────────────────────────────
@@ -202,6 +205,7 @@ pub struct ScIdentity {
 // ─── WebSocket frames ────────────────────────────────────────────────────────
 
 /// Client → Server frames (matching squirrelchat-server's `ClientFrame`)
+#[allow(dead_code)]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ScWsClientFrame {

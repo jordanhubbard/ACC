@@ -1,7 +1,6 @@
 use leptos::*;
 
 use crate::context::DashboardContext;
-use crate::types::QueueItem;
 
 async fn upvote(id: String) -> bool {
     let Ok(resp) = gloo_net::http::Request::post(&format!("/api/upvote/{id}"))

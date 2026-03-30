@@ -144,6 +144,7 @@ pub struct GitCommitAuthor {
 
 // ── GitHub Issues ────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GhIssue {
     pub id: i64,
@@ -159,6 +160,7 @@ pub struct GhIssue {
     pub milestone: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GhIssuesResponse {
     pub ok: Option<bool>,
@@ -167,6 +169,7 @@ pub struct GhIssuesResponse {
     pub last_sync: Option<SyncLog>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SyncLog {
     pub repo: Option<String>,
@@ -177,6 +180,7 @@ pub struct SyncLog {
 
 // ── Projects ─────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Project {
     pub id: String,
@@ -186,6 +190,7 @@ pub struct Project {
 
 // ── Metrics ──────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MetricsData {
     pub queue_depth: Option<u32>,

@@ -13,6 +13,7 @@ pub struct AgentHistoryEntry {
     pub pull_rev: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCapabilities {

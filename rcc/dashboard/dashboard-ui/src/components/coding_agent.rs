@@ -51,6 +51,7 @@ pub struct CrushSession {
     pub cwd: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct CrushMessage {
     pub role: String,
@@ -59,6 +60,7 @@ pub struct CrushMessage {
     pub created: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct CrushSessionDetail {
     pub id: String,
@@ -68,6 +70,7 @@ pub struct CrushSessionDetail {
     pub cwd: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct CrushProject {
     pub path: String,
@@ -86,7 +89,7 @@ pub fn CodingAgent() -> impl IntoView {
     let output = create_rw_signal::<String>(String::new());
     let running = create_rw_signal::<bool>(false);
     let error = create_rw_signal::<Option<String>>(None);
-    let refresh_tick = create_rw_signal::<u32>(0);
+    let _refresh_tick = create_rw_signal::<u32>(0);
     let cwd = create_rw_signal::<String>(String::new());
     let model = create_rw_signal::<String>(String::new());
     let show_diff = create_rw_signal::<bool>(false);
@@ -334,7 +337,7 @@ pub fn CodingAgent() -> impl IntoView {
         let session_detail = session_detail.clone();
         let fetch_sessions = fetch_sessions.clone();
         move |id: String| {
-            let sessions = sessions.clone();
+            let _sessions = sessions.clone();
             let selected = selected_session.clone();
             let detail = session_detail.clone();
             let fetch = fetch_sessions.clone();
@@ -401,7 +404,7 @@ pub fn CodingAgent() -> impl IntoView {
                                     let count = s.message_count.unwrap_or(0);
                                     let selected = selected_session.clone();
                                     let del = delete_session.clone();
-                                    let sel_id = selected_session.get();
+                                    let _sel_id = selected_session.get();
                                     view! {
                                         <div
                                             class="ca-session-item"

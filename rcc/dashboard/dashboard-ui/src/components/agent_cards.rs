@@ -1,7 +1,7 @@
 use leptos::*;
 
 use crate::context::DashboardContext;
-use crate::types::{AgentInfo, AgentList, HeartbeatData, HeartbeatMap};
+use crate::types::{AgentInfo, HeartbeatData};
 
 /// Returns "X min ago", "Xh ago", "Xd ago", or "just now" from an ISO-8601 string.
 /// Falls back to showing just the time if parsing fails.

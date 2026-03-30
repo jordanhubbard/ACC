@@ -34,7 +34,9 @@ async fn fetch_agents() -> AgentList {
 #[derive(Clone)]
 pub struct DashboardContext {
     /// Tick signal — increment to trigger a refresh of all shared resources.
+    #[allow(dead_code)]
     pub tick: ReadSignal<u32>,
+    #[allow(dead_code)]
     pub set_tick: WriteSignal<u32>,
 
     pub queue: Resource<u32, QueueResponse>,
