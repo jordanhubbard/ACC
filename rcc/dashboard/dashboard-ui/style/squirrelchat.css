@@ -965,6 +965,40 @@
   color: var(--teal);
 }
 
+/* DM agent picker dropdown */
+.sc-dm-picker {
+  background: var(--bg-alt, #1e1e2e);
+  border: 1px solid var(--border-dim, #333);
+  border-radius: 6px;
+  margin: 0.25rem 0.5rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.sc-dm-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.15s;
+}
+.sc-dm-picker-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.sc-dm-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #666;
+  flex-shrink: 0;
+}
+.sc-dm-dot.sc-online {
+  background: #3ba55c;
+}
+
 /* Attachments */
 .sc-attachments {
   margin-top: 4px;

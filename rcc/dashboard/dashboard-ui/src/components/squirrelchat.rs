@@ -335,6 +335,14 @@ async fn fetch_sc_agents() -> Vec<ScUser> {
     })
 }
 
+async fn fetch_sc_dms(agent_id: String) -> Vec<ScChannel> {
+    let url = format!("/sc/api/dms?agent={}", agent_id);
+    let Ok(resp) = gloo_net::http::Request::get(&url).send().await else {
+        return vec![];
+    };
+    resp.json::<Vec<ScChannel>>().await.unwrap_or_default()
+}
+
 async fn fetch_sc_projects() -> Vec<ScProject> {
     let Ok(resp) = gloo_net::http::Request::get("/sc/api/projects").send().await else {
         return vec![];
@@ -460,6 +468,7 @@ pub fn SquirrelChat() -> impl IntoView {
     let (search_active, set_search_active) = create_signal(false);
     // DMs
     let (dm_channels, set_dm_channels) = create_signal(Vec::<ScChannel>::new());
+    let (show_dm_picker, set_show_dm_picker) = create_signal(false);
     // File attach
     let (attach_data, set_attach_data) = create_signal(Option::<(String, String, String)>::None); // (filename, mime, b64)
     // Edit/delete/pin
@@ -486,6 +495,17 @@ pub fn SquirrelChat() -> impl IntoView {
     create_effect(move |_| {
         if let Some(msgs) = messages_res.get() {
             set_messages.set(msgs);
+        }
+    });
+
+    // ── Load DMs on mount ──────────────────────────────────────────────────────
+    create_effect(move |_| {
+        let my_id = identity.get().id.clone();
+        if !my_id.is_empty() {
+            spawn_local(async move {
+                let dms = fetch_sc_dms(my_id).await;
+                set_dm_channels.set(dms);
+            });
         }
     });
 
@@ -979,20 +999,60 @@ pub fn SquirrelChat() -> impl IntoView {
                     <div class="sc-section-header">
                         "💬 DMs"
                         <button class="sc-new-btn" title="Start a DM" on:click=move |_| {
-                            // Simple prompt-based DM open — production would use a modal
-                            let my_id = identity.get_untracked().id.clone();
-                            spawn_local(async move {
-                                // Open DM with current identity — noop placeholder that wires the endpoint
-                                // Full modal handled by future PR; endpoint is live
-                                let _ = gloo_net::http::Request::post("/sc/api/dms")
-                                    .json(&serde_json::json!({ "from": my_id, "to": "rocky" }))
-                                    .ok()
-                                    .unwrap()
-                                    .send()
-                                    .await;
-                            });
+                            set_show_dm_picker.update(|v| *v = !*v);
                         }>"+"</button>
                     </div>
+                    // Agent picker modal for starting new DMs
+                    {move || show_dm_picker.get().then(|| {
+                        let agents_list = agents.get();
+                        let my_id = identity.get().id.clone();
+                        view! {
+                            <div class="sc-dm-picker">
+                                {agents_list.iter()
+                                    .filter(|a| a.id != my_id)
+                                    .map(|agent| {
+                                        let agent_id = agent.id.clone();
+                                        let agent_name = agent.name.clone();
+                                        let is_online = agent.online;
+                                        let my_id = my_id.clone();
+                                        view! {
+                                            <div class="sc-dm-picker-item"
+                                                on:click=move |_| {
+                                                    let from = my_id.clone();
+                                                    let to = agent_id.clone();
+                                                    set_show_dm_picker.set(false);
+                                                    spawn_local(async move {
+                                                        if let Ok(resp) = gloo_net::http::Request::post("/sc/api/dms")
+                                                            .json(&serde_json::json!({"from": from, "to": to}))
+                                                            .unwrap()
+                                                            .send()
+                                                            .await
+                                                        {
+                                                            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                                                if let Some(ch) = data.get("channel") {
+                                                                    if let Ok(channel) = serde_json::from_value::<ScChannel>(ch.clone()) {
+                                                                        set_dm_channels.update(|dms| {
+                                                                            if !dms.iter().any(|d| d.id == channel.id) {
+                                                                                dms.push(channel.clone());
+                                                                            }
+                                                                        });
+                                                                        set_selected_channel.set(channel.id);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    });
+                                                }
+                                            >
+                                                <span class="sc-dm-dot" class:sc-online={is_online}></span>
+                                                <span>{agent_name}</span>
+                                            </div>
+                                        }
+                                    }).collect::<Vec<_>>()
+                                }
+                            </div>
+                        }
+                    })}
                     {move || {
                         let dms = dm_channels.get();
                         let my_name = identity.get().name.clone();
