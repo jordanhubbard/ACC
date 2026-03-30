@@ -44,6 +44,9 @@ export class PeerLLMClient {
     this.rccUrl   = (rccUrl   || process.env.RCC_URL    || 'http://localhost:8789').replace(/\/$/, '');
     this.rccToken = rccToken  || process.env.RCC_AGENT_TOKEN || '';
     this.timeoutMs = timeoutMs;
+    // TokenHub fallback — used when no peer endpoint is available in the fleet registry
+    this._tokenhubUrl = (process.env.TOKENHUB_URL || '').replace(/\/$/, '');
+    this._tokenhubKey = process.env.TOKENHUB_AGENT_KEY || '';
     this._cache = null;
     this._cacheTs = 0;
     this._cacheTtl = 60_000; // refresh LLM list every 60s
@@ -79,23 +82,36 @@ export class PeerLLMClient {
   }
 
   async _resolve(modelName, type = 'chat') {
-    // Ask RCC directly for the best endpoint
-    const qs = modelName
-      ? `model=${encodeURIComponent(modelName)}&type=${type}`
-      : `type=${type}`;
-    const result = await this._rccFetch(`/api/llms/best?${qs}`);
-    if (result.error) throw new Error(`No LLM available: ${result.error}`);
-    return result; // { agent, baseUrl, model, ... }
+    // Ask RCC fleet registry for best peer endpoint
+    try {
+      const qs = modelName
+        ? `model=${encodeURIComponent(modelName)}&type=${type}`
+        : `type=${type}`;
+      const result = await this._rccFetch(`/api/llms/best?${qs}`);
+      if (!result.error) return result; // { agent, baseUrl, model, ... }
+    } catch { /* fall through to tokenhub */ }
+
+    // Fallback: route through TokenHub (aggregates local vLLM + NVIDIA NIM)
+    if (this._tokenhubUrl) {
+      return {
+        agent:   'tokenhub',
+        baseUrl: `${this._tokenhubUrl}/v1`,
+        model:   { name: modelName || (type === 'embedding' ? 'text-embedding-3-large' : 'nemotron') },
+        _tokenhubKey: this._tokenhubKey,
+      };
+    }
+
+    throw new Error(`No LLM available for type=${type} model=${modelName || 'any'} — fleet empty and no tokenhub configured`);
   }
 
-  async _peerFetch(baseUrl, path, body) {
+  async _peerFetch(baseUrl, path, body, extraHeaders = {}) {
     const url = `${baseUrl.replace(/\/$/, '')}${path}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const resp = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...extraHeaders },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -125,6 +141,7 @@ export class PeerLLMClient {
   async chat({ model, messages, maxTokens = 1024, temperature = 0.7, agent, ...rest } = {}) {
     const endpoint = await this._resolve(model, 'chat');
     const resolvedModel = model || endpoint.model?.name;
+    const authHeaders = endpoint._tokenhubKey ? { Authorization: `Bearer ${endpoint._tokenhubKey}` } : {};
 
     const response = await this._peerFetch(endpoint.baseUrl, '/chat/completions', {
       model:       resolvedModel,
@@ -132,7 +149,7 @@ export class PeerLLMClient {
       max_tokens:  maxTokens,
       temperature,
       ...rest,
-    });
+    }, authHeaders);
 
     return {
       text:     response.choices?.[0]?.message?.content ?? '',
@@ -154,11 +171,12 @@ export class PeerLLMClient {
   async embed({ model, input, agent } = {}) {
     const endpoint = await this._resolve(model, 'embedding');
     const resolvedModel = model || endpoint.model?.name;
+    const authHeaders = endpoint._tokenhubKey ? { Authorization: `Bearer ${endpoint._tokenhubKey}` } : {};
 
     const response = await this._peerFetch(endpoint.baseUrl, '/embeddings', {
       model: resolvedModel,
       input,
-    });
+    }, authHeaders);
 
     const data = response.data || [];
     const embeddings = data.map(d => d.embedding);

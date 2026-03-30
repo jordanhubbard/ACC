@@ -65,9 +65,14 @@ const SECRETS_MAP = {
   'mattermost/token':            env.MATTERMOST_TOKEN,
   'mattermost/url':              env.MATTERMOST_URL,
 
-  // NVIDIA
+  // NVIDIA (direct gateway — kept for fallback / legacy consumers)
   'nvidia/api_key':              env.NVIDIA_API_KEY,
   'nvidia/api_base':             env.NVIDIA_API_BASE,
+
+  // TokenHub (preferred inference router — aggregates Boris/Sweden + NVIDIA NIM)
+  'tokenhub/url':                env.TOKENHUB_URL,
+  'tokenhub/agent_key':          env.TOKENHUB_AGENT_KEY,
+  'tokenhub/admin_token':        env.TOKENHUB_ADMIN_TOKEN,
 
   // MinIO
   'minio/endpoint':              env.MINIO_ENDPOINT,
