@@ -134,6 +134,15 @@ impl Db {
                 INSERT INTO messages_fts(rowid, text, from_agent, channel)
                 VALUES (new.id, new.text, new.from_agent, new.channel);
             END;
+
+            -- Per-user read cursors: last message ts seen in each channel
+            CREATE TABLE IF NOT EXISTS read_cursors (
+                user_id    TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                last_read  INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER DEFAULT (unixepoch() * 1000),
+                PRIMARY KEY (user_id, channel_id)
+            );
         "#)?;
         Ok(())
     }
@@ -663,6 +672,49 @@ impl Db {
             params![project_id, filename, content, encoding, size, ts],
         )?;
         Ok(())
+    }
+
+    // ── Read cursors / unread counts ─────────────────────────────────────────
+
+    /// Mark a channel as read up to `ts` (milliseconds epoch) for a given user.
+    pub fn upsert_read_cursor(&self, user_id: &str, channel_id: &str, ts: i64) -> Result<()> {
+        let conn = self.0.lock().unwrap();
+        conn.execute(
+            "INSERT INTO read_cursors (user_id, channel_id, last_read, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(user_id, channel_id) DO UPDATE SET
+               last_read  = MAX(excluded.last_read, last_read),
+               updated_at = excluded.updated_at",
+            params![user_id, channel_id, ts, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Returns HashMap<channel_id, unread_count> for the given user.
+    pub fn get_unread_counts(&self, user_id: &str) -> Result<HashMap<String, i64>> {
+        let conn = self.0.lock().unwrap();
+        // For channels where no cursor exists, count is 0 (user hasn't visited).
+        // For channels with a cursor, count messages newer than last_read.
+        let mut stmt = conn.prepare(
+            "SELECT c.id,
+                    COALESCE((
+                        SELECT COUNT(*) FROM messages m
+                        WHERE m.channel = c.id
+                          AND m.ts > COALESCE(
+                              (SELECT last_read FROM read_cursors
+                               WHERE user_id = ?1 AND channel_id = c.id), 0)
+                    ), 0) AS cnt
+             FROM channels c"
+        )?;
+        let mut counts = HashMap::new();
+        let rows = stmt.query_map(params![user_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (ch, cnt) = row?;
+            counts.insert(ch, cnt);
+        }
+        Ok(counts)
     }
 }
 

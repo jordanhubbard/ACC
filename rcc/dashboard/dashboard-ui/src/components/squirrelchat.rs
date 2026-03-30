@@ -528,6 +528,26 @@ pub fn SquirrelChat() -> impl IntoView {
         }
     });
 
+    // ── Load initial unread counts ────────────────────────────────────────────
+    spawn_local(async move {
+        let my_id = identity.get_untracked().id.clone();
+        let url = format!("/sc/api/unread?user={}", my_id);
+        if let Ok(resp) = gloo_net::http::Request::get(&url).send().await {
+            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                let cur = selected_channel.get_untracked();
+                if let Some(obj) = data.get("counts").and_then(|v| v.as_object()) {
+                    set_unread.update(|u| {
+                        for (ch, cnt) in obj {
+                            if ch != &cur {
+                                u.insert(ch.clone(), cnt.as_u64().unwrap_or(0) as u32);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    });
+
     // ── Poll agents every 30 s ────────────────────────────────────────────────
     spawn_local(async move {
         loop {
@@ -675,6 +695,37 @@ pub fn SquirrelChat() -> impl IntoView {
                                 });
                             }
                         }
+                        ScWsFrame::UnreadUpdate { counts } => {
+                            if counts.is_empty() {
+                                // Server broadcast after new message — re-fetch our counts
+                                let my_id = identity.get_untracked().id.clone();
+                                let cur = selected_channel.get_untracked();
+                                spawn_local(async move {
+                                    let url = format!("/sc/api/unread?user={}", my_id);
+                                    if let Ok(resp) = gloo_net::http::Request::get(&url).send().await {
+                                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                            if let Some(obj) = data.get("counts").and_then(|v| v.as_object()) {
+                                                for (ch, cnt) in obj {
+                                                    let n = cnt.as_u64().unwrap_or(0) as u32;
+                                                    let ch = ch.clone();
+                                                    if ch != cur {
+                                                        set_unread.update(|u| { u.insert(ch, n); });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
+                            } else {
+                                // Targeted update (e.g., after mark-read)
+                                let cur = selected_channel.get_untracked();
+                                set_unread.update(|u| {
+                                    for (ch, cnt) in &counts {
+                                        if ch != &cur { u.insert(ch.clone(), *cnt as u32); }
+                                    }
+                                });
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -797,10 +848,19 @@ pub fn SquirrelChat() -> impl IntoView {
                                 class="sc-channel-item"
                                 class:sc-channel-active=move || selected_channel.get() == ch_id
                                 on:click=move |_| {
-                                    set_selected_channel.set(ch_id2.clone());
-                                    set_unread.update(|u| { u.remove(&ch_id2.clone()); });
-                                    set_mentions_unread.update(|u| { u.remove(&ch_id2.clone()); });
+                                    let ch = ch_id2.clone();
+                                    set_selected_channel.set(ch.clone());
+                                    set_unread.update(|u| { u.remove(&ch); });
+                                    set_mentions_unread.update(|u| { u.remove(&ch); });
                                     set_selected_project.set(None);
+                                    // Persist read cursor to server
+                                    let my_id = identity.get_untracked().id.clone();
+                                    spawn_local(async move {
+                                        let url = format!("/sc/api/channels/{}/read", ch);
+                                        let _ = gloo_net::http::Request::post(&url)
+                                            .json(&serde_json::json!({"user": my_id}))
+                                            .map(|r| r.send());
+                                    });
                                 }
                             >
                                 <span>"#" {ch_name}</span>

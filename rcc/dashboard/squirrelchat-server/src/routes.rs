@@ -9,7 +9,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::models::{ServerFrame, Reaction, MessageWire};
+use crate::models::{ServerFrame, Reaction, MessageWire, UnreadCounts};
 use crate::SharedState;
 use crate::ws;
 
@@ -68,6 +68,9 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/projects/:id", get(get_project).patch(update_project).delete(del_project))
         .route("/api/projects/:id/files", get(list_project_files).post(upload_project_file))
         .route("/api/projects/:id/files/:filename", get(get_project_file))
+        // Unread counts / read cursors
+        .route("/api/unread", get(get_unread))
+        .route("/api/channels/:id/read", post(mark_read))
         .layer(Extension(state))
 }
 
@@ -157,6 +160,8 @@ async fn post_message(
     let id = state.db.insert_message(&body.from, &body.text, channel, &mentions, None)?;
     let msg = state.db.get_message(id)?.ok_or_else(|| anyhow::anyhow!("insert failed"))?;
     state.hub.broadcast(&ServerFrame::Message { message: MessageWire::from(msg.clone()) });
+    // Broadcast empty UnreadUpdate as a "refresh needed" signal; clients re-fetch their own counts
+    state.hub.broadcast(&ServerFrame::UnreadUpdate { counts: std::collections::HashMap::new() });
     let wire = MessageWire::from(msg);
     Ok(Json(json!({ "ok": true, "message": wire, "botReply": null })))
 }
@@ -584,6 +589,45 @@ async fn open_dm(
     let ch = state.db.get_or_create_dm(&body.from, &body.to)?;
     state.hub.broadcast(&ServerFrame::Channel { action: "dm_opened".into(), channel: ch.clone() });
     Ok(Json(json!({ "ok": true, "channel": ch })))
+}
+
+// ── Unread counts / read cursors ──────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct UnreadQuery {
+    user: Option<String>,
+}
+
+async fn get_unread(
+    Extension(state): Extension<SharedState>,
+    Query(q): Query<UnreadQuery>,
+) -> R<Json<UnreadCounts>> {
+    let user_id = q.user.as_deref().unwrap_or("anonymous");
+    let counts = state.db.get_unread_counts(user_id)?;
+    Ok(Json(UnreadCounts { counts }))
+}
+
+#[derive(Deserialize)]
+struct MarkReadBody {
+    user: String,
+    /// Millisecond timestamp of the last-seen message; defaults to now if omitted
+    ts: Option<i64>,
+}
+
+async fn mark_read(
+    Extension(state): Extension<SharedState>,
+    Path(channel_id): Path<String>,
+    Json(body): Json<MarkReadBody>,
+) -> R<Json<serde_json::Value>> {
+    let ts = body.ts.unwrap_or_else(|| {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
+    });
+    state.db.upsert_read_cursor(&body.user, &channel_id, ts)?;
+    // Push updated counts to this user's clients via WS broadcast
+    let counts = state.db.get_unread_counts(&body.user)?;
+    state.hub.broadcast(&ServerFrame::UnreadUpdate { counts });
+    Ok(Json(json!({ "ok": true })))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

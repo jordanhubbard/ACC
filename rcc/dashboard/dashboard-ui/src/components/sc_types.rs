@@ -228,6 +228,11 @@ pub enum ScWsFrame {
     Connected { session_id: String },
     /// Transient typing indicator
     Typing { channel: String, agent: String, is_typing: bool },
+    /// Unread counts refresh signal — empty counts = "please re-fetch your own"
+    UnreadUpdate {
+        #[serde(default)]
+        counts: std::collections::HashMap<String, i64>,
+    },
 }
 
 // ─── Project ─────────────────────────────────────────────────────────────────

@@ -137,6 +137,15 @@ pub struct Attachment {
     pub created_at: i64,
 }
 
+// ── Read cursor / unread counts ───────────────────────────────────────────────
+
+/// Response for GET /api/unread?user=<id>
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnreadCounts {
+    /// channel_id → unread message count
+    pub counts: std::collections::HashMap<String, i64>,
+}
+
 // ── WS frames (server → client) ───────────────────────────────────────────────
 // These match ScWsFrame in sc_types.rs exactly.
 
@@ -155,6 +164,8 @@ pub enum ServerFrame {
     Connected { session_id: String },
     /// Transient typing indicator relay
     Typing { channel: String, agent: String, is_typing: bool },
+    /// Unread counts updated — sent to all after a new message, or to one user after mark-read
+    UnreadUpdate { counts: std::collections::HashMap<String, i64> },
 }
 
 // ── WS frames (client → server) ───────────────────────────────────────────────
