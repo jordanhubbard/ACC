@@ -1704,3 +1704,81 @@ button:focus-visible {
   color: var(--subtext0);
   margin-top: 2px;
 }
+
+/* ── AI Suggest ─────────────────────────────────────────────────────────────── */
+.sc-ai-loading {
+    padding: 8px 12px;
+    color: #888;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.sc-ai-spinner {
+    display: inline-block;
+    animation: sc-spin 1s linear infinite;
+}
+@keyframes sc-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+.sc-ai-preview {
+    margin: 8px 0;
+    padding: 10px 12px;
+    background: #1e2a3a;
+    border: 1px solid #2d6a9f;
+    border-radius: 8px;
+}
+.sc-ai-preview-label {
+    font-size: 11px;
+    color: #6fa3d0;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+}
+.sc-ai-textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 8px;
+    background: #111;
+    color: #e0e0e0;
+    border: 1px solid #333;
+    border-radius: 4px;
+    font-size: 14px;
+    resize: vertical;
+    box-sizing: border-box;
+}
+.sc-ai-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+.sc-ai-send {
+    padding: 5px 14px;
+    background: #2d6a9f;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+.sc-ai-send:hover { background: #3a80c0; }
+.sc-ai-discard {
+    padding: 5px 14px;
+    background: #333;
+    color: #aaa;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+.sc-ai-discard:hover { background: #444; color: #ccc; }
+.sc-ai-error {
+    padding: 8px 12px;
+    color: #e05050;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}

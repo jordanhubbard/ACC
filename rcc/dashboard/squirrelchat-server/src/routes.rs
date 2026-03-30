@@ -73,6 +73,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/channels/:id/read", post(mark_read))
         // Voice transcription proxy
         .route("/api/voice/transcribe", post(voice_transcribe))
+        .route("/api/ai/suggest", post(ai_suggest))
         .layer(Extension(state))
 }
 
@@ -673,6 +674,74 @@ async fn voice_transcribe(
             Err(_) => (StatusCode::BAD_GATEWAY, Json(json!({"error": "invalid STT response"}))).into_response(),
         },
         Err(_) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "STT unavailable"}))).into_response(),
+    }
+}
+
+// ── AI Suggest ────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AiSuggestBody {
+    channel_id: String,
+    user_prompt: String,
+    message_count: Option<u32>,
+}
+
+async fn ai_suggest(
+    Extension(state): Extension<SharedState>,
+    Json(body): Json<AiSuggestBody>,
+) -> Response {
+    let count = body.message_count.unwrap_or(10) as i64;
+    let msgs = match state.db.get_messages(&body.channel_id, count, None) {
+        Ok(m) => m,
+        Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "AI service unavailable"}))).into_response(),
+    };
+
+    let history: String = msgs.iter().map(|m| {
+        format!("{}: {}", m.from_agent, m.text)
+    }).collect::<Vec<_>>().join("\n");
+
+    let context = format!(
+        "Channel history (last {} messages):\n{}\n\nUser request: {}",
+        msgs.len(), history, body.user_prompt
+    );
+
+    let api_key = std::env::var("TOKENHUB_API_KEY").unwrap_or_default();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
+
+    let payload = serde_json::json!({
+        "model": "meta/llama-3.3-70b-instruct",
+        "messages": [
+            {"role": "system", "content": "You are a helpful chat assistant. Draft a reply."},
+            {"role": "user", "content": context}
+        ],
+        "max_tokens": 300
+    });
+
+    match client
+        .post("http://localhost:8090/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<serde_json::Value>().await {
+                Ok(data) => {
+                    let suggestion = data["choices"][0]["message"]["content"]
+                        .as_str()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    (StatusCode::OK, Json(json!({"suggestion": suggestion}))).into_response()
+                }
+                Err(_) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "AI service unavailable"}))).into_response(),
+            }
+        }
+        _ => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "AI service unavailable"}))).into_response(),
     }
 }
 
