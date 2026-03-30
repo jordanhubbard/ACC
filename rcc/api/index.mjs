@@ -1710,9 +1710,10 @@ async function handleRequest(req, res) {
           if (source.length > 32768) {
             return json(res, 400, { error: 'Source too large (max 32KB)' });
           }
-          const { execFile, exec: execCmd } = await import('child_process');
+          const { execFile } = await import('child_process');
           const { writeFileSync, unlinkSync, mkdtempSync } = await import('fs');
-          const { join: pathJoin, tmpdir } = await import('path');
+          const { join: pathJoin } = await import('path');
+          const { tmpdir } = await import('os');
 
           const tmpDir = mkdtempSync(pathJoin(tmpdir(), 'nano-playground-'));
           const srcPath = pathJoin(tmpDir, 'prog.nano');
@@ -1729,10 +1730,11 @@ async function handleRequest(req, res) {
             });
           });
 
-          if (compileResult.err && !require('fs').existsSync(binPath)) {
+          const { existsSync, rmdirSync } = await import('fs');
+          if (compileResult.err && !existsSync(binPath)) {
             // Compile error
             try { unlinkSync(srcPath); } catch(_) {}
-            try { require('fs').rmdirSync(tmpDir, { recursive: true }); } catch(_) {}
+            try { rmdirSync(tmpDir, { recursive: true }); } catch(_) {}
             const errMsg = (compileResult.stderr || compileResult.stdout || compileResult.err?.message || 'Compilation failed').trim();
             return json(res, 200, { error: errMsg, exit_code: compileResult.code || 1, stdout: '', stderr: errMsg });
           }
@@ -1747,7 +1749,7 @@ async function handleRequest(req, res) {
           // Cleanup
           try { unlinkSync(srcPath); } catch(_) {}
           try { unlinkSync(binPath); } catch(_) {}
-          try { require('fs').rmdirSync(tmpDir, { recursive: true }); } catch(_) {}
+          try { rmdirSync(tmpDir, { recursive: true }); } catch(_) {}
 
           return json(res, 200, {
             stdout: runResult.stdout.slice(0, 65536),
