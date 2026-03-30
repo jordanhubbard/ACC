@@ -236,6 +236,47 @@ async function notifyJkhCompletion(item, agent) {
   }
 }
 
+// ── Workqueue completion webhooks ─────────────────────────────────────────
+const WEBHOOK_SECRET = process.env.RCC_WEBHOOK_SECRET || 'rcc-webhook-secret-changeme';
+
+async function fireWebhooks(item, agent) {
+  if (!item?.webhook_url) return;
+  const urls = Array.isArray(item.webhook_url) ? item.webhook_url : [item.webhook_url];
+  const payload = JSON.stringify({
+    id: item.id,
+    title: item.title,
+    status: item.status,
+    result: item.result || item.resolution || null,
+    completedAt: item.completedAt || new Date().toISOString(),
+    agent: agent || item.claimedBy || 'unknown',
+    assignee: item.assignee,
+    priority: item.priority,
+    tags: item.tags || [],
+    project: item.project || null,
+  });
+  // HMAC-SHA256 signature over raw payload body
+  const { createHmac } = await import('node:crypto');
+  const sig = createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex');
+  for (const url of urls) {
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-RCC-Signature': `sha256=${sig}`,
+          'X-RCC-Event': 'queue.item.completed',
+          'User-Agent': 'RCC-Webhook/1.0',
+        },
+        body: payload,
+        signal: AbortSignal.timeout(8000),
+      });
+      console.log(`[webhook] ${url} → HTTP ${resp.status}`);
+    } catch (e) {
+      console.warn(`[webhook] ${url} failed: ${e.message}`);
+    }
+  }
+}
+
 // ── Project Slack channel fan-out ─────────────────────────────────────────
 async function fanoutToProjectChannels(projectId, text) {
   if (!SLACK_BOT_TOKEN || !projectId) return;
@@ -3237,7 +3278,7 @@ loadPackages();
       if (!q.completed) q.completed = [];
       q.completed.push(item);
       await writeQueue(q);
-      notifyJkhCompletion(item, agent); // fire-and-forget
+      notifyJkhCompletion(item, agent); fireWebhooks(item, agent); // fire-and-forget
       // Fan-out to project channel
       if (item.project) {
         const resolution = (item.resolution || item.result || '').slice(0, 200);
@@ -3307,7 +3348,7 @@ loadPackages();
       const q = await readQueue();
       const item = q.items?.find(i => i.id === id);
       if (!item) return json(res, 404, { error: 'Item not found' });
-      const allowed = ['title','description','priority','assignee','status','notes','choices','claimedBy','claimedAt','result','completedAt','type','blockedBy','blocks','needsHuman','needsHumanAt','needsHumanReason'];
+      const allowed = ['title','description','priority','assignee','status','notes','choices','claimedBy','claimedAt','result','completedAt','type','blockedBy','blocks','needsHuman','needsHumanAt','needsHumanReason','webhook_url'];
       const now = new Date().toISOString();
       const changed = [];
       for (const field of allowed) {
@@ -3325,7 +3366,7 @@ loadPackages();
           q.items = q.items.filter(i => i.id !== item.id);
           if (!q.completed) q.completed = [];
           q.completed.push(item);
-          if (item.status === 'completed') notifyJkhCompletion(item, body._author); // fire-and-forget
+          if (item.status === 'completed') { notifyJkhCompletion(item, body._author); fireWebhooks(item, body._author); } // fire-and-forget
         }
         await writeQueue(q);
       }
@@ -3647,7 +3688,7 @@ loadPackages();
       item.itemVersion = (item.itemVersion || 0) + 1;
       if (body?.result) item.result = body.result;
       await writeQueue(q);
-      notifyJkhCompletion(item, body?._author || body?.agent); // fire-and-forget
+      notifyJkhCompletion(item, body?._author || body?.agent); fireWebhooks(item, body?._author || body?.agent); // fire-and-forget
 
       // ── requestId linkage: resolve matching delegation on parent ticket ──
       if (item.requestId) {
