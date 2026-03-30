@@ -689,6 +689,12 @@ app.get('/api/stream', (req, res) => {
   });
 });
 
+// SPA catch-all — serve index.html for non-API routes
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  res.sendFile(join(__dirname, 'public', 'index.html'));
+});
+
 const server = createServer(app);
 server.listen(PORT, () => {
   console.log(`SquirrelChat running on http://localhost:${PORT}`);
