@@ -2086,7 +2086,33 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // ── UI: GET /playground — nanolang browser playground ────────────────
+    // ── PROXY: /grievances* → Phoenix grievance registry (localhost:4000) ────────
+    if (path === '/grievances' || path.startsWith('/grievances/')) {
+      const http = await import('http');
+      const proxyPath = req.url; // preserve full path+query
+      const proxyReq = http.request({ host: '127.0.0.1', port: 4000, path: proxyPath, method, headers: { ...req.headers, host: 'localhost' } }, (proxyRes) => {
+        res.writeHead(proxyRes.statusCode, proxyRes.headers);
+        proxyRes.pipe(res);
+      });
+      proxyReq.on('error', () => { res.writeHead(502); res.end('Grievance server unavailable. The irony is noted.'); });
+      req.pipe(proxyReq);
+      return;
+    }
+
+    // ── PROXY: /api/grievances* → Phoenix JSON API (localhost:4000/api/grievances) ────────
+    if (path === '/api/grievances' || path.startsWith('/api/grievances/')) {
+      const http = await import('http');
+      const phoenixPath = req.url; // /api/grievances[/id][?query]
+      const proxyReq = http.request({ host: '127.0.0.1', port: 4000, path: phoenixPath, method, headers: { ...req.headers, host: 'localhost', accept: 'application/json', 'content-type': 'application/json' } }, (proxyRes) => {
+        res.writeHead(proxyRes.statusCode, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+        proxyRes.pipe(res);
+      });
+      proxyReq.on('error', () => { res.writeHead(502); res.end(JSON.stringify({ error: 'Grievance server unavailable. The irony is noted.' })); });
+      req.pipe(proxyReq);
+      return;
+    }
+
+// ── UI: GET /playground — nanolang browser playground ────────────────
     if (method === 'GET' && path === '/playground') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
       res.end(playgroundHtml());
@@ -5921,8 +5947,13 @@ loadPackages();
 
     // ── POST /api/tunnel/shell — register shell-access reverse tunnel ──────
     // Like /api/tunnel/request but allocates from the shell-tunnel port pool (19080+)
+<<<<<<< HEAD
     // and writes a permissive authorized_keys entry that allows reverse port-forwarding
     // to localhost:22 (so Rocky can SSH back into the container).
+=======
+    // and writes an authorized_keys entry that allows reverse port-forwarding to localhost:22
+    // so Rocky can SSH back into the container: ssh -p <port> horde@localhost (from do-host1)
+>>>>>>> ceefd7c700dea26d3a083c00487564ea5ad17024
     // Accepts: { pubkey: "ssh-ed25519 ...", agent: "peabody", label: "peabody-shell-tunnel" }
     // Returns: { port, user, host, ok, keyWritten }
     if (method === 'POST' && path === '/api/tunnel/shell') {
@@ -5949,9 +5980,12 @@ loadPackages();
         assigned = { agent, label, port, pubkey: pubkeyTrimmed, addedAt: new Date().toISOString() };
         shellState.tunnels[agent] = assigned;
         await writeJsonFile(SHELL_TUNNEL_STATE_PATH, shellState);
+<<<<<<< HEAD
 
         // Shell tunnel authorized_keys entry: allow port-forwarding only (no PTY, no commands)
         // The agent will forward its sshd port (22) to do-host1 localhost:<port>
+=======
+>>>>>>> ceefd7c700dea26d3a083c00487564ea5ad17024
         const comment = `rcc-shell-tunnel-${label}`;
         const authKeyEntry = `no-pty,no-agent-forwarding,no-X11-forwarding,permitopen="localhost:${port}" ${pubkeyTrimmed} ${comment}\n`;
         try {
@@ -5996,7 +6030,10 @@ loadPackages();
         agent: assigned.agent,
         keyWritten,
         alreadyExisted,
+<<<<<<< HEAD
         // Rocky uses this to reach the container: ssh -p <port> <container-user>@localhost
+=======
+>>>>>>> ceefd7c700dea26d3a083c00487564ea5ad17024
         connect: `ssh -p ${assigned.port} horde@localhost  # from do-host1`,
         warning: keyWritten ? null : 'authorized_keys write failed — admin must add key manually',
       });
