@@ -5654,6 +5654,100 @@ loadPackages();
       return json(res, 200, result);
     }
 
+    // ── GET /api/agentos/metrics — Prometheus text exposition format ─────────────
+    if (method === 'GET' && path === '/api/agentos/metrics') {
+      // Fetch slot data (has 30s cache already)
+      let slots = [];
+      let watchdogMisses = 0;
+      let gpuQueueDepth = 0;
+      let vibeActive = 0;
+      let vibeIdle = 0;
+      let vibeTotal = 0;
+      let agentPoolTotal = 8;
+      let agentPoolAvailable = 8;
+      try {
+        const slotResp = await fetch('http://127.0.0.1:8789/api/agentos/slots', {
+          headers: { authorization: req.headers.authorization || '' },
+        });
+        if (slotResp.ok) {
+          const d = await slotResp.json();
+          slots = d.vibe_engine?.slots || [];
+          vibeActive = d.vibe_engine?.swap_slots?.active || 0;
+          vibeIdle   = d.vibe_engine?.swap_slots?.idle   || 0;
+          vibeTotal  = d.vibe_engine?.swap_slots?.total  || 4;
+          agentPoolTotal     = d.agent_pool?.total_workers || 8;
+          agentPoolAvailable = d.agent_pool?.available    || 8;
+        }
+      } catch (_) {}
+
+      // Fetch mesh for watchdog + GPU data
+      try {
+        const meshResp = await fetch('http://127.0.0.1:8789/api/mesh', {
+          headers: { authorization: req.headers.authorization || '' },
+        });
+        if (meshResp.ok) {
+          const m = await meshResp.json();
+          // Look for sparky node
+          const sparky = (m.nodes || []).find(n => n.id === 'natasha' || n.host === 'sparky');
+          if (sparky) {
+            watchdogMisses = sparky.watchdog_misses || 0;
+            gpuQueueDepth  = sparky.gpu_queue_depth || 0;
+          }
+        }
+      } catch (_) {}
+
+      const now = Date.now();
+      const lines = [
+        '# HELP agentos_vibe_slots_active Number of active VibeEngine WASM swap slots',
+        '# TYPE agentos_vibe_slots_active gauge',
+        `agentos_vibe_slots_active{host="sparky"} ${vibeActive}`,
+        '',
+        '# HELP agentos_vibe_slots_idle Number of idle VibeEngine WASM swap slots',
+        '# TYPE agentos_vibe_slots_idle gauge',
+        `agentos_vibe_slots_idle{host="sparky"} ${vibeIdle}`,
+        '',
+        '# HELP agentos_vibe_slots_total Total VibeEngine WASM swap slot capacity',
+        '# TYPE agentos_vibe_slots_total gauge',
+        `agentos_vibe_slots_total{host="sparky"} ${vibeTotal}`,
+        '',
+        '# HELP agentos_gpu_queue_depth GPU scheduler pending task queue depth',
+        '# TYPE agentos_gpu_queue_depth gauge',
+        `agentos_gpu_queue_depth{host="sparky"} ${gpuQueueDepth}`,
+        '',
+        '# HELP agentos_watchdog_miss_total Cumulative watchdog heartbeat misses detected',
+        '# TYPE agentos_watchdog_miss_total counter',
+        `agentos_watchdog_miss_total{host="sparky"} ${watchdogMisses}`,
+        '',
+        '# HELP agentos_agent_pool_total Total agent pool worker slots',
+        '# TYPE agentos_agent_pool_total gauge',
+        `agentos_agent_pool_total{host="sparky"} ${agentPoolTotal}`,
+        '',
+        '# HELP agentos_agent_pool_available Available (non-running) agent pool worker slots',
+        '# TYPE agentos_agent_pool_available gauge',
+        `agentos_agent_pool_available{host="sparky"} ${agentPoolAvailable}`,
+        '',
+        '# HELP agentos_scrape_timestamp_seconds Unix timestamp of last metrics scrape',
+        '# TYPE agentos_scrape_timestamp_seconds gauge',
+        `agentos_scrape_timestamp_seconds{host="sparky"} ${(now/1000).toFixed(3)}`,
+        '',
+      ];
+
+      // Per-slot metrics
+      lines.push('# HELP agentos_slot_state VibeEngine slot state (1=active, 0=idle)');
+      lines.push('# TYPE agentos_slot_state gauge');
+      for (const slot of slots) {
+        lines.push(`agentos_slot_state{host="sparky",slot="${slot.id}"} ${slot.state === 'active' ? 1 : 0}`);
+      }
+      lines.push('');
+
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+        'Cache-Control': 'no-cache',
+      });
+      res.end(lines.join('\n'));
+      return;
+    }
+
     // ── GET /api/mesh — agentOS distributed mesh topology + slot health ────────
     if (method === 'GET' && path === '/api/mesh') {
       const now = Date.now();
