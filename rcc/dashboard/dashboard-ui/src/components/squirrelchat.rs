@@ -493,6 +493,11 @@ pub fn SquirrelChat() -> impl IntoView {
     // Debounce timer for stop-typing events (StoredValue is Copy — safe in reactive closures)
     let typing_timeout = store_value(Option::<gloo_timers::callback::Timeout>::None);
 
+    // AI suggest state
+    let (ai_loading, set_ai_loading) = create_signal(false);
+    let (ai_suggestion, set_ai_suggestion) = create_signal(String::new());
+    let (ai_error, set_ai_error) = create_signal(false);
+
     let chat_ref = create_node_ref::<leptos::html::Div>();
 
     // ── Load messages when channel changes ────────────────────────────────────
@@ -1856,6 +1861,51 @@ pub fn SquirrelChat() -> impl IntoView {
                                     }
                                 }}
 
+                                {move || if ai_loading.get() {
+                                    view! {
+                                        <div class="sc-ai-loading">
+                                            <span class="sc-ai-spinner">"⟳"</span>
+                                            " AI is drafting a reply…"
+                                        </div>
+                                    }.into_view()
+                                } else if ai_error.get() {
+                                    view! {
+                                        <div class="sc-ai-error">
+                                            "AI unavailable"
+                                            <button class="sc-ai-discard" on:click=move |_| set_ai_error.set(false)>"✕"</button>
+                                        </div>
+                                    }.into_view()
+                                } else if !ai_suggestion.get().is_empty() {
+                                    view! {
+                                        <div class="sc-ai-preview">
+                                            <div class="sc-ai-preview-label">"AI draft:"</div>
+                                            <textarea
+                                                class="sc-ai-textarea"
+                                                prop:value=move || ai_suggestion.get()
+                                                on:input=move |ev| set_ai_suggestion.set(event_target_value(&ev))
+                                            />
+                                            <div class="sc-ai-actions">
+                                                <button class="sc-ai-send" on:click=move |_| {
+                                                    let text = ai_suggestion.get_untracked();
+                                                    set_ai_suggestion.set(String::new());
+                                                    set_input_text.set(text);
+                                                    trigger_send(
+                                                        input_text, set_input_text,
+                                                        selected_channel, set_messages,
+                                                        sending, set_sending, set_mention_query,
+                                                        identity,
+                                                    );
+                                                }>"Send"</button>
+                                                <button class="sc-ai-discard" on:click=move |_| {
+                                                    set_ai_suggestion.set(String::new());
+                                                }>"Discard"</button>
+                                            </div>
+                                        </div>
+                                    }.into_view()
+                                } else {
+                                    ().into_view()
+                                }}
+
                                 <div class="sc-input-area">
                                     {move || {
                                         let suggestions = mention_suggestions.get();
@@ -1932,6 +1982,46 @@ pub fn SquirrelChat() -> impl IntoView {
                                             on:keydown=move |ev: web_sys::KeyboardEvent| {
                                                 if ev.key() == "Enter" && ev.ctrl_key() {
                                                     ev.prevent_default();
+                                                    let text = input_text.get_untracked();
+                                                    // Check for /ai command
+                                                    if text.trim_start().starts_with("/ai ") {
+                                                        let prompt = text.trim_start()
+                                                            .trim_start_matches("/ai ")
+                                                            .trim()
+                                                            .to_string();
+                                                        let ch = selected_channel.get_untracked();
+                                                        set_input_text.set(String::new());
+                                                        set_ai_loading.set(true);
+                                                        set_ai_suggestion.set(String::new());
+                                                        set_ai_error.set(false);
+                                                        spawn_local(async move {
+                                                            let payload = serde_json::json!({
+                                                                "channel_id": ch,
+                                                                "user_prompt": prompt,
+                                                                "message_count": 10
+                                                            });
+                                                            match gloo_net::http::Request::post("/sc/api/ai/suggest")
+                                                                .json(&payload)
+                                                                .and_then(|req| Ok(req))
+                                                            {
+                                                                Ok(req) => match req.send().await {
+                                                                    Ok(resp) if resp.status() == 200 => {
+                                                                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                                                            let suggestion = data["suggestion"]
+                                                                                .as_str()
+                                                                                .unwrap_or("")
+                                                                                .to_string();
+                                                                            set_ai_suggestion.set(suggestion);
+                                                                        }
+                                                                    }
+                                                                    _ => { set_ai_error.set(true); }
+                                                                },
+                                                                Err(_) => { set_ai_error.set(true); }
+                                                            }
+                                                            set_ai_loading.set(false);
+                                                        });
+                                                        return;
+                                                    }
                                                     // Cancel typing and send stop before sending
                                                     typing_timeout.update_value(|t| { *t = None; });
                                                     let my_name = identity.get_untracked().name.clone();
