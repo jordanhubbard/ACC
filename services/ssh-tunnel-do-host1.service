@@ -1,0 +1,22 @@
+[Unit]
+Description=Reverse SSH tunnel to do-host1 (CI proxy for GitHub Actions)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=jkh
+ExecStart=/usr/bin/ssh \
+ -N \
+ -o ServerAliveInterval=30 \
+ -o ServerAliveCountMax=3 \
+ -o ExitOnForwardFailure=yes \
+ -o StrictHostKeyChecking=no \
+ -o BatchMode=yes \
+ -R 2222:127.0.0.1:22 \
+ -i /home/jkh/.ssh/rocky_ci_tunnel \
+ jkh@146.190.134.110
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
