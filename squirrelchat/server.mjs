@@ -789,7 +789,7 @@ app.get('/api/stream', (req, res) => {
 });
 
 // SPA catch-all — serve index.html for non-API routes
-app.get('*', (req, res, next) => {
+app.get('/{*path}', (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
