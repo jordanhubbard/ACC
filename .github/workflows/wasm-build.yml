@@ -22,49 +22,61 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Route: CI runner → do-host1/Rocky (ROCKY_HOST, public DigitalOcean IP)
-      #        → sparky LAN (10.11.100.116:22) via native SSH ProxyJump
+      # Route: CI runner joins tailnet → ssh via `tailscale nc` ProxyCommand → sparky:22
       #
-      # Why not Tailscale direct:
-      # sparky has GlobalProtect VPN (gpd0, pangp policy routing) that conflicts
-      # with Tailscale kernel routing. tailscale ping works (userspace) but TCP
-      # connections time out. do-host1 is confirmed reachable from sparky LAN.
+      # Why tailscale nc:
+      # sparky has GlobalProtect VPN (gpd0) with policy routing rules (pangp.include
+      # at priority 5209) that sit above Tailscale's table 52 (priority 5270).
+      # Kernel TCP to sparky's Tailscale IP times out. But `tailscale nc` uses
+      # Tailscale's userspace path, completely bypassing the kernel routing table.
+      # No ProxyJump through Rocky needed — direct userspace tunnel.
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          args: "--ephemeral --accept-routes"
+
+      - name: Wait for Tailscale to be ready
+        run: |
+          echo "Waiting for Tailscale to be fully connected..."
+          for i in $(seq 1 30); do
+            if tailscale status --json | jq -e '.Self.Online' > /dev/null 2>&1; then
+              echo "Tailscale is online (attempt $i)"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+          tailscale status
+          echo "Testing tailscale nc to sparky (100.87.229.125:22)..."
+          timeout 15 tailscale nc 100.87.229.125 22 < /dev/null | head -c 100 || true
+          echo ""
+          echo "tailscale nc test complete"
+
       - name: Set up SSH keys
         env:
-          ROCKY_HOST: ${{ secrets.ROCKY_HOST }}
-          ROCKY_SSH_KEY: ${{ secrets.ROCKY_SSH_KEY }}
           SPARKY_SSH_KEY: ${{ secrets.SPARKY_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "$ROCKY_SSH_KEY" > ~/.ssh/rocky_key
           printf '%s\n' "$SPARKY_SSH_KEY" > ~/.ssh/sparky_key
-          chmod 600 ~/.ssh/rocky_key ~/.ssh/sparky_key
+          chmod 600 ~/.ssh/sparky_key
 
-          # Write SSH config using env var (not inline secret — GHA redacts those in heredocs)
-          cat >> ~/.ssh/config << EOF
-          Host do-host1
-            HostName $ROCKY_HOST
-            User jkh
-            IdentityFile ~/.ssh/rocky_key
-            StrictHostKeyChecking no
-            ConnectTimeout 15
-
-          Host sparky-lan
-            HostName 10.11.100.116
+          cat >> ~/.ssh/config << 'EOF'
+          Host sparky
+            HostName 100.87.229.125
             User jkh
             IdentityFile ~/.ssh/sparky_key
             StrictHostKeyChecking no
             ConnectTimeout 30
-            ProxyJump do-host1
+            ProxyCommand tailscale nc %h %p
           EOF
 
-          # Verify each hop
-          ssh do-host1 "echo 'Rocky: OK'"
-          ssh sparky-lan "echo 'sparky: OK via ProxyJump'"
+          # Verify connection
+          ssh sparky "echo 'sparky: OK via tailscale nc'"
 
       - name: Run build on sparky
         run: |
-          ssh sparky-lan << 'REMOTE'
+          ssh sparky << 'REMOTE'
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           source "$HOME/.cargo/env"
@@ -89,7 +101,7 @@ jobs:
 
       - name: Package and publish dist artifact to MinIO
         run: |
-          ssh sparky-lan TARBALL="/tmp/wasm-dist-${{ github.sha }}.tar.gz" << 'REMOTE'
+          ssh sparky TARBALL="/tmp/wasm-dist-${{ github.sha }}.tar.gz" << 'REMOTE'
           set -euo pipefail
           export PATH="$HOME/.local/bin:$PATH"
 
@@ -100,7 +112,6 @@ jobs:
           python3 << 'PYEOF'
           import urllib.request, hmac, hashlib, datetime, os, sys
 
-          import os
           tarball = os.environ["TARBALL"]
           payload = open(tarball, "rb").read()
 
@@ -147,7 +158,7 @@ jobs:
 
       - name: Run dashboard-server unit tests on sparky
         run: |
-          ssh sparky-lan << 'REMOTE'
+          ssh sparky << 'REMOTE'
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:$PATH"
           source "$HOME/.cargo/env"
