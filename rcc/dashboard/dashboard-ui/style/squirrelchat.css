@@ -1641,3 +1641,66 @@ button:focus-visible {
   66%  { content: '..'; }
   100% { content: '...'; }
 }
+
+/* ── Thread Polish ──────────────────────────────────────────────────────────── */
+
+/* New-reply badge on thread button */
+.sc-thread-new-badge {
+  background: var(--red);
+  color: #fff;
+  border-radius: 8px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 4px;
+  animation: sc-thread-pulse 1.5s ease infinite;
+}
+
+@keyframes sc-thread-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Reply count with new replies */
+.sc-reply-count.sc-reply-new {
+  color: var(--red);
+  font-weight: 700;
+}
+
+/* Active threads sidebar */
+.sc-thread-sidebar-item {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  border-left: 2px solid var(--surface2);
+  margin-bottom: 2px;
+  transition: background 0.1s;
+}
+
+.sc-thread-sidebar-item:hover {
+  background: var(--surface2);
+  border-left-color: var(--blue);
+}
+
+.sc-thread-sidebar-item.sc-thread-has-new {
+  border-left-color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.sc-thread-preview {
+  display: block;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sc-thread-reply-count {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--subtext0);
+  margin-top: 2px;
+}

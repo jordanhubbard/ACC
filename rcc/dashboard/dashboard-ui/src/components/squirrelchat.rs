@@ -480,6 +480,8 @@ pub fn SquirrelChat() -> impl IntoView {
     let (sidebar_open, set_sidebar_open) = create_signal(false);
     // Presence map — polled every 30s
     let (presence, set_presence) = create_signal(ScPresenceMap::default());
+    // Thread unread counts: parent_msg_id → new_reply_count since thread last opened
+    let (thread_unreads, set_thread_unreads) = create_signal(std::collections::HashMap::<i64, u32>::new());
     // Per-agent voice config
     let (voice_configs, set_voice_configs) = create_signal(default_voice_config());
     // Voice config panel visibility
@@ -666,6 +668,20 @@ pub fn SquirrelChat() -> impl IntoView {
                         ScWsFrame::Message { message } => {
                             let ch = message.channel.clone().unwrap_or_default();
                             let cur = selected_channel.get_untracked();
+
+                            // Thread reply: update parent reply_count, don't show in main list
+                            if let Some(parent_id) = message.thread_id {
+                                set_messages.update(|msgs| {
+                                    if let Some(parent) = msgs.iter_mut().find(|m| m.id == Some(parent_id)) {
+                                        parent.reply_count += 1;
+                                    }
+                                });
+                                // Track unread thread replies
+                                set_thread_unreads.update(|u| {
+                                    *u.entry(parent_id).or_insert(0) += 1;
+                                });
+                                // Don't fall through to normal message handling
+                            } else {
                             // Check if current user is @mentioned in this message
                             let my_id = identity.get_untracked().id.clone();
                             let my_name = identity.get_untracked().name.clone();
@@ -713,6 +729,7 @@ pub fn SquirrelChat() -> impl IntoView {
                                     maybe_notify(&notif_title, &notif_body);
                                 }
                             }
+                            } // close else (non-thread-reply)
                         }
                         ScWsFrame::Reaction { message_id, reactions } => {
                             set_messages.update(|msgs| {
@@ -1018,6 +1035,52 @@ pub fn SquirrelChat() -> impl IntoView {
                         }).collect::<Vec<_>>()
                     }}
                 </div>
+
+                // Active Threads
+                {move || {
+                    // Collect messages with reply_count > 0, ordered by recency
+                    let threaded: Vec<ScMessage> = messages.get().into_iter()
+                        .filter(|m| m.reply_count > 0)
+                        .collect();
+                    if threaded.is_empty() {
+                        ().into_view()
+                    } else {
+                        let unreads = thread_unreads.get();
+                        view! {
+                            <div class="sc-sidebar-section">
+                                <div class="sc-section-header">
+                                    "💬 Threads"
+                                    {let total_new: u32 = unreads.values().sum();
+                                    if total_new > 0 {
+                                        view! { <span class="sc-online-count" title="new replies">{total_new}" new"</span> }.into_view()
+                                    } else { ().into_view() }}
+                                </div>
+                                {threaded.into_iter().take(5).map(|msg| {
+                                    let msg_id = msg.id.unwrap_or(0);
+                                    let text_preview = msg.text.as_deref().unwrap_or("").chars().take(40).collect::<String>();
+                                    let rc = msg.reply_count;
+                                    let new_n = unreads.get(&msg_id).copied().unwrap_or(0);
+                                    let msg_clone = msg.clone();
+                                    view! {
+                                        <div class="sc-thread-sidebar-item"
+                                            class:sc-thread-has-new=move || new_n > 0
+                                            on:click=move |_| {
+                                                set_thread_unreads.update(|u| { u.remove(&msg_id); });
+                                                set_selected_thread.set(Some(msg_clone.clone()));
+                                            }
+                                        >
+                                            <span class="sc-thread-preview">{text_preview}"..."</span>
+                                            <span class="sc-thread-reply-count">
+                                                {rc} " repl" {if rc == 1 {"y"} else {"ies"}}
+                                                {if new_n > 0 { view! { <span class="sc-thread-new-badge">{new_n}" new"</span> }.into_view() } else { ().into_view() }}
+                                            </span>
+                                        </div>
+                                    }
+                                }).collect::<Vec<_>>()}
+                            </div>
+                        }.into_view()
+                    }
+                }}
 
                 // Direct Messages
                 <div class="sc-sidebar-section">
