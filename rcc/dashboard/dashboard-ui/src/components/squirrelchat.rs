@@ -8,6 +8,7 @@ use crate::components::sc_types::{
     ScChannel, ScFile, ScIdentity, ScMessage, ScPresenceMap, ScProject, ScUser,
     ScWsFrame, DEFAULT_CHANNELS, FALLBACK_AGENT_NAMES,
 };
+use crate::components::sc_voice::{default_voice_config, play_tts_with_label, VoiceConfigPanel};
 
 // ─── Browser notification helper ─────────────────────────────────────────────
 
@@ -1071,10 +1072,10 @@ pub fn SquirrelChat() -> impl IntoView {
                                     let msg_clone = msg.clone();
                                     view! {
                                         <div class="sc-thread-sidebar-item"
-                                            class:sc-thread-has-new=move || new_n > 0
+                                            class:sc-thread-has-new=move || new_n != 0
                                             on:click=move |_| {
                                                 set_thread_unreads.update(|u| { u.remove(&msg_id); });
-                                                set_selected_thread.set(Some(msg_clone.clone()));
+                                                set_thread_parent.set(Some(msg_clone.clone()));
                                             }
                                         >
                                             <span class="sc-thread-preview">{text_preview}"..."</span>

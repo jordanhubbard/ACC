@@ -15,6 +15,7 @@ use crate::components::{
     kanban::Kanban,
     metrics::Metrics,
     providers::Providers,
+    services::Services,
     squirrelbus::SquirrelBus,
     squirrelchat::SquirrelChat,
     work_queue::WorkQueue,
@@ -77,6 +78,11 @@ pub fn App() -> impl IntoView {
                         class:tab-active=move || tab.get() == 7
                         on:click=move |_| set_tab.set(7)
                     >"⚡ Coding"</button>
+                    <button
+                        class="tab-btn"
+                        class:tab-active=move || tab.get() == 8
+                        on:click=move |_| set_tab.set(8)
+                    >"🗺️ Services"</button>
                 </div>
             </header>
             <main class="dash-main">
@@ -89,6 +95,7 @@ pub fn App() -> impl IntoView {
                     5 => view! { <Issues /> }.into_view(),
                     6 => view! { <Providers /> }.into_view(),
                     7 => view! { <CodingAgent /> }.into_view(),
+                    8 => view! { <Services /> }.into_view(),
                     _ => view! {
                         <div class="dash-main-content">
                             <div class="dash-row dash-row-top">

@@ -1,3 +1,6 @@
+use leptos::*;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 
 // ─── Sprint 2: Speaker labels, streaming TTS, per-agent voice config ──────────
 
@@ -99,7 +102,6 @@ fn play_audio_bytes(bytes: &[u8]) {
     blob_opts.set_type("audio/wav");
     let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&blob_parts.unchecked_into(), &blob_opts) else { return };
     // create_object_url is a static method in js_sys / manual binding; use gloo_file instead
-    use wasm_bindgen::JsCast;
     let url_result = js_sys::eval(&format!(
         "URL.createObjectURL(new Blob([new Uint8Array({:?})], {{type:'audio/wav'}}))",
         bytes

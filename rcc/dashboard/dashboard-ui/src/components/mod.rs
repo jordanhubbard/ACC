@@ -16,6 +16,8 @@ pub mod sc_channel_modal;
 pub mod sc_reactions;
 pub mod sc_thread;
 pub mod sc_types;
+pub mod sc_voice;
+pub mod services;
 pub mod squirrelbus;
 pub mod squirrelchat;
 pub mod work_queue;
