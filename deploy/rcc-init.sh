@@ -213,6 +213,9 @@ AGENT_GPU_VRAM_GB=${AGENT_GPU_VRAM_GB}
 # ── NVIDIA Inference ───────────────────────────────────────────────────────
 NVIDIA_API_BASE=https://inference-api.nvidia.com/v1
 NVIDIA_API_KEY=${NVIDIA_API_KEY}
+# TokenHub — preferred inference router (aggregates local vLLM + NVIDIA NIM)
+TOKENHUB_URL=http://146.190.134.110:8090
+TOKENHUB_AGENT_KEY=${TOKENHUB_AGENT_KEY:-}
 
 # ── Storage: MinIO ─────────────────────────────────────────────────────────
 MINIO_ENDPOINT=${MINIO_ENDPOINT}

@@ -183,6 +183,8 @@ _secret() { node -e "
 " <<< "$BOOTSTRAP_JSON" 2>/dev/null || true; }
 
 [[ -z "$NVIDIA_KEY"        ]] && NVIDIA_KEY=$(_secret        "NVIDIA_API_KEY"     "nvidia_api_key")
+[[ -z "$TOKENHUB_URL"      ]] && TOKENHUB_URL=$(_secret      "TOKENHUB_URL"       "tokenhub_url")
+[[ -z "$TOKENHUB_KEY"      ]] && TOKENHUB_KEY=$(_secret      "TOKENHUB_AGENT_KEY" "tokenhub_agent_key")
 [[ -z "$MATTERMOST_TOKEN"  ]] && MATTERMOST_TOKEN=$(_secret  "MATTERMOST_TOKEN"   "mattermost_token")
 [[ -z "$TELEGRAM_TOKEN"    ]] && TELEGRAM_TOKEN=$(_secret    "TELEGRAM_BOT_TOKEN" "telegram_token")
 
@@ -378,6 +380,9 @@ RCC_URL=${RCC_URL}
 AGENT_HOST=$(hostname)
 NVIDIA_API_BASE=https://inference-api.nvidia.com/v1
 NVIDIA_API_KEY=${NVIDIA_KEY}
+# TokenHub — preferred inference router (aggregates local vLLM + NVIDIA NIM)
+TOKENHUB_URL=${TOKENHUB_URL:-http://146.190.134.110:8090}
+TOKENHUB_AGENT_KEY=${TOKENHUB_KEY}
 ENVEOF
 chmod 600 "$ENV_FILE"
 
