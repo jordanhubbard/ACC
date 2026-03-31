@@ -1420,3 +1420,198 @@ html, body {
   background: var(--accent);
   color: #fff;
 }
+
+
+/* ── Timeline ──────────────────────────────────────────────────────────────── */
+.tl-container {
+  padding: 1rem 1.5rem;
+  position: relative;
+}
+
+.tl-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+
+.tl-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.tl-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tl-updated {
+  font-size: 11px;
+  color: var(--text-dimmer);
+}
+
+.tl-refresh-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.tl-refresh-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tl-subtitle {
+  font-size: 12px;
+  color: var(--text-dimmer);
+  margin-bottom: 0.85rem;
+}
+
+.tl-spinner {
+  color: var(--text-dim);
+  font-size: 13px;
+  padding: 1rem 0;
+}
+
+/* Legend */
+.tl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.85rem;
+  margin-bottom: 1rem;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.tl-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tl-legend-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Panel */
+.tl-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+}
+
+/* Row */
+.tl-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.tl-slot-label {
+  min-width: 3.8rem;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dimmer);
+  flex-shrink: 0;
+}
+
+/* Axis */
+.tl-axis {
+  position: relative;
+  height: 24px;
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border-subtle, #21262d);
+  border-radius: 4px;
+  min-width: 280px;
+}
+
+/* Markers */
+.tl-marker {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.tl-marker:hover {
+  transform: translate(-50%, -50%) scale(1.8) !important;
+}
+
+.tl-marker-fault {
+  border-radius: 2px;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.tl-marker-fault:hover {
+  transform: translate(-50%, -50%) rotate(45deg) scale(1.8) !important;
+}
+
+/* Time axis labels */
+.tl-time-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dimmer);
+  margin-top: 0.3rem;
+  padding: 0 0 0.1rem;
+}
+
+/* Tooltip */
+.tl-tooltip {
+  position: fixed;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.7rem;
+  font-size: 12px;
+  color: var(--text);
+  pointer-events: none;
+  z-index: 300;
+  max-width: 240px;
+  line-height: 1.5;
+  top: 50%;
+  left: 50%;
+}
+
+.tl-tooltip-hidden {
+  display: none;
+}
+
+.tl-tooltip-visible {
+  display: block;
+}
+
+.tl-tt-type {
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+.tl-tt-meta {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.tl-tt-detail {
+  color: var(--text);
+  font-size: 11px;
+  margin-top: 3px;
+  word-break: break-word;
+}

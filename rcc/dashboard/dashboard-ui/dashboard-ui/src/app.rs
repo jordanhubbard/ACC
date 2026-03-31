@@ -18,6 +18,7 @@ use crate::components::{
     services::Services,
     squirrelbus::SquirrelBus,
     squirrelchat::SquirrelChat,
+    timeline::Timeline,
     work_queue::WorkQueue,
 };
 
@@ -83,6 +84,11 @@ pub fn App() -> impl IntoView {
                         class:tab-active=move || tab.get() == 8
                         on:click=move |_| set_tab.set(8)
                     >"🗺️ Services"</button>
+                    <button
+                        class="tab-btn"
+                        class:tab-active=move || tab.get() == 9
+                        on:click=move |_| set_tab.set(9)
+                    >"⏱️ Timeline"</button>
                 </div>
             </header>
             <main class="dash-main">
@@ -96,6 +102,7 @@ pub fn App() -> impl IntoView {
                     6 => view! { <Providers /> }.into_view(),
                     7 => view! { <CodingAgent /> }.into_view(),
                     8 => view! { <Services /> }.into_view(),
+                    9 => view! { <Timeline /> }.into_view(),
                     _ => view! {
                         <div class="dash-main-content">
                             <div class="dash-row dash-row-top">

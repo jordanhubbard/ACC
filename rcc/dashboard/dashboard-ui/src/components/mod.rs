@@ -20,4 +20,5 @@ pub mod sc_voice;
 pub mod services;
 pub mod squirrelbus;
 pub mod squirrelchat;
+pub mod timeline;
 pub mod work_queue;
