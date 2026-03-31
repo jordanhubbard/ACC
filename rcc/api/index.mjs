@@ -6240,6 +6240,113 @@ loadPackages();
       return json(res, 200, result);
     }
 
+    // ── GET /api/agentos/debug/sessions — list active debug bridge sessions ────
+    // Returns simulated debug session state from the debug_bridge PD.
+    // In production, this would poll the debug_ring shared memory via AgentFS.
+    if (method === 'GET' && path === '/api/agentos/debug/sessions') {
+      if (!global._debugSessions) global._debugSessions = [];
+      const sessions = global._debugSessions.filter(s => s.status === 'attached');
+      return json(res, 200, {
+        ok: true,
+        ts: new Date().toISOString(),
+        sessions: sessions.map(s => ({
+          session_id: s.id,
+          slot_id: s.slot_id,
+          attached_at: s.attached_at,
+          breakpoints: s.breakpoints || [],
+          status: s.status,
+          nano_source: s.nano_source || null,
+          wasm_map: s.wasm_map || null,
+        })),
+        total: sessions.length,
+      });
+    }
+
+    // ── POST /api/agentos/debug/attach — attach debugger to a WASM slot ────────
+    // Creates a debug session for a given slot. In production, this would PPC
+    // to the debug_bridge PD via OP_DBG_ATTACH (0x70) through the controller.
+    const debugAttachMatch = path.match(/^\/api\/agentos\/debug\/attach$/);
+    if (method === 'POST' && debugAttachMatch) {
+      const body = await readBody(req);
+      const slot_id = body.slot_id ?? body.slotId;
+      if (slot_id === undefined || slot_id === null) {
+        return json(res, 400, { error: 'slot_id required' });
+      }
+      if (!global._debugSessions) global._debugSessions = [];
+      // Check for existing session on this slot
+      const existing = global._debugSessions.find(s => s.slot_id === slot_id && s.status === 'attached');
+      if (existing) {
+        return json(res, 409, { error: `Slot ${slot_id} already has debug session ${existing.id}` });
+      }
+      const session = {
+        id: `dbg-${Date.now()}-${slot_id}`,
+        slot_id,
+        attached_at: new Date().toISOString(),
+        status: 'attached',
+        breakpoints: [],
+        nano_source: body.nano_source || null,
+        wasm_map: body.wasm_map || null,
+        agent: body.agent || null,
+      };
+      global._debugSessions.push(session);
+      // In production: PPC to controller → debug_bridge PD (OP_DBG_ATTACH 0x70)
+      return json(res, 200, { ok: true, session });
+    }
+
+    // ── POST /api/agentos/debug/detach — detach debugger from a slot ──────────
+    const debugDetachMatch = path.match(/^\/api\/agentos\/debug\/detach$/);
+    if (method === 'POST' && debugDetachMatch) {
+      const body = await readBody(req);
+      const session_id = body.session_id || body.sessionId;
+      if (!session_id) return json(res, 400, { error: 'session_id required' });
+      if (!global._debugSessions) global._debugSessions = [];
+      const session = global._debugSessions.find(s => s.id === session_id);
+      if (!session) return json(res, 404, { error: 'Session not found' });
+      session.status = 'detached';
+      session.detached_at = new Date().toISOString();
+      // In production: PPC to controller → debug_bridge PD (OP_DBG_DETACH 0x71)
+      return json(res, 200, { ok: true, session });
+    }
+
+    // ── POST /api/agentos/debug/breakpoint — set/clear breakpoint ─────────────
+    const debugBpMatch = path.match(/^\/api\/agentos\/debug\/breakpoint$/);
+    if (method === 'POST' && debugBpMatch) {
+      const body = await readBody(req);
+      const { session_id, wasm_offset, action } = body;
+      if (!session_id || wasm_offset === undefined) {
+        return json(res, 400, { error: 'session_id and wasm_offset required' });
+      }
+      if (!global._debugSessions) global._debugSessions = [];
+      const session = global._debugSessions.find(s => s.id === session_id && s.status === 'attached');
+      if (!session) return json(res, 404, { error: 'Active session not found' });
+      if (action === 'clear') {
+        session.breakpoints = (session.breakpoints || []).filter(bp => bp.wasm_offset !== wasm_offset);
+      } else {
+        const bp = { wasm_offset, set_at: new Date().toISOString(), line: body.line, col: body.col, func: body.func };
+        session.breakpoints = [...(session.breakpoints || []), bp];
+      }
+      // In production: PPC to debug_bridge PD (OP_DBG_BREAKPOINT 0x72)
+      return json(res, 200, { ok: true, breakpoints: session.breakpoints });
+    }
+
+    // ── POST /api/agentos/debug/step — single-step a suspended slot ───────────
+    const debugStepMatch = path.match(/^\/api\/agentos\/debug\/step$/);
+    if (method === 'POST' && debugStepMatch) {
+      const body = await readBody(req);
+      if (!body.session_id) return json(res, 400, { error: 'session_id required' });
+      if (!global._debugSessions) global._debugSessions = [];
+      const session = global._debugSessions.find(s => s.id === body.session_id && s.status === 'attached');
+      if (!session) return json(res, 404, { error: 'Active session not found' });
+      // In production: PPC to debug_bridge PD (OP_DBG_STEP 0x73)
+      return json(res, 200, {
+        ok: true,
+        session_id: session.id,
+        slot_id: session.slot_id,
+        step: 'completed',
+        note: 'In production, this PPC to debug_bridge PD via OP_DBG_STEP (0x73)',
+      });
+    }
+
     // ── GET /api/mesh — agentOS distributed mesh topology + slot health ────────
     if (method === 'GET' && path === '/api/mesh') {
       const now = Date.now();
