@@ -1,0 +1,178 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "9.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
+  "annotations": { "list": [] },
+  "description": "TokenHub LLM proxy — per-provider request rates, latency, token spend, cost, health state",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 20,
+      "title": "Request Throughput",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 }, "min": 0, "unit": "reqps" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "list" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum by (provider) (rate(tokenhub_requests_total{status=\"success\"}[5m]))", "legendFormat": "{{provider}} success", "refId": "A" },
+        { "expr": "sum by (provider) (rate(tokenhub_requests_total{status!=\"success\"}[5m]))", "legendFormat": "{{provider}} error", "refId": "B" }
+      ],
+      "title": "Request Rate by Provider (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 }, "min": 0, "unit": "ms" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "id": 2,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "list" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (provider, le) (rate(tokenhub_request_latency_ms_bucket[5m])))", "legendFormat": "p50 {{provider}}", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum by (provider, le) (rate(tokenhub_request_latency_ms_bucket[5m])))", "legendFormat": "p95 {{provider}}", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum by (provider, le) (rate(tokenhub_request_latency_ms_bucket[5m])))", "legendFormat": "p99 {{provider}}", "refId": "C" }
+      ],
+      "title": "Request Latency by Provider (p50/p95/p99)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 21,
+      "title": "Token Spend & Cost",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 }, "min": 0, "unit": "short" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "id": 3,
+      "options": { "legend": { "calcs": ["last", "sum"], "displayMode": "list" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum by (provider, direction) (rate(tokenhub_tokens_total[5m]))", "legendFormat": "{{provider}} {{direction}}", "refId": "A" }
+      ],
+      "title": "Token Rate by Provider/Direction (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 }, "min": 0, "unit": "currencyUSD" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "id": 4,
+      "options": { "legend": { "calcs": ["last", "sum"], "displayMode": "list" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum by (provider) (rate(tokenhub_cost_usd_total[1h])) * 3600", "legendFormat": "{{provider}} $/hr", "refId": "A" },
+        { "expr": "sum by (provider) (increase(tokenhub_cost_usd_total[24h]))", "legendFormat": "{{provider}} 24h total $", "refId": "B" }
+      ],
+      "title": "Estimated Cost by Provider",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 22,
+      "title": "Provider Health",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "green", "value": 2 }
+          ]},
+          "mappings": [
+            { "options": { "0": { "text": "DOWN" }, "1": { "text": "DEGRADED" }, "2": { "text": "HEALTHY" } }, "type": "value" }
+          ],
+          "min": 0, "max": 2
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 19 },
+      "id": 5,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal" },
+      "targets": [
+        { "expr": "tokenhub_provider_health_state", "legendFormat": "{{provider}}", "refId": "A" }
+      ],
+      "title": "Provider Health State",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 19 },
+      "id": 6,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "rate(tokenhub_rate_limited_total[5m])", "legendFormat": "Rate Limited/s", "refId": "A" }
+      ],
+      "title": "Rate Limited Requests",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 }] },
+          "mappings": [{ "options": { "0": { "text": "CLOSED (OK)" }, "1": { "text": "OPEN" }, "2": { "text": "HALF-OPEN" } }, "type": "value" }]
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 19 },
+      "id": 7,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "tokenhub_temporal_circuit_state", "legendFormat": "Circuit Breaker", "refId": "A" }
+      ],
+      "title": "Temporal Circuit Breaker",
+      "type": "stat"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["tokenhub", "llm", "sparky", "cost"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-3h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "TokenHub LLM Proxy (sparky)",
+  "uid": "tokenhub-llm-sparky",
+  "version": 1
+}

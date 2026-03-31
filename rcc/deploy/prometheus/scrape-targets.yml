@@ -1,0 +1,32 @@
+# Additional Prometheus scrape targets for the RCC/agentOS/tokenhub stack.
+# Append these job_name entries to /etc/prometheus/prometheus.yml on do-host1,
+# then reload: curl -X POST http://localhost:9090/-/reload
+#
+# NOTE: tokenhub runs on sparky (100.87.229.125:8090 via Tailscale).
+#       agentOS metrics are bridged through RCC (127.0.0.1:8789).
+
+scrape_configs:
+
+  # ── tokenhub (sparky) — per-provider LLM request/cost/latency metrics ──────
+  - job_name: 'tokenhub_sparky'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ['100.87.229.125:8090']
+        labels:
+          host: 'sparky'
+          service: 'tokenhub'
+    metrics_path: '/metrics'
+    # No auth required on /metrics endpoint
+
+  # ── agentOS PD health (sparky, via RCC bridge) ───────────────────────────────
+  - job_name: 'agentos_sparky'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ['127.0.0.1:8789']
+        labels:
+          host: 'sparky'
+          service: 'agentos'
+    metrics_path: '/api/agentos/metrics'
+    bearer_token: 'wq-5dcad756f6d3e345c00b5cb3dfcbdedb'
