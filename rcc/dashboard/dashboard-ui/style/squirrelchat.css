@@ -2033,3 +2033,48 @@ button:focus-visible {
   color: var(--overlay0, #6c7086);
   text-align: center;
 }
+
+/* ── Inline composer login bar (replaces full-screen gate) ── */
+.sc-composer-login-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--sc-surface, #1e2130);
+  border-top: 1px solid var(--sc-border, #2d3149);
+}
+
+.sc-composer-login-label {
+  font-size: 0.85rem;
+  color: var(--sc-muted, #8892b0);
+  white-space: nowrap;
+}
+
+.sc-composer-login-input {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--sc-input-bg, #252840);
+  border: 1px solid var(--sc-border, #2d3149);
+  border-radius: 6px;
+  color: var(--sc-text, #cdd6f4);
+  font-size: 0.9rem;
+  outline: none;
+  min-width: 0;
+}
+
+.sc-composer-login-input:focus {
+  border-color: var(--sc-accent, #7c83fd);
+}
+
+.sc-composer-login-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.sc-composer-login-error {
+  font-size: 0.8rem;
+  color: var(--sc-error, #f38ba8);
+  white-space: nowrap;
+}

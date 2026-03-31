@@ -2329,7 +2329,66 @@ window.__squirrelchat_voice = (function() {
                                     ().into_view()
                                 }}
 
-                                <div class="sc-input-area">
+                                // ── Inline login bar (replaces full-screen overlay) ────────────
+                                {move || {
+                                    let id = identity.get();
+                                    if !id.needs_name { return ().into_view(); }
+                                    view! {
+                                        <div class="sc-composer-login-bar">
+                                            <span class="sc-composer-login-label">"Set your name to chat:"</span>
+                                            <input
+                                                type="text"
+                                                class="sc-composer-login-input"
+                                                placeholder="Your name (e.g. jkh)"
+                                                maxlength="32"
+                                                autofocus=true
+                                                prop:value=move || login_name.get()
+                                                on:input=move |ev| {
+                                                    set_login_name.set(event_target_value(&ev));
+                                                    set_login_error.set(None);
+                                                }
+                                                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                    if ev.key() == "Enter" {
+                                                        ev.prevent_default();
+                                                        let name = login_name.get_untracked().trim().to_string();
+                                                        if name.is_empty() || login_submitting.get_untracked() { return; }
+                                                        set_login_submitting.set(true);
+                                                        spawn_local(async move {
+                                                            match sc_login(&name).await {
+                                                                Some(new_id) => { set_identity.set(new_id); set_login_error.set(None); }
+                                                                None => { set_login_error.set(Some("Name taken or invalid.".to_string())); }
+                                                            }
+                                                            set_login_submitting.set(false);
+                                                        });
+                                                    }
+                                                }
+                                            />
+                                            <button
+                                                class="sc-btn-primary sc-composer-login-btn"
+                                                prop:disabled=move || login_name.get().trim().is_empty() || login_submitting.get()
+                                                on:click=move |_| {
+                                                    let name = login_name.get_untracked().trim().to_string();
+                                                    if name.is_empty() || login_submitting.get_untracked() { return; }
+                                                    set_login_submitting.set(true);
+                                                    spawn_local(async move {
+                                                        match sc_login(&name).await {
+                                                            Some(new_id) => { set_identity.set(new_id); set_login_error.set(None); }
+                                                            None => { set_login_error.set(Some("Name taken or invalid.".to_string())); }
+                                                        }
+                                                        set_login_submitting.set(false);
+                                                    });
+                                                }
+                                            >
+                                                {move || if login_submitting.get() { "..." } else { "Join →" }}
+                                            </button>
+                                            {move || login_error.get().map(|err| view! {
+                                                <span class="sc-composer-login-error">{err}</span>
+                                            })}
+                                        </div>
+                                    }.into_view()
+                                }}
+
+                                <div class="sc-input-area" style:display=move || if identity.get().needs_name { "none" } else { "flex" }>
                                     {move || {
                                         let suggestions = mention_suggestions.get();
                                         if suggestions.is_empty() {
@@ -3140,86 +3199,10 @@ window.__squirrelchat_voice = (function() {
                 }.into_view()
             } else { ().into_view() }}
 
-            // ── Login / Identity modal ─────────────────────────────────────────
-            {move || {
-                let id = identity.get();
-                if !id.needs_name {
-                    return ().into_view();
-                }
-                view! {
-                    <div class="sc-modal-overlay sc-login-overlay">
-                        <div class="sc-modal sc-login-modal">
-                            <div class="sc-login-header">
-                                <h2>"🐿️ Welcome to SquirrelChat"</h2>
-                                <p class="sc-login-subtitle">"Pick a display name to get started"</p>
-                            </div>
-                            <input
-                                type="text"
-                                class="sc-modal-input sc-login-input"
-                                placeholder="Your name (e.g. jkh)"
-                                maxlength="32"
-                                autofocus=true
-                                prop:value=move || login_name.get()
-                                on:input=move |ev| {
-                                    set_login_name.set(event_target_value(&ev));
-                                    set_login_error.set(None);
-                                }
-                                on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                    if ev.key() == "Enter" {
-                                        ev.prevent_default();
-                                        let name = login_name.get_untracked().trim().to_string();
-                                        if name.is_empty() || login_submitting.get_untracked() {
-                                            return;
-                                        }
-                                        set_login_submitting.set(true);
-                                        spawn_local(async move {
-                                            match sc_login(&name).await {
-                                                Some(new_id) => {
-                                                    set_identity.set(new_id);
-                                                    set_login_error.set(None);
-                                                }
-                                                None => {
-                                                    set_login_error.set(Some("Name taken or invalid. Try another.".to_string()));
-                                                }
-                                            }
-                                            set_login_submitting.set(false);
-                                        });
-                                    }
-                                }
-                            />
-                            {move || login_error.get().map(|err| view! {
-                                <div class="sc-login-error">{err}</div>
-                            })}
-                            <button
-                                class="sc-btn-primary sc-login-btn"
-                                prop:disabled=move || login_name.get().trim().is_empty() || login_submitting.get()
-                                on:click=move |_| {
-                                    let name = login_name.get_untracked().trim().to_string();
-                                    if name.is_empty() || login_submitting.get_untracked() {
-                                        return;
-                                    }
-                                    set_login_submitting.set(true);
-                                    spawn_local(async move {
-                                        match sc_login(&name).await {
-                                            Some(new_id) => {
-                                                set_identity.set(new_id);
-                                                set_login_error.set(None);
-                                            }
-                                            None => {
-                                                set_login_error.set(Some("Name taken or invalid. Try another.".to_string()));
-                                            }
-                                        }
-                                        set_login_submitting.set(false);
-                                    });
-                                }
-                            >
-                                {move || if login_submitting.get() { "Joining..." } else { "Join SquirrelChat" }}
-                            </button>
-                            <p class="sc-login-hint">"Agent names (Rocky, Bullwinkle, etc.) are reserved."</p>
-                        </div>
-                    </div>
-                }.into_view()
-            }}
+            // ── Login / Identity modal — intentionally removed ───────────────────
+            // Identity is now collected inline in the composer bar (no full-screen
+            // gate). The dashboard and all tabs load immediately; only sending a
+            // message requires a name. See sc-composer-login-bar below.
 
             // ── Cmd+/ Help modal ──────────────────────────────────────────────
             {move || if show_help.get() {
