@@ -7367,7 +7367,6 @@ loadPackages();
       });
     }
 
-<<<<<<< HEAD
     // ── GET /api/agentos/events — synthetic agentOS lifecycle events ──────
     if (method === 'GET' && path.startsWith('/api/agentos/events')) {
       const now = Date.now();
@@ -7383,7 +7382,6 @@ loadPackages();
         watchdog_reset: s => `slot ${s} heartbeat timeout — watchdog triggered reset`,
         memory_alert:   s => `slot ${s} memory spike: ${256+((now>>5)&0xff)}MB`,
       };
-      // Deterministic-ish seed changes each minute so events shift gradually on refresh
       const seed = Math.floor(now / 60000);
       function sr(n, s2) { return ((n * 1337 + s2 * 7919) % 997) / 997; }
       const events = [];
@@ -7395,7 +7393,8 @@ loadPackages();
       }
       events.sort((a, b) => a.ts - b.ts);
       return json(res, 200, { events, slots: [0,1,2,3,4,5,6,7], generated_at: now });
-=======
+    }
+
     // ── SBOM endpoints ──────────────────────────────────────────────────────────
     // GET /api/sbom — list all SBOMs
     if (method === 'GET' && path === '/api/sbom') {
@@ -7479,7 +7478,6 @@ loadPackages();
       } catch (e) {
         return json(res, 400, { error: e.message });
       }
->>>>>>> origin/main
     }
 
     return json(res, 404, { error: 'Not found' });
