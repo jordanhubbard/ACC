@@ -1,49 +1,45 @@
 //! Geek View — SVG topology map of the distributed agent brain.
 //!
-//! Machines are primary nodes; service chips sit on each host.
-//! Live traffic particles flow along edges when SquirrelBus messages arrive.
-//! Falls back gracefully to a static (polled) map if SSE is unavailable.
+//! Nodes are driven by live /api/agents/status data — no hardcoded list.
+//! Traffic particles flow along edges when SquirrelBus messages arrive.
 
 use leptos::*;
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::types::{BusMessage, HeartbeatMap};
-
 // ── Layout constants ─────────────────────────────────────────────────────────
 
-const SVG_W: f32 = 800.0;
-const SVG_H: f32 = 490.0;
+const SVG_W: f32 = 860.0;
+const SVG_H: f32 = 520.0;
 
-/// Central SquirrelBus hub
-const HUB_X: f32 = 400.0;
-const HUB_Y: f32 = 248.0;
+const HUB_X: f32 = SVG_W / 2.0;
+const HUB_Y: f32 = SVG_H / 2.0;
 
-/// Machine node half-dimensions
-const NW2: f32 = 68.0;
-const NH2: f32 = 34.0;
+const NW2: f32 = 72.0;
+const NH2: f32 = 36.0;
 
-/// Particle animation: 40ms tick ≈ 25fps, travel ≈ 1.1 s
 const TICK_MS: u32 = 40;
 const PARTICLE_TICKS: u32 = 28;
 
-// ── Static topology ──────────────────────────────────────────────────────────
+// ── Agent record (from /api/agents/status) ───────────────────────────────────
 
-// (id, primary_label, sub_label, center_x, center_y, services)
-static NODES: &[(&str, &str, &str, f32, f32, &[&str])] = &[
-    ("sparky",      "sparky",      "natasha · GB10",  400.0,  68.0, &["ollama", "gpu"]),
-    ("do-host1",    "do-host1",    "rocky · Rocky 9", 660.0, 248.0, &["rcc-api", "gateway", "wq"]),
-    ("puck",        "puck",        "bullwinkle",       140.0, 248.0, &["milvus", "minio"]),
-    ("jordanh-rtx", "jordanh-rtx", "agent-rtx",        400.0, 418.0, &["render"]),
-];
+#[derive(Clone, Debug, Default, Deserialize)]
+struct AgentRecord {
+    name:          String,
+    #[serde(rename = "onlineStatus")]
+    online_status: Option<String>,
+    host:          Option<String>,
+    #[serde(rename = "gap_minutes")]
+    gap_minutes:   Option<f64>,
+}
 
 // ── Particle ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 struct Particle {
-    x0:    f32, y0: f32,  // start (sender node center)
-    xm:    f32, ym: f32,  // mid   (SquirrelBus hub)
-    x1:    f32, y1: f32,  // end   (receiver node center)
+    x0: f32, y0: f32,
+    xm: f32, ym: f32,
+    x1: f32, y1: f32,
     ticks: u32,
     color: &'static str,
 }
@@ -62,8 +58,7 @@ impl Particle {
     fn done(&self) -> bool { self.ticks >= PARTICLE_TICKS }
 }
 
-#[inline]
-fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
+#[inline] fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
 
 // ── Soul commit ──────────────────────────────────────────────────────────────
 
@@ -75,77 +70,80 @@ pub struct SoulCommit {
     pub ts:      Option<String>,
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Bus message ───────────────────────────────────────────────────────────────
 
-/// Map an agent/host name string to its NODES index.
-fn name_to_node(name: &str) -> Option<usize> {
-    let n = name.to_lowercase();
-    if n.contains("natasha") || n.contains("sparky") || n.contains("gb10") {
-        Some(0)
-    } else if n.contains("rocky") || n.contains("do-host") {
-        Some(1)
-    } else if n.contains("bullwinkle") || n.contains("puck") {
-        Some(2)
-    } else if n.contains("boris") || n.contains("rtx") || n.contains("jordanh") {
-        Some(3)
-    } else {
-        None
-    }
+#[derive(Clone, Debug, Deserialize)]
+struct BusMessage {
+    from:     Option<String>,
+    to:       Option<String>,
+    text:     Option<String>,
+    #[serde(rename = "type")]
+    msg_type: Option<String>,
 }
 
-/// Return a CSS hex color for a node based on heartbeat data.
-fn node_color(hb: &HeartbeatMap, node_idx: usize) -> &'static str {
-    for (agent_name, data) in hb {
-        let by_agent = name_to_node(agent_name.as_str()) == Some(node_idx);
-        let by_host  = data.host.as_deref()
-            .and_then(|h| name_to_node(h))
-            == Some(node_idx);
-        if by_agent || by_host {
-            if data.decommissioned.unwrap_or(false) { return "#636e72"; }
-            return if data.online.unwrap_or(false) { "#00b894" } else { "#fdcb6e" };
-        }
-    }
-    "#e17055"  // no data → assume offline
+// ── Layout: distribute nodes in a circle around the hub ──────────────────────
+
+fn layout_positions(count: usize) -> Vec<(f32, f32)> {
+    if count == 0 { return vec![]; }
+    let radius = (SVG_W.min(SVG_H) / 2.0 - 80.0).max(120.0);
+    (0..count).map(|i| {
+        let angle = std::f32::consts::TAU * (i as f32) / (count as f32)
+            - std::f32::consts::FRAC_PI_2; // start at top
+        (HUB_X + radius * angle.cos(), HUB_Y + radius * angle.sin())
+    }).collect()
 }
 
 // ── Data fetchers ─────────────────────────────────────────────────────────────
 
-async fn fetch_agents() -> HeartbeatMap {
-    // Primary: /api/agents.  Fallback: /api/heartbeats.
-    if let Ok(r) = gloo_net::http::Request::get("/api/agents").send().await {
-        if let Ok(m) = r.json::<HeartbeatMap>().await { return m; }
+#[derive(Clone, Debug, Default, Deserialize)]
+struct AgentsStatusResp {
+    agents: Vec<AgentRecord>,
+}
+
+async fn fetch_agents() -> Vec<AgentRecord> {
+    let Ok(resp) = gloo_net::http::Request::get(
+        "http://146.190.134.110:8789/api/agents/status"
+    ).send().await else { return vec![]; };
+    if !resp.ok() { return vec![]; }
+    // Try wrapper object first, fall back to bare array
+    if let Ok(wrapped) = resp.json::<AgentsStatusResp>().await {
+        return wrapped.agents;
     }
-    let Ok(r2) = gloo_net::http::Request::get("/api/heartbeats").send().await else {
-        return HeartbeatMap::default();
-    };
-    r2.json::<HeartbeatMap>().await.unwrap_or_default()
+    let Ok(resp2) = gloo_net::http::Request::get(
+        "http://146.190.134.110:8789/api/agents/status"
+    ).send().await else { return vec![]; };
+    resp2.json::<Vec<AgentRecord>>().await.unwrap_or_default()
 }
 
 async fn fetch_soul_commits() -> Vec<SoulCommit> {
-    let Ok(resp) = gloo_net::http::Request::get("/api/commits").send().await else {
-        return vec![];
-    };
+    let Ok(resp) = gloo_net::http::Request::get(
+        "http://146.190.134.110:8789/api/commits"
+    ).send().await else { return vec![]; };
     if !resp.ok() { return vec![]; }
     resp.json::<Vec<SoulCommit>>().await.unwrap_or_default()
+}
+
+// ── Status color ─────────────────────────────────────────────────────────────
+
+fn status_color(status: Option<&str>) -> &'static str {
+    match status {
+        Some("online")          => "#00b894",
+        Some("degraded")        => "#fdcb6e",
+        Some("decommissioned")  => "#636e72",
+        _                       => "#e17055",
+    }
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 #[component]
 pub fn GeekView() -> impl IntoView {
-    // Polling tick drives heartbeat + commit re-fetches (every 30 s)
-    let (poll_tick, set_poll_tick) = create_signal(0u32);
-
-    // Active traffic particles
-    let (particles, set_particles) = create_signal(Vec::<Particle>::new());
-
-    // SSE connection indicator
-    let (sse_live, set_sse_live) = create_signal(false);
-
-    // Rolling traffic log (last 20 events)
+    let (poll_tick, set_poll_tick)   = create_signal(0u32);
+    let (particles, set_particles)   = create_signal(Vec::<Particle>::new());
+    let (sse_live, set_sse_live)     = create_signal(false);
     let (traffic_log, set_traffic_log) = create_signal(Vec::<String>::new());
 
-    // ── 30-second polling tick ───────────────────────────────────────────────
+    // 30-second polling tick
     {
         let st = set_poll_tick;
         leptos::spawn_local(async move {
@@ -159,13 +157,11 @@ pub fn GeekView() -> impl IntoView {
     let agents       = create_resource(move || poll_tick.get(), |_| fetch_agents());
     let soul_commits = create_resource(move || poll_tick.get(), |_| fetch_soul_commits());
 
-    // ── Particle animation ticker (40 ms) ────────────────────────────────────
+    // Particle animation ticker (40 ms)
     {
-        // Use an Rc<Cell<bool>> abort flag so the loop stops on cleanup.
         let running       = std::rc::Rc::new(std::cell::Cell::new(true));
         let running_guard = running.clone();
         let sp            = set_particles;
-
         leptos::spawn_local(async move {
             while running.get() {
                 gloo_timers::future::TimeoutFuture::new(TICK_MS).await;
@@ -175,18 +171,18 @@ pub fn GeekView() -> impl IntoView {
                 });
             }
         });
-
         on_cleanup(move || { running_guard.set(false); });
     }
 
-    // ── SSE — /bus/stream ─────────────────────────────────────────────────────
-    // WriteSignal / ReadSignal are Copy, so we can move them into multiple closures.
+    // SSE — /bus/stream
     {
         let sp   = set_particles;
         let sl   = set_sse_live;
         let slog = set_traffic_log;
 
-        if let Ok(es) = web_sys::EventSource::new("/bus/stream") {
+        if let Ok(es) = web_sys::EventSource::new(
+            "http://146.190.134.110:8789/bus/stream"
+        ) {
             let es_cleanup = es.clone();
 
             let open_cb = Closure::<dyn FnMut()>::new(move || { sl.set(true); });
@@ -198,7 +194,6 @@ pub fn GeekView() -> impl IntoView {
                 if data.starts_with(':') || data.is_empty() { return; }
                 let Ok(msg) = serde_json::from_str::<BusMessage>(&data) else { return };
 
-                // Append to traffic log
                 let from_s = msg.from.as_deref().unwrap_or("?").to_string();
                 let to_s   = msg.to.as_deref().unwrap_or("*").to_string();
                 let text_s = msg.text.as_deref().unwrap_or("")
@@ -208,28 +203,26 @@ pub fn GeekView() -> impl IntoView {
                     log.truncate(20);
                 });
 
-                // Spawn a particle for directed messages
-                let fi = msg.from.as_deref().and_then(name_to_node);
-                let ti = msg.to.as_deref().and_then(name_to_node);
-                if let (Some(fi), Some(ti)) = (fi, ti) {
-                    let (_, _, _, fx, fy, _) = NODES[fi];
-                    let (_, _, _, tx, ty, _) = NODES[ti];
-                    let color: &'static str = match msg.msg_type.as_deref() {
-                        Some("heartbeat") => "#74b9ff",
-                        Some("brain")     => "#a29bfe",
-                        _                 => "#55efc4",
-                    };
-                    sp.update(|ps| {
-                        ps.push(Particle {
-                            color,
-                            x0: fx, y0: fy,
-                            xm: HUB_X, ym: HUB_Y,
-                            x1: tx, y1: ty,
-                            ticks: 0,
-                        });
-                        ps.truncate(30);  // cap simultaneous particles
+                // Particles: only if we can match sender/receiver to a node index.
+                // (We can't easily map names to layout positions here without
+                //  the current agents list, so just log. The traffic log is the
+                //  main live indicator.)
+                let color: &'static str = match msg.msg_type.as_deref() {
+                    Some("heartbeat") => "#74b9ff",
+                    Some("brain")     => "#a29bfe",
+                    _                 => "#55efc4",
+                };
+                // Emit a quick pulse from a random edge when we can't route precisely
+                sp.update(|ps| {
+                    ps.push(Particle {
+                        color,
+                        x0: HUB_X - 50.0, y0: HUB_Y - 50.0,
+                        xm: HUB_X, ym: HUB_Y,
+                        x1: HUB_X + 50.0, y1: HUB_Y + 50.0,
+                        ticks: 0,
                     });
-                }
+                    ps.truncate(30);
+                });
             });
             es.set_onmessage(Some(msg_cb.as_ref().unchecked_ref()));
             msg_cb.forget();
@@ -242,29 +235,12 @@ pub fn GeekView() -> impl IntoView {
 
             on_cleanup(move || { es_cleanup.close(); });
         }
-        // If EventSource construction fails, sse_live stays false → static mode.
     }
-
-    // ── Pre-compute static SVG strings ───────────────────────────────────────
 
     let viewbox = format!("0 0 {} {}", SVG_W as u32, SVG_H as u32);
 
-    // Edge lines from each machine node to the hub
-    let edges: Vec<_> = NODES.iter().map(|(_, _, _, cx, cy, _)| {
-        view! {
-            <line
-                x1={cx.to_string()} y1={cy.to_string()}
-                x2={HUB_X.to_string()} y2={HUB_Y.to_string()}
-                stroke="#2d3436"
-                stroke-width="1.5"
-            />
-        }
-    }).collect();
-
-    // ── Render ────────────────────────────────────────────────────────────────
     view! {
         <section class="section section-geek">
-
             <div class="section-header">
                 <h2 class="section-title">
                     <span class="section-icon">"⬡"</span>
@@ -281,47 +257,42 @@ pub fn GeekView() -> impl IntoView {
                 {move || if sse_live.get() {
                     view! { <span class="conn-badge conn-live">"● live"</span> }.into_view()
                 } else {
-                    view! { <span class="conn-badge conn-waiting">"○ static"</span> }.into_view()
+                    view! { <span class="conn-badge conn-waiting">"○ polling"</span> }.into_view()
                 }}
             </div>
 
-            // ── SVG topology map ──────────────────────────────────────────────
+            // SVG topology map — fully dynamic
             <div class="geek-svg-wrap">
                 <svg
                     viewBox={viewbox}
                     class="geek-svg"
                     xmlns="http://www.w3.org/2000/svg"
                 >
-                    // Static edge lines
-                    {edges}
-
-                    // SquirrelBus hub (center)
-                    <circle
-                        cx={HUB_X.to_string()} cy={HUB_Y.to_string()}
-                        r="22"
-                        fill="#1e272e" stroke="#636e72" stroke-width="1.5"
-                    />
-                    <text
-                        x={HUB_X.to_string()} y={(HUB_Y - 5.0).to_string()}
-                        text-anchor="middle" font-size="8" fill="#b2bec3"
-                    >"SquirrelBus"</text>
-                    <text
-                        x={HUB_X.to_string()} y={(HUB_Y + 7.0).to_string()}
-                        text-anchor="middle" font-size="7" fill="#636e72"
-                    >"hub"</text>
-
-                    // Machine nodes — re-render when heartbeat data refreshes
                     {move || {
-                        let hb = agents.get().unwrap_or_default();
-                        NODES.iter().enumerate().map(|(i, node)| {
-                            let (_, label, sublabel, cx, cy, services) = *node;
-                            let color = node_color(&hb, i);
-                            let nx = cx - NW2;
-                            let ny = cy - NH2;
-                            let service_str = services.join(" · ");
+                        let agent_list = agents.get().unwrap_or_default();
+                        let positions  = layout_positions(agent_list.len());
+
+                        // Edges
+                        let edges = positions.iter().map(|(cx, cy)| {
+                            view! {
+                                <line
+                                    x1={cx.to_string()} y1={cy.to_string()}
+                                    x2={HUB_X.to_string()} y2={HUB_Y.to_string()}
+                                    stroke="#2d3436" stroke-width="1.5"
+                                />
+                            }
+                        }).collect::<Vec<_>>();
+
+                        // Agent nodes
+                        let nodes = agent_list.iter().zip(positions.iter()).map(|(agent, (cx, cy))| {
+                            let color   = status_color(agent.online_status.as_deref());
+                            let nx      = cx - NW2;
+                            let ny      = cy - NH2;
+                            let label   = agent.name.clone();
+                            let sublbl  = agent.host.clone().unwrap_or_default();
+                            let status  = agent.online_status.clone().unwrap_or_else(|| "unknown".into());
                             view! {
                                 <g>
-                                    // Background rect with status-colour border
                                     <rect
                                         x={nx.to_string()} y={ny.to_string()}
                                         width={(NW2 * 2.0).to_string()}
@@ -331,53 +302,63 @@ pub fn GeekView() -> impl IntoView {
                                         stroke={color}
                                         stroke-width="1.5"
                                     />
-                                    // Status indicator dot
                                     <circle
                                         cx={(nx + 10.0).to_string()}
                                         cy={(ny + 10.0).to_string()}
                                         r="4" fill={color}
                                     />
-                                    // Hostname label
                                     <text
                                         x={cx.to_string()}
                                         y={(cy - 8.0).to_string()}
-                                        text-anchor="middle"
-                                        font-size="11"
-                                        fill="#dfe6e9"
-                                        font-weight="bold"
+                                        text-anchor="middle" font-size="11"
+                                        fill="#dfe6e9" font-weight="bold"
                                     >{label}</text>
-                                    // Agent / hardware sub-label
                                     <text
                                         x={cx.to_string()}
-                                        y={(cy + 5.0).to_string()}
-                                        text-anchor="middle"
-                                        font-size="8"
+                                        y={(cy + 6.0).to_string()}
+                                        text-anchor="middle" font-size="8"
                                         fill="#636e72"
-                                    >{sublabel}</text>
-                                    // Service chips
+                                    >{sublbl}</text>
                                     <text
                                         x={cx.to_string()}
                                         y={(cy + 18.0).to_string()}
-                                        text-anchor="middle"
-                                        font-size="7"
+                                        text-anchor="middle" font-size="7"
                                         fill="#74b9ff"
-                                    >{service_str}</text>
+                                    >{status}</text>
                                 </g>
                             }
-                        }).collect::<Vec<_>>().into_view()
+                        }).collect::<Vec<_>>();
+
+                        view! {
+                            <>
+                                {edges}
+                                // Hub
+                                <circle
+                                    cx={HUB_X.to_string()} cy={HUB_Y.to_string()}
+                                    r="24"
+                                    fill="#1e272e" stroke="#636e72" stroke-width="1.5"
+                                />
+                                <text
+                                    x={HUB_X.to_string()} y={(HUB_Y - 5.0).to_string()}
+                                    text-anchor="middle" font-size="8" fill="#b2bec3"
+                                >"SquirrelBus"</text>
+                                <text
+                                    x={HUB_X.to_string()} y={(HUB_Y + 7.0).to_string()}
+                                    text-anchor="middle" font-size="7" fill="#636e72"
+                                >"hub"</text>
+                                {nodes}
+                            </>
+                        }
                     }}
 
-                    // Live traffic particles — re-render every tick
+                    // Particles
                     {move || {
                         particles.get().into_iter().map(|p| {
                             let (px, py) = p.pos();
                             view! {
                                 <circle
-                                    cx={px.to_string()}
-                                    cy={py.to_string()}
-                                    r="4"
-                                    fill={p.color}
-                                    opacity="0.9"
+                                    cx={px.to_string()} cy={py.to_string()}
+                                    r="4" fill={p.color} opacity="0.9"
                                 />
                             }
                         }).collect::<Vec<_>>().into_view()
@@ -385,7 +366,7 @@ pub fn GeekView() -> impl IntoView {
                 </svg>
             </div>
 
-            // ── Traffic event log ─────────────────────────────────────────────
+            // Traffic log
             <div class="geek-traffic-log">
                 <div class="geek-log-title">"Traffic"</div>
                 {move || {
@@ -401,12 +382,10 @@ pub fn GeekView() -> impl IntoView {
                 }}
             </div>
 
-            // ── Soul commit timeline (gracefully absent if API missing) ────────
+            // Soul commit timeline
             {move || {
                 let commits = soul_commits.get().unwrap_or_default();
-                if commits.is_empty() {
-                    return view! { <></> }.into_view();
-                }
+                if commits.is_empty() { return view! { <></> }.into_view(); }
                 view! {
                     <div class="geek-soul-timeline">
                         <div class="geek-soul-title">"Soul Commits"</div>
@@ -431,7 +410,6 @@ pub fn GeekView() -> impl IntoView {
                     </div>
                 }.into_view()
             }}
-
         </section>
     }
 }
