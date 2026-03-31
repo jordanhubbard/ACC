@@ -843,6 +843,25 @@ impl Db {
         )?;
         Ok(())
     }
+
+    /// Fetch the most recent `limit` messages (across all channels) for cosine-similarity ranking.
+    /// Returns (id, channel, from_agent, text, created_at).
+    pub fn get_recent_message_texts(&self, limit: i64) -> Result<Vec<(i64, String, String, String, i64)>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, channel, from_agent, text, created_at FROM messages ORDER BY id DESC LIMIT ?"
+        )?;
+        let rows = stmt.query_map([limit], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
 }
 
 fn now_ms() -> i64 {

@@ -60,6 +60,15 @@ struct VoiceChannelInfo {
 
 // format_msg_ts is now ScMessage::format_ts() — no standalone helper needed
 
+fn format_relative_time(secs: i64) -> String {
+    let now = (js_sys::Date::now() / 1000.0) as i64;
+    let diff = now.saturating_sub(secs);
+    if diff < 60 { return "just now".to_string(); }
+    if diff < 3600 { return format!("{}m ago", diff / 60); }
+    if diff < 86400 { return format!("{}h ago", diff / 3600); }
+    format!("{}d ago", diff / 86400)
+}
+
 use crate::components::sc_types::ScReaction;
 
 /// Optimistic toggle of a reaction on a message's Vec<ScReaction>.
@@ -747,6 +756,23 @@ window.__squirrelchat_voice = (function() {
     let (show_help, set_show_help) = create_signal(false);
     let (switcher_query, set_switcher_query) = create_signal(String::new());
 
+    // ── Cmd+K search overlay ──────────────────────────────────────────────────
+    let (show_search_overlay, set_show_search_overlay) = create_signal(false);
+    let (search_overlay_query, set_search_overlay_query) = create_signal(String::new());
+    #[derive(Clone, serde::Deserialize)]
+    struct SearchHit {
+        message_id: i64,
+        channel_id: String,
+        sender: String,
+        content: String,
+        created_at: i64,
+        score: f32,
+        match_type: String,
+    }
+    let (search_overlay_results, set_search_overlay_results) = create_signal(Vec::<SearchHit>::new());
+    let (search_overlay_loading, set_search_overlay_loading) = create_signal(false);
+    let (highlighted_msg_id, set_highlighted_msg_id) = create_signal(Option::<i64>::None);
+
     // Voice-to-text recording state
     let (recording, set_recording) = create_signal(false);
     let (transcribing, set_transcribing) = create_signal(false);
@@ -1060,13 +1086,17 @@ window.__squirrelchat_voice = (function() {
             let meta = ev.meta_key() || ev.ctrl_key();
             if meta && ev.key() == "k" {
                 ev.prevent_default();
-                set_show_channel_switcher.update(|v| *v = !*v);
-                set_switcher_query.set(String::new());
+                set_show_search_overlay.update(|v| *v = !*v);
+                if !show_search_overlay.get_untracked() {
+                    set_search_overlay_query.set(String::new());
+                    set_search_overlay_results.set(vec![]);
+                }
             } else if meta && ev.key() == "/" {
                 ev.prevent_default();
                 set_show_help.update(|v| *v = !*v);
             } else if ev.key() == "Escape" {
                 set_show_channel_switcher.set(false);
+                set_show_search_overlay.set(false);
                 set_show_help.set(false);
             }
         });
@@ -1971,6 +2001,7 @@ window.__squirrelchat_voice = (function() {
                                                 <div
                                                     class="sc-msg"
                                                     class:sc-msg-mention=is_mentioned
+                                                    class:sc-msg-highlight=move || highlighted_msg_id.get() == Some(msg_id)
                                                 >
                                                     <div class="sc-msg-header">
                                                         <span class="sc-msg-from">{from}</span>
@@ -2992,6 +3023,118 @@ window.__squirrelchat_voice = (function() {
                                 } else { ().into_view() }}
                             </div>
                             <div class="sc-switcher-footer">"↑↓ navigate  ↵ select  Esc close"</div>
+                        </div>
+                    </div>
+                }.into_view()
+            } else { ().into_view() }}
+
+            // ── Cmd+K Semantic Search overlay ─────────────────────────────────
+            {move || if show_search_overlay.get() {
+                view! {
+                    <div class="sc-search-overlay-bg" on:click=move |_| set_show_search_overlay.set(false)>
+                        <div class="sc-search-overlay" on:click=|ev| ev.stop_propagation()>
+                            <div class="sc-search-overlay-header">
+                                <span class="sc-search-overlay-icon">"🔍"</span>
+                                <input
+                                    type="text"
+                                    class="sc-search-overlay-input"
+                                    placeholder="Search messages…"
+                                    autofocus=true
+                                    prop:value=move || search_overlay_query.get()
+                                    on:input=move |ev| {
+                                        let val = event_target_value(&ev);
+                                        set_search_overlay_query.set(val.clone());
+                                        if val.trim().is_empty() {
+                                            set_search_overlay_results.set(vec![]);
+                                            set_search_overlay_loading.set(false);
+                                            return;
+                                        }
+                                        // Debounce 300ms via gloo_timers
+                                        set_search_overlay_loading.set(true);
+                                        let q = val.clone();
+                                        gloo_timers::callback::Timeout::new(300, move || {
+                                            // Re-check query hasn't changed
+                                            let current = search_overlay_query.get_untracked();
+                                            if current.trim() != q.trim() { return; }
+                                            spawn_local(async move {
+                                                let token = sc_token().unwrap_or_default();
+                                                let payload = serde_json::json!({ "query": q, "limit": 20 });
+                                                let req = gloo_net::http::Request::post("/sc/api/search")
+                                                    .header("Authorization", &format!("Bearer {}", token))
+                                                    .header("Content-Type", "application/json")
+                                                    .body(serde_json::to_string(&payload).unwrap_or_default());
+                                                if let Ok(req) = req {
+                                                    if let Ok(resp) = req.send().await {
+                                                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                                            if let Some(arr) = data["results"].as_array() {
+                                                                let hits: Vec<SearchHit> = arr.iter()
+                                                                    .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                                                                    .collect();
+                                                                set_search_overlay_results.set(hits);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                set_search_overlay_loading.set(false);
+                                            });
+                                        }).forget();
+                                    }
+                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                        if ev.key() == "Escape" {
+                                            set_show_search_overlay.set(false);
+                                        }
+                                    }
+                                />
+                                {move || if search_overlay_loading.get() {
+                                    view! { <span class="sc-search-spinner">"⏳"</span> }.into_view()
+                                } else { ().into_view() }}
+                                <button class="sc-search-overlay-close" on:click=move |_| set_show_search_overlay.set(false)>"✕"</button>
+                            </div>
+                            <div class="sc-search-overlay-results">
+                                {move || {
+                                    let hits = search_overlay_results.get();
+                                    if hits.is_empty() && !search_overlay_loading.get() && !search_overlay_query.get().is_empty() {
+                                        return view! { <div class="sc-search-overlay-empty">"No results found"</div> }.into_view();
+                                    }
+                                    hits.into_iter().map(|hit| {
+                                        let ch_id = hit.channel_id.clone();
+                                        let ch_name = hit.channel_id.trim_start_matches("dm-").to_string();
+                                        let preview = if hit.content.len() > 80 {
+                                            format!("{}…", &hit.content[..80])
+                                        } else {
+                                            hit.content.clone()
+                                        };
+                                        let ts_secs = hit.created_at / 1000;
+                                        let ts_str = format_relative_time(ts_secs);
+                                        let match_badge = if hit.match_type == "semantic" { "~" } else { "#" };
+                                        let msg_id = hit.message_id;
+                                        view! {
+                                            <div class="sc-search-result-card"
+                                                on:click=move |_| {
+                                                    set_selected_channel.set(ch_id.clone());
+                                                    set_selected_project.set(None);
+                                                    set_highlighted_msg_id.set(Some(msg_id));
+                                                    set_show_search_overlay.set(false);
+                                                    // Clear highlight after 3s
+                                                    gloo_timers::callback::Timeout::new(3000, move || {
+                                                        set_highlighted_msg_id.set(None);
+                                                    }).forget();
+                                                }
+                                            >
+                                                <div class="sc-search-result-meta">
+                                                    <span class="sc-search-result-channel">
+                                                        {match_badge}" "{ch_name}
+                                                    </span>
+                                                    <span class="sc-search-result-sender">{hit.sender}</span>
+                                                    <span class="sc-search-result-time">{ts_str}</span>
+                                                </div>
+                                                <div class="sc-search-result-preview">{preview}</div>
+                                            </div>
+                                        }
+                                    }).collect::<Vec<_>>().into_view()
+                                }}
+                            </div>
+                            <div class="sc-search-overlay-footer">"Esc to close  •  ⌘K toggle"</div>
                         </div>
                     </div>
                 }.into_view()
