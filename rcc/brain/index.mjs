@@ -109,7 +109,9 @@ async function callModelWithName(model, messages, maxTokens, timeoutMs = 30000) 
     }
 
     const data = await resp.json();
-    const text = data?.choices?.[0]?.message?.content || '';
+    const msg = data?.choices?.[0]?.message || {};
+    // Nemotron thinking-trace models put output in 'reasoning' when content is null
+    const text = msg.content || msg.reasoning || '';
     const tokensUsed = data?.usage?.total_tokens || Math.ceil(text.length / 4);
     return { text, tokensUsed, model };
 
