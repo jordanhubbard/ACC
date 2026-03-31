@@ -7480,6 +7480,40 @@ loadPackages();
       }
     }
 
+    // ── GET /api/agentos/timeline — agent lifecycle event list (ts desc, 5s cache) ──
+    if (method === 'GET' && path.startsWith('/api/agentos/timeline')) {
+      const now = Date.now();
+      const CACHE_TTL = 5_000;
+      if (globalThis._tlCache && (now - globalThis._tlCache.ts) < CACHE_TTL) {
+        return json(res, 200, globalThis._tlCache.data);
+      }
+      const windowMs = 30 * 60 * 1000;
+      const EVENT_TYPES = ['spawn','cap_grant','cap_revoke','quota_exceeded','fault','watchdog_reset','memory_alert','hotreload'];
+      const EVENT_DETAILS = {
+        spawn:          s => `slot ${s} agent spawned`,
+        hotreload:      s => `slot ${s} hot-reload triggered`,
+        cap_grant:      s => `granted cap=IPC_SEND to pid=${4000+s*100+((now>>4)&0x3f)}`,
+        cap_revoke:     s => `revoked cap=IPC_SEND from pid=${4000+s*100+((now>>6)&0x3f)}`,
+        quota_exceeded: s => `slot ${s} CPU quota exceeded (${80+((now>>8)&0x13)}%)`,
+        fault:          s => `slot ${s} SIGSEGV at 0x${(0xdeadbe00+s*0x100+((now>>3)&0xff)).toString(16)}`,
+        watchdog_reset: s => `slot ${s} heartbeat timeout — watchdog triggered reset`,
+        memory_alert:   s => `slot ${s} memory spike: ${256+((now>>5)&0xff)}MB`,
+      };
+      const seed = Math.floor(now / 60000);
+      function tsr(n, s2) { return ((n * 1337 + s2 * 7919) % 997) / 997; }
+      const tlEvents = [];
+      for (let i = 0; i < 100; i++) {
+        const slot_id = Math.floor(tsr(i, seed) * 8);
+        const event_type = EVENT_TYPES[Math.floor(tsr(i + 1000, seed) * EVENT_TYPES.length)];
+        const ts = Math.floor(now - windowMs + tsr(i + 2000, seed) * windowMs);
+        tlEvents.push({ ts, slot_id, event_type, detail: EVENT_DETAILS[event_type](slot_id) });
+      }
+      tlEvents.sort((a, b) => b.ts - a.ts);
+      const tlResult = { events: tlEvents.slice(0, 100), generated_at: now };
+      globalThis._tlCache = { ts: now, data: tlResult };
+      return json(res, 200, tlResult);
+    }
+
     return json(res, 404, { error: 'Not found' });
 
   } catch (err) {

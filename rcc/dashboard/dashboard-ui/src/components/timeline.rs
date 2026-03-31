@@ -1,7 +1,9 @@
 //! agentOS Agent Lifecycle Timeline
 //!
-//! Fetches `/api/agentos/events` and renders a horizontal SVG timeline with
-//! one row per agent slot and coloured markers for each event type.
+//! Fetches `/api/agentos/timeline` and renders:
+//!   1. A horizontal SVG timeline with one row per agent slot and coloured markers.
+//!   2. A vertical event list (most recent first) with coloured dot, timestamp,
+//!      slot badge, and detail text.
 //! Auto-refreshes every 10 seconds.
 
 use leptos::*;
@@ -16,25 +18,23 @@ pub struct AgentEvent {
     pub ts: f64,
     /// Slot index (0-7)
     pub slot_id: Option<u32>,
-    /// Event type string: spawn, exit, cap_grant, cap_revoke,
-    ///   quota_exceeded, fault, watchdog_reset, memory_alert
-    #[serde(rename = "type")]
+    /// Event type: spawn, cap_grant, cap_revoke, quota_exceeded, fault,
+    ///   watchdog_reset, memory_alert, hotreload
     pub event_type: String,
-    /// Optional detail string
-    pub details: Option<String>,
+    /// Human-readable detail string
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentEventsResponse {
     pub events: Vec<AgentEvent>,
-    pub slots: Option<Vec<u32>>,
     pub generated_at: Option<f64>,
 }
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 
 async fn fetch_events() -> AgentEventsResponse {
-    let Ok(resp) = gloo_net::http::Request::get("/api/agentos/events")
+    let Ok(resp) = gloo_net::http::Request::get("/api/agentos/timeline")
         .send()
         .await
     else {
@@ -47,17 +47,18 @@ async fn fetch_events() -> AgentEventsResponse {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Return the CSS hex colour for each event type.
+/// CSS hex colour for each event type.
+/// Colors: green=spawn, blue=cap, orange=quota/fault, red=watchdog_reset.
 fn event_color(event_type: &str) -> &'static str {
     match event_type {
-        "spawn"          => "#3fb950",
-        "exit"           => "#2ea043",
-        "cap_grant"      => "#58a6ff",
-        "cap_revoke"     => "#f85149",
-        "quota_exceeded" => "#e3b341",
-        "fault"          => "#f85149",
-        "watchdog_reset" => "#d29922",
-        "memory_alert"   => "#a371f7",
+        "spawn"          => "#3fb950",  // green
+        "hotreload"      => "#2ea043",  // teal
+        "cap_grant"      => "#58a6ff",  // blue
+        "cap_revoke"     => "#58a6ff",  // blue
+        "quota_exceeded" => "#f0883e",  // orange
+        "fault"          => "#f0883e",  // orange
+        "watchdog_reset" => "#f85149",  // red
+        "memory_alert"   => "#a371f7",  // purple
         _                => "#8b949e",
     }
 }
@@ -83,39 +84,32 @@ fn fmt_hhmmss(ts_ms: f64) -> String {
 
 #[component]
 pub fn Timeline() -> impl IntoView {
-    // Current data
-    let (data, set_data)     = create_signal(AgentEventsResponse::default());
-    let (loading, set_loading) = create_signal(true);
+    let (data, set_data)         = create_signal(AgentEventsResponse::default());
+    let (loading, set_loading)   = create_signal(true);
     let (last_update, set_last_update) = create_signal(String::new());
 
-    // Hovered event details for the tooltip (slot_id, event_type, ts_ms, details)
+    // Hovered event: (slot_id, event_type, ts_ms, detail)
     let (tooltip, set_tooltip) = create_signal(Option::<(u32, String, f64, Option<String>)>::None);
 
-    // Load function
     let load = {
-        let set_data     = set_data;
-        let set_loading  = set_loading;
+        let set_data        = set_data;
+        let set_loading     = set_loading;
         let set_last_update = set_last_update;
         move || {
-            let set_data     = set_data;
-            let set_loading  = set_loading;
+            let set_data        = set_data;
+            let set_loading     = set_loading;
             let set_last_update = set_last_update;
             spawn_local(async move {
                 let result = fetch_events().await;
                 set_data.set(result);
                 set_loading.set(false);
-                // Record update time
-                let ts = js_sys::Date::now();
-                set_last_update.set(fmt_hhmmss(ts));
+                set_last_update.set(fmt_hhmmss(js_sys::Date::now()));
             });
         }
     };
 
     // Initial load
-    {
-        let load = load.clone();
-        create_effect(move |_| { load(); });
-    }
+    { let load = load.clone(); create_effect(move |_| { load(); }); }
 
     // Auto-refresh every 10 seconds
     {
@@ -124,7 +118,6 @@ pub fn Timeline() -> impl IntoView {
         on_cleanup(move || drop(interval));
     }
 
-    // Time window: last 30 minutes
     const WINDOW_MS: f64 = 30.0 * 60.0 * 1000.0;
 
     view! {
@@ -139,10 +132,7 @@ pub fn Timeline() -> impl IntoView {
                     }}
                     <button
                         class="tl-refresh-btn"
-                        on:click={
-                            let load = load.clone();
-                            move |_| load()
-                        }
+                        on:click={ let load = load.clone(); move |_| load() }
                     >"↻ Refresh"</button>
                 </div>
             </div>
@@ -151,20 +141,16 @@ pub fn Timeline() -> impl IntoView {
 
             // Legend
             <div class="tl-legend">
-                {["spawn", "exit", "cap_grant", "cap_revoke", "quota_exceeded",
+                {["spawn", "hotreload", "cap_grant", "cap_revoke", "quota_exceeded",
                   "fault", "watchdog_reset", "memory_alert"]
                     .iter()
                     .map(|et| {
                         let color = event_color(et);
-                        let is_fault = *et == "fault";
                         view! {
                             <div class="tl-legend-item">
                                 <span
                                     class="tl-legend-dot"
-                                    style={format!(
-                                        "background:{color};{}",
-                                        if is_fault { "border-radius:2px;transform:rotate(45deg);" } else { "" }
-                                    )}
+                                    style={format!("background:{color};")}
                                 ></span>
                                 <span>{*et}</span>
                             </div>
@@ -188,49 +174,43 @@ pub fn Timeline() -> impl IntoView {
                     .map(|i| fmt_hhmm(t_min + WINDOW_MS * (i as f64) / 5.0))
                     .collect();
 
-                // Group events by slot
+                // Group events by slot for the SVG panel
+                // Events from the API are sorted desc (newest first); re-sort asc for the SVG axis.
+                let mut asc_events = d.events.clone();
+                asc_events.sort_by(|a, b| a.ts.partial_cmp(&b.ts).unwrap_or(std::cmp::Ordering::Equal));
+
                 let mut slots: [Vec<AgentEvent>; 8] = Default::default();
-                for ev in &d.events {
+                for ev in &asc_events {
                     let slot = ev.slot_id.unwrap_or(0) as usize;
-                    if slot < 8 {
-                        slots[slot].push(ev.clone());
-                    }
+                    if slot < 8 { slots[slot].push(ev.clone()); }
                 }
 
                 view! {
+                    // ── Horizontal per-slot timeline ─────────────────────────
                     <div class="tl-panel">
-                        // Slot rows
                         {(0usize..8).map(|s| {
                             let slot_events = slots[s].clone();
                             view! {
                                 <div class="tl-row">
-                                    <div class="tl-slot-label">
-                                        {format!("Slot {s}")}
-                                    </div>
+                                    <div class="tl-slot-label">{format!("Slot {s}")}</div>
                                     <div class="tl-axis">
                                         {slot_events.iter().map(|ev| {
                                             let pct = ((ev.ts - t_min) / WINDOW_MS * 100.0)
                                                 .max(0.0).min(99.0);
                                             let color = event_color(&ev.event_type);
-                                            let is_fault = ev.event_type == "fault";
-                                            let ev_clone = ev.clone();
+                                            let ev2 = ev.clone();
                                             let slot_id = s as u32;
                                             view! {
                                                 <span
-                                                    class={format!(
-                                                        "tl-marker{}",
-                                                        if is_fault { " tl-marker-fault" } else { "" }
-                                                    )}
-                                                    style={format!(
-                                                        "left:{pct:.2}%;background:{color};"
-                                                    )}
+                                                    class="tl-marker"
+                                                    style={format!("left:{pct:.2}%;background:{color};")}
                                                     on:mouseenter={
-                                                        let ev2 = ev_clone.clone();
+                                                        let ev3 = ev2.clone();
                                                         move |_| set_tooltip.set(Some((
                                                             slot_id,
-                                                            ev2.event_type.clone(),
-                                                            ev2.ts,
-                                                            ev2.details.clone(),
+                                                            ev3.event_type.clone(),
+                                                            ev3.ts,
+                                                            ev3.detail.clone(),
                                                         )))
                                                     }
                                                     on:mouseleave=move |_| set_tooltip.set(None)
@@ -242,34 +222,46 @@ pub fn Timeline() -> impl IntoView {
                             }
                         }).collect_view()}
 
-                        // Time axis
                         <div class="tl-time-axis">
-                            {labels.iter().map(|l| {
-                                view! { <span>{l.clone()}</span> }
-                            }).collect_view()}
+                            {labels.iter().map(|l| view! { <span>{l.clone()}</span> }).collect_view()}
                         </div>
                     </div>
 
-                    // Tooltip (fixed, shows on hover)
-                    {move || {
-                        match tooltip.get() {
-                            None => view! { <div class="tl-tooltip tl-tooltip-hidden"></div> }.into_view(),
-                            Some((slot, etype, ts, details)) => {
-                                let time_str = fmt_hhmmss(ts);
-                                view! {
-                                    <div class="tl-tooltip tl-tooltip-visible">
-                                        <div class="tl-tt-type">{etype.clone()}</div>
-                                        <div class="tl-tt-meta">
-                                            {format!("Slot {slot} · {time_str}")}
-                                        </div>
-                                        {details.map(|d| view! {
-                                            <div class="tl-tt-detail">{d}</div>
-                                        })}
-                                    </div>
-                                }.into_view()
-                            }
-                        }
+                    // Tooltip (shown centred on hover)
+                    {move || match tooltip.get() {
+                        None => view! { <div class="tl-tooltip tl-tooltip-hidden"></div> }.into_view(),
+                        Some((slot, etype, ts, detail)) => view! {
+                            <div class="tl-tooltip tl-tooltip-visible">
+                                <div class="tl-tt-type">{etype.clone()}</div>
+                                <div class="tl-tt-meta">{format!("Slot {slot} · {}", fmt_hhmmss(ts))}</div>
+                                {detail.map(|d| view! { <div class="tl-tt-detail">{d}</div> })}
+                            </div>
+                        }.into_view(),
                     }}
+
+                    // ── Vertical event list (newest first) ───────────────────
+                    <div class="tl-event-list">
+                        <div class="tl-event-list-header">"Recent Events"</div>
+                        {d.events.iter().take(40).map(|ev| {
+                            let color = event_color(&ev.event_type);
+                            let time_str = fmt_hhmmss(ev.ts);
+                            let slot = ev.slot_id.unwrap_or(0);
+                            let etype = ev.event_type.clone();
+                            let detail = ev.detail.clone().unwrap_or_default();
+                            view! {
+                                <div class="tl-ev-row">
+                                    <span
+                                        class="tl-ev-dot"
+                                        style={format!("background:{color};")}
+                                    ></span>
+                                    <span class="tl-ev-time">{time_str}</span>
+                                    <span class="tl-ev-slot">{format!("s{slot}")}</span>
+                                    <span class="tl-ev-type">{etype}</span>
+                                    <span class="tl-ev-detail">{detail}</span>
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
                 }.into_view()
             }}
         </div>
