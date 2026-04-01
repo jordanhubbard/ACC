@@ -11,7 +11,7 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 8790;
-const ADMIN_TOKEN = 'sc-squirrelchat-admin-2026';
+const ADMIN_TOKEN = process.env.SC_ADMIN_TOKEN || '<SC_ADMIN_TOKEN>';
 const RCC_BASE = 'http://localhost:8789';
 const RCC_AGENT_TOKEN = process.env.RCC_AGENT_TOKEN || '<YOUR_RCC_TOKEN>';
 
