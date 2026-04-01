@@ -298,6 +298,36 @@ const STALE_THRESHOLDS = {
 // ── In-memory heartbeats ───────────────────────────────────────────────────
 const heartbeats = {};
 const heartbeatHistory = {};
+
+// Warm heartbeat map from JSONL history on startup so metrics don't zero out after restarts.
+// Reads the last line of each agent's history file; marks entries >5min old as stale.
+async function warmHeartbeatsFromHistory() {
+  const STALE_MS = 5 * 60 * 1000;
+  const histDir = new URL('./data/heartbeat-history', import.meta.url).pathname;
+  let files;
+  try { files = await readdir(histDir); } catch { return; }
+  const jsonlFiles = files.filter(f => f.endsWith('.jsonl'));
+  for (const file of jsonlFiles) {
+    try {
+      const content = await readFile(`${histDir}/${file}`, 'utf8');
+      const lines = content.trim().split('\n').filter(Boolean);
+      if (!lines.length) continue;
+      const last = JSON.parse(lines[lines.length - 1]);
+      if (!last.agent) continue;
+      const age = Date.now() - new Date(last.ts).getTime();
+      heartbeats[last.agent] = {
+        agent: last.agent,
+        ts: last.ts,
+        status: age > STALE_MS ? 'stale' : (last.status || 'online'),
+        host: last.host || null,
+        _restoredFromHistory: true,
+        _wasOnline: age <= STALE_MS,
+      };
+    } catch { /* skip malformed files */ }
+  }
+  const count = Object.keys(heartbeats).length;
+  if (count) console.log(`[heartbeats] Warmed ${count} agent(s) from history on startup`);
+}
 const cronStatus = {};
 const providerHealth = {};
 const geekSseClients = new Set();
@@ -8057,7 +8087,8 @@ setInterval(async () => {
 }, 5 * 60 * 1000).unref();
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {
-  reloadAgentTokens()
+  warmHeartbeatsFromHistory()
+    .then(() => reloadAgentTokens())
     .then(() => initLLMRegistry())
     .then(() => {
       startServer();
