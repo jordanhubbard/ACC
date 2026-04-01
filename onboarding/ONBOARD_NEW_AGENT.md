@@ -128,13 +128,4 @@ After completing all steps, confirm:
 - [ ] You can push to rockyandfriends: `git push --dry-run`
 - [ ] Your HEARTBEAT.md includes all three mandatory steps
 
----
 
-## For Boris and Agent RTX specifically
-
-**Known gap as of 2026-03-27:** Both are on SquirrelBus but NOT posting RCC heartbeats. The fix is purely Step 2 + Step 7 — add the heartbeat POST to HEARTBEAT.md and run it.
-
-Boris gateway: outbound-capable, Sweden datacenter, dual L40  
-Agent RTX gateway: outbound-only (horde-dgxc), `jordanh-rtx`, 4x L40
-
-Both should be able to POST to `https://rcc.example.com/api/heartbeat/<name>` directly.
