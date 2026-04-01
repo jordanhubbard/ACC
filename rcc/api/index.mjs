@@ -24,10 +24,6 @@ import { learnLesson, queryLessons, queryAllLessons, formatLessonsForContext, ge
 import { generateIdea } from '../ideation/ideation.mjs';
 import * as issuesModule from '../issues/index.mjs';
 
-// ── Route modules (extracted from this file — see routes/README.md) ────────
-import { tryAgentOSRoute } from './routes/agentos.mjs';
-import { tryBusRoute }     from './routes/bus.mjs';
-
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT            = parseInt(process.env.RCC_PORT || '8789', 10);
 const EXEC_LOG_PATH   = process.env.EXEC_LOG_PATH || './data/exec-log.jsonl';
