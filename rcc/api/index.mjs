@@ -24,6 +24,10 @@ import { learnLesson, queryLessons, queryAllLessons, formatLessonsForContext, ge
 import { generateIdea } from '../ideation/ideation.mjs';
 import * as issuesModule from '../issues/index.mjs';
 
+// ── Route modules (extracted from this file — see routes/README.md) ────────
+import { tryAgentOSRoute } from './routes/agentos.mjs';
+import { tryBusRoute }     from './routes/bus.mjs';
+
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT            = parseInt(process.env.RCC_PORT || '8789', 10);
 const EXEC_LOG_PATH   = process.env.EXEC_LOG_PATH || './data/exec-log.jsonl';
@@ -6390,7 +6394,19 @@ loadPackages();
       return json(res, 200, Object.values(tunnelState.tunnels));
     }
 
-    // ── SquirrelBus routes ─────────────────────────────────────────────────
+    // ── SquirrelBus routes (delegated to routes/bus.mjs) ───────────────────
+    // tryBusRoute handles /bus/* and /api/bus/* (except /api/bus/receive which needs receiveLessonFromBus)
+    if (path.startsWith('/bus/') || (path.startsWith('/api/bus/') && path !== '/api/bus/receive')) {
+      const busCtx = {
+        req, res, method, path, url, json, readBody, isAuthed,
+        _busReadMessages, _busAppend, _busSSEClients, _busPresence,
+        getBusSeq: () => _busSeq, _busAcks, _busDeadLetters,
+      };
+      const handled = await tryBusRoute(busCtx);
+      if (handled) return;
+    }
+
+    // ── SquirrelBus routes (original inline — kept for reference, now delegated above) ─────────────
 
     // GET /bus/messages
     if (method === 'GET' && path === '/bus/messages') {
@@ -6620,6 +6636,17 @@ loadPackages();
         bus_seq: _busSeq,
         ts: new Date().toISOString(),
       });
+    }
+
+    // ── agentOS routes (delegated to routes/agentos.mjs) ─────────────────────
+    // tryAgentOSRoute handles /api/agentos/* and /api/mesh
+    // Note: /api/agentos/cap-events, /api/agentos/events, /api/agentos/timeline remain
+    // inline below (added in later commits — to be migrated in Phase 2)
+    if (path.startsWith('/api/agentos/') || path === '/api/mesh') {
+      const agentosCtx = { req, res, method, path, url, json, readBody, isAuthed };
+      const handled = await tryAgentOSRoute(agentosCtx);
+      if (handled) return;
+      // Fall through to inline handlers below (cap-events, events, timeline, etc.)
     }
 
     // ── Missing API endpoints (ported from old Node dashboard) ────────────
