@@ -67,7 +67,7 @@ pub fn BusSend() -> impl IntoView {
                         }).to_string();
                         spawn_local(async move {
                             let result = gloo_net::http::Request::post("/bus/send")
-                                .header("Authorization", env!("RCC_AUTH_TOKEN", "<YOUR_RCC_TOKEN>"))
+                                // Auth is handled by dashboard-server proxy
                                 .header("Content-Type", "application/json")
                                 .body(body)
                                 .expect("body")

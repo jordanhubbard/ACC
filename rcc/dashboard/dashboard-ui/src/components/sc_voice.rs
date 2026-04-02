@@ -1,6 +1,7 @@
 //! Sprint 2: Speaker labels, streaming TTS, per-agent voice config
 
 use leptos::*;
+#[allow(unused_imports)]
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;

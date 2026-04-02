@@ -435,6 +435,7 @@ pub fn build_app(state: Arc<AppState>, dist: &str) -> Router {
         .route("/agentfs",     get(spa_index))
         .route("/coding",      get(spa_index))
         .route("/nanolang",    get(spa_index))
+        .route("/settings",    get(spa_index))
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state)
         .fallback_service(
