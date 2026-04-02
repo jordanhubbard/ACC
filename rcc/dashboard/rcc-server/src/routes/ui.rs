@@ -1,11 +1,9 @@
-/// /routes/ui.rs — legacy HTML routes replaced with redirects to WASM dashboard
-/// /grievances and /api/grievances proxy to the grievances service.
-/// /api/bootstrap — agent bootstrap token issuer.
+/// /routes/ui.rs — bootstrap token issuer and grievances proxy.
 
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json, Redirect},
+    response::{IntoResponse, Json},
     routing::{get, post},
     Router,
 };
@@ -14,23 +12,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use crate::AppState;
 
-// Dashboard base URL (where WASM dashboard lives)
-fn dashboard_url() -> String {
-    std::env::var("DASHBOARD_URL").unwrap_or_else(|_| "http://146.190.134.110:8788".to_string())
-}
-
 fn grievances_url() -> String {
     std::env::var("GRIEVANCES_URL").unwrap_or_else(|_| "http://localhost:9999".to_string())
 }
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
-        // Legacy HTML → redirect to WASM dashboard
-        .route("/projects", get(|| async { Redirect::to(&format!("{}/", dashboard_url())) }))
-        .route("/services", get(|| async { Redirect::to(&format!("{}/services", dashboard_url())) }))
-        .route("/timeline", get(|| async { Redirect::to(&format!("{}/timeline", dashboard_url())) }))
-        .route("/packages", get(|| async { Redirect::to(&format!("{}/packages", dashboard_url())) }))
-        .route("/playground", get(|| async { Redirect::to(&format!("{}/playground", dashboard_url())) }))
         // Bootstrap
         .route("/api/bootstrap", get(get_bootstrap))
         .route("/api/bootstrap/token", post(post_bootstrap_token))

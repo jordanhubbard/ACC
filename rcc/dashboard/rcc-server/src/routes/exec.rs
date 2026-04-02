@@ -59,14 +59,27 @@ async fn post_exec(
 
     let exec_id = format!("exec-{}", uuid::Uuid::new_v4());
     let now = chrono::Utc::now().to_rfc3339();
-    let target = body.get("target").and_then(|v| v.as_str()).unwrap_or("all");
+    let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("shell").to_string();
+    let timeout_ms = body.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(30000);
+
+    // Support targets (array) or target (string) for backward compat
+    let targets: Vec<String> = if let Some(arr) = body.get("targets").and_then(|v| v.as_array()) {
+        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+    } else if let Some(t) = body.get("target").and_then(|v| v.as_str()) {
+        vec![t.to_string()]
+    } else {
+        vec!["all".to_string()]
+    };
 
     let payload = json!({
-        "execId":  exec_id,
-        "code":    code,
-        "target":  target,
-        "replyTo": body.get("replyTo").cloned(),
-        "ts":      now.clone(),
+        "execId":     exec_id,
+        "id":         exec_id,
+        "code":       code,
+        "targets":    targets,
+        "mode":       mode,
+        "timeout_ms": timeout_ms,
+        "replyTo":    body.get("replyTo").cloned(),
+        "ts":         now.clone(),
     });
     let sig = sign_payload(&payload, &squirrelbus_token);
     let envelope = {
@@ -85,12 +98,13 @@ async fn post_exec(
         .build()
         .unwrap_or_default();
 
+    let broadcast_to = targets.first().map(|s| s.as_str()).unwrap_or("all");
     let bus_sent = client
         .post(format!("{}/bus/send", bus_url))
         .bearer_auth(&bus_token)
         .json(&json!({
             "from":    "rocky",
-            "to":      target,
+            "to":      broadcast_to,
             "type":    "rcc.exec",
             "subject": format!("rcc.exec:{}", exec_id),
             "body":    envelope.to_string(),
@@ -103,9 +117,12 @@ async fn post_exec(
     // Log to exec.jsonl
     let log_record = json!({
         "execId":      exec_id.clone(),
+        "id":          exec_id.clone(),
         "ts":          now,
         "code":        code,
-        "target":      target,
+        "targets":     targets,
+        "mode":        mode,
+        "timeout_ms":  timeout_ms,
         "replyTo":     body.get("replyTo").cloned(),
         "results":     [],
         "busSent":     bus_sent,
@@ -113,7 +130,7 @@ async fn post_exec(
     });
     append_exec_log(&log_record).await;
 
-    (axum::http::StatusCode::OK, Json(json!({"ok": true, "execId": exec_id, "busSent": bus_sent}))).into_response()
+    (axum::http::StatusCode::OK, Json(json!({"ok": true, "id": exec_id, "execId": exec_id, "busSent": bus_sent}))).into_response()
 }
 
 // ── GET /api/exec/:id ─────────────────────────────────────────────────────
