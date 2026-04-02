@@ -14,18 +14,41 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/agents", get(get_agents).post(post_agent))
         .route("/api/agents/register", post(register_agent))
-        .route("/api/agents/:name", post(upsert_agent).patch(patch_agent))
+        .route("/api/agents/:name", get(get_agent_by_name).post(upsert_agent).patch(patch_agent))
+        .route("/api/agents/:name/heartbeat", post(agent_heartbeat))
         .route("/api/heartbeat/:agent", post(post_heartbeat))
         .route("/api/heartbeats", get(get_heartbeats))
 }
 
+fn is_online(agent: &Value) -> bool {
+    if let Some(ts_str) = agent.get("lastSeen").and_then(|v| v.as_str()) {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+            let age = chrono::Utc::now().signed_duration_since(dt.with_timezone(&chrono::Utc));
+            return age.num_seconds() < 300;
+        }
+    }
+    false
+}
+
 async fn get_agents(State(state): State<Arc<AppState>>) -> Json<Value> {
     let agents = state.agents.read().await;
-    let result: Vec<Value> = match agents.as_object() {
-        Some(map) => map.values().cloned().collect(),
+    let mut result: Vec<Value> = match agents.as_object() {
+        Some(map) => map.values().map(|a| {
+            let mut record = a.clone();
+            if let Some(obj) = record.as_object_mut() {
+                obj.insert("online".into(), json!(is_online(a)));
+            }
+            record
+        }).collect(),
         None => vec![],
     };
-    Json(json!(result))
+    // Sort by lastSeen desc (ISO 8601 strings sort lexicographically)
+    result.sort_by(|a, b| {
+        let ts_a = a.get("lastSeen").and_then(|v| v.as_str()).unwrap_or("");
+        let ts_b = b.get("lastSeen").and_then(|v| v.as_str()).unwrap_or("");
+        ts_b.cmp(ts_a)
+    });
+    Json(json!({ "ok": true, "agents": result }))
 }
 
 async fn get_heartbeats(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -54,6 +77,61 @@ async fn get_heartbeats(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(Value::Object(result))
 }
 
+async fn get_agent_by_name(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let agents = state.agents.read().await;
+    match agents.as_object().and_then(|m| m.get(&name)) {
+        Some(agent) => {
+            let mut record = agent.clone();
+            if let Some(obj) = record.as_object_mut() {
+                obj.insert("online".into(), json!(is_online(agent)));
+            }
+            Json(json!({ "ok": true, "agent": record })).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "Agent not found"}))).into_response(),
+    }
+}
+
+async fn agent_heartbeat(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let agent_name = name.to_lowercase();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let mut agents = state.agents.write().await;
+    let agents_map = agents.as_object_mut().unwrap();
+
+    if let Some(agent_obj) = agents_map.get_mut(&agent_name) {
+        if let Some(obj) = agent_obj.as_object_mut() {
+            obj.insert("lastSeen".into(), json!(now));
+            obj.insert("onlineStatus".into(), json!("online"));
+        }
+    } else {
+        let host = body.get("host").and_then(|h| h.as_str()).unwrap_or("unknown").to_string();
+        let token = format!("rcc-agent-{}-{}", agent_name, uuid::Uuid::new_v4().to_string().replace('-', ""));
+        agents_map.insert(agent_name.clone(), json!({
+            "name": agent_name,
+            "host": host,
+            "type": "full",
+            "token": token,
+            "registeredAt": now,
+            "lastSeen": now,
+            "onlineStatus": "online",
+            "capabilities": body.get("capabilities").cloned().unwrap_or(json!({})),
+            "billing": {"claude_cli": "fixed", "inference_key": "metered", "gpu": "fixed"},
+        }));
+    }
+
+    drop(agents);
+    flush_agents(&state).await;
+
+    Json(json!({ "ok": true })).into_response()
+}
+
 async fn register_agent(
     State(state): State<Arc<AppState>>,
     Json(body): Json<Value>,
@@ -77,17 +155,15 @@ async fn register_agent(
     let now = chrono::Utc::now().to_rfc3339();
     let existing = agents_map.get(&name).cloned().unwrap_or(json!({}));
 
-    let caps = body.get("capabilities").cloned().unwrap_or(json!({}));
+    let caps_raw = body.get("capabilities").cloned().unwrap_or(json!({}));
     let existing_caps = existing.get("capabilities").cloned().unwrap_or(json!({}));
 
-    let agent = json!({
-        "name": name,
-        "host": body.get("host").or_else(|| existing.get("host")).and_then(|h| h.as_str()).unwrap_or("unknown"),
-        "type": body.get("type").or_else(|| existing.get("type")).and_then(|t| t.as_str()).unwrap_or("full"),
-        "token": token,
-        "registeredAt": existing.get("registeredAt").cloned().unwrap_or(json!(now)),
-        "lastSeen": existing.get("lastSeen").cloned().unwrap_or(json!(null)),
-        "capabilities": {
+    // Support both array format (["openclaw", "claude"]) and legacy boolean-map format
+    let capabilities_value = if caps_raw.is_array() {
+        caps_raw.clone()
+    } else {
+        let caps = &caps_raw;
+        json!({
             "claude_cli": caps.get("claude_cli").or_else(|| existing_caps.get("claude_cli")).and_then(|v| v.as_bool()).unwrap_or(true),
             "inference_key": caps.get("inference_key").or_else(|| existing_caps.get("inference_key")).and_then(|v| v.as_bool()).unwrap_or(true),
             "gpu": caps.get("gpu").or_else(|| existing_caps.get("gpu")).and_then(|v| v.as_bool()).unwrap_or(false),
@@ -95,7 +171,20 @@ async fn register_agent(
             "tailscale_ip": caps.get("tailscale_ip").or_else(|| existing_caps.get("tailscale_ip")).cloned().unwrap_or(json!(null)),
             "vllm": caps.get("vllm").or_else(|| existing_caps.get("vllm")).and_then(|v| v.as_bool()).unwrap_or(false),
             "vllm_port": caps.get("vllm_port").or_else(|| existing_caps.get("vllm_port")).and_then(|v| v.as_u64()).unwrap_or(8080),
-        },
+        })
+    };
+
+    let agent = json!({
+        "name": name,
+        "host": body.get("host").or_else(|| existing.get("host")).and_then(|h| h.as_str()).unwrap_or("unknown"),
+        "type": body.get("type").or_else(|| existing.get("type")).and_then(|t| t.as_str()).unwrap_or("full"),
+        "version": body.get("version").or_else(|| existing.get("version")).cloned().unwrap_or(json!(null)),
+        "vllm_port": body.get("vllm_port").or_else(|| existing.get("vllm_port")).cloned().unwrap_or(json!(null)),
+        "slack_id": body.get("slack_id").or_else(|| existing.get("slack_id")).cloned().unwrap_or(json!(null)),
+        "token": token,
+        "registeredAt": existing.get("registeredAt").cloned().unwrap_or(json!(now)),
+        "lastSeen": json!(now),
+        "capabilities": capabilities_value,
         "billing": {
             "claude_cli": "fixed",
             "inference_key": "metered",

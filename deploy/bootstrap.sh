@@ -578,6 +578,22 @@ if [[ -f "$AGENTFS_BIN" ]]; then
   fi
 fi
 
+# ── 9f. Install openclaw-register service ────────────────────────────────
+REGISTER_SVC="/etc/systemd/system/openclaw-register.service"
+REGISTER_SVC_SRC="$RCC_WORKSPACE/rcc/scripts/openclaw-register.service"
+
+if [[ -f "$REGISTER_SVC_SRC" ]]; then
+  info "Installing openclaw-register systemd service..."
+  mkdir -p "$HOME/.rcc/logs"
+  sed "s/AGENT_USER/$(whoami)/g" "$REGISTER_SVC_SRC" | sudo tee "$REGISTER_SVC" > /dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl enable openclaw-register
+  sudo systemctl restart openclaw-register 2>/dev/null || sudo systemctl start openclaw-register 2>/dev/null || true
+  success "openclaw-register service enabled and started"
+else
+  warn "openclaw-register.service not found in workspace — skipping (run after pulling latest)"
+fi
+
 # ── 10. Hardware fingerprint + heartbeat ─────────────────────────────────
 info "Collecting hardware fingerprint..."
 

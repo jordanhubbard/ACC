@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenClaw Agent Registration + Heartbeat
+Documentation=https://github.com/jordanhubbard/rockyandfriends
+After=network-online.target rcc-api.service
+Wants=network-online.target
+BindsTo=rcc-api.service
+
+[Service]
+Type=simple
+User=AGENT_USER
+WorkingDirectory=/home/AGENT_USER/Src/rockyandfriends
+EnvironmentFile=-/home/AGENT_USER/.rcc/.env
+ExecStart=/usr/bin/node /home/AGENT_USER/Src/rockyandfriends/rcc/scripts/openclaw-register.mjs
+Restart=on-failure
+RestartSec=15
+StandardOutput=append:/home/AGENT_USER/.rcc/logs/openclaw-register.log
+StandardError=append:/home/AGENT_USER/.rcc/logs/openclaw-register.log
+
+[Install]
+WantedBy=multi-user.target
