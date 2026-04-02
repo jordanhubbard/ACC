@@ -8,7 +8,7 @@ use crate::components::{
     agent_detail::AgentDetail,
     bus_send::BusSend,
     changelog::Changelog,
-    // coding_agent::CodingAgent, // disabled — crush-server not deployed
+    coding_agent::CodingAgent,
     geek_view::GeekView,
     health_banner::HealthBanner,
     idea_incubator::IdeaIncubator,
@@ -32,6 +32,7 @@ fn path_to_tab(path: &str) -> u8 {
         "/agents"                      => 4,
         "/issues"                      => 5,
         "/providers"                   => 6,
+        "/coding"                      => 7,
         "/services"                    => 8,
         "/timeline"                    => 9,
         _                              => 0, // default: Dashboard
@@ -47,6 +48,7 @@ fn tab_to_path(tab: u8) -> &'static str {
         4 => "/agents",
         5 => "/issues",
         6 => "/providers",
+        7 => "/coding",
         8 => "/services",
         9 => "/timeline",
         _ => "/",
@@ -128,6 +130,11 @@ fn AppInner() -> impl IntoView {
                     >"🔌 Providers"</button>
                     <button
                         class="tab-btn"
+                        class:tab-active=move || tab.get() == 7
+                        on:click=move |_| select_tab.with_value(|f| f(7))
+                    >"⚡ Coding"</button>
+                    <button
+                        class="tab-btn"
                         class:tab-active=move || tab.get() == 8
                         on:click=move |_| select_tab.with_value(|f| f(8))
                     >"🗺️ Services"</button>
@@ -147,6 +154,7 @@ fn AppInner() -> impl IntoView {
                     4 => view! { <AgentDetail /> }.into_view(),
                     5 => view! { <Issues /> }.into_view(),
                     6 => view! { <Providers /> }.into_view(),
+                    7 => view! { <CodingAgent /> }.into_view(),
                     8 => view! { <Services /> }.into_view(),
                     9 => view! { <Timeline /> }.into_view(),
                     _ => view! {
