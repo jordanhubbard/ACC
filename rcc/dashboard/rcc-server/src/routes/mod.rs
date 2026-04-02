@@ -14,6 +14,7 @@ pub mod agentos;
 pub mod memory;
 pub mod issues;
 pub mod fs;
+pub mod supervisor;
 
 use axum::{
     http::StatusCode,

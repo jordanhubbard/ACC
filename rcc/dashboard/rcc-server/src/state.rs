@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use tokio::sync::{RwLock, broadcast};
 use crate::brain::BrainQueue;
+use crate::supervisor::SupervisorHandle;
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct QueueData {
@@ -30,6 +31,7 @@ pub struct AppState {
     pub start_time: std::time::SystemTime,
     pub s3_client: Option<Arc<aws_sdk_s3::Client>>,
     pub s3_bucket: String,
+    pub supervisor: Option<Arc<SupervisorHandle>>,
 }
 
 impl AppState {
