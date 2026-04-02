@@ -1,5 +1,5 @@
 [Unit]
-Description=RCC Agent Listener — SquirrelBus remote exec daemon
+Description=CCC Agent Listener — ClawBus remote exec daemon
 After=network-online.target
 Wants=network-online.target
 

@@ -323,7 +323,7 @@ html, body {
 }
 .resolution { color: var(--text-dim); font-size: 11px; }
 
-/* ── SquirrelBus ─────────────────────────────────────────────────────────── */
+/* ── ClawBus ─────────────────────────────────────────────────────────── */
 .section-bus { flex: 1; }
 
 .bus-status {

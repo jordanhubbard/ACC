@@ -1,5 +1,5 @@
 [Unit]
-Description=agentOS Metrics Push — stream PD metrics to SquirrelBus
+Description=agentOS Metrics Push — stream PD metrics to ClawBus
 After=network.target
 
 [Service]
