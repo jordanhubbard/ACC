@@ -45,6 +45,35 @@ async fn main() {
         .filter(|s| !s.is_empty())
         .collect();
 
+    // Build MinIO/S3 client
+    let s3_bucket = std::env::var("MINIO_BUCKET").unwrap_or_else(|_| "agents".to_string());
+    let s3_client = {
+        let endpoint = std::env::var("MINIO_ENDPOINT")
+            .unwrap_or_else(|_| "http://localhost:9000".to_string());
+        let access_key = std::env::var("MINIO_ACCESS_KEY").ok();
+        let secret_key = std::env::var("MINIO_SECRET_KEY").ok();
+        match (access_key, secret_key) {
+            (Some(ak), Some(sk)) => {
+                use aws_credential_types::Credentials;
+                use aws_sdk_s3::config::Region;
+                let creds = Credentials::new(ak, sk, None, None, "env");
+                let s3_config = aws_sdk_s3::Config::builder()
+                    .credentials_provider(creds)
+                    .region(Region::new("us-east-1"))
+                    .endpoint_url(endpoint)
+                    .force_path_style(true)
+                    .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+                    .build();
+                tracing::info!("S3/MinIO client initialized (bucket={})", s3_bucket);
+                Some(Arc::new(aws_sdk_s3::Client::from_conf(s3_config)))
+            }
+            _ => {
+                tracing::warn!("MINIO_ACCESS_KEY or MINIO_SECRET_KEY not set — S3/AgentFS disabled");
+                None
+            }
+        }
+    };
+
     let app_state = Arc::new(AppState {
         auth_tokens,
         queue_path,
@@ -60,6 +89,8 @@ async fn main() {
         bus_tx: tokio::sync::broadcast::channel(256).0,
         bus_seq: std::sync::atomic::AtomicU64::new(0),
         start_time: std::time::SystemTime::now(),
+        s3_client,
+        s3_bucket,
     });
 
     // Load persisted state
@@ -88,6 +119,7 @@ async fn main() {
         .merge(routes::agentos::router())
         .merge(routes::memory::router())
         .merge(routes::issues::router())
+        .merge(routes::fs::router())
         .layer(cors)
         .with_state(app_state.clone());
 

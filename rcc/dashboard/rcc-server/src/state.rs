@@ -28,6 +28,8 @@ pub struct AppState {
     pub bus_tx: broadcast::Sender<String>,
     pub bus_seq: AtomicU64,
     pub start_time: std::time::SystemTime,
+    pub s3_client: Option<Arc<aws_sdk_s3::Client>>,
+    pub s3_bucket: String,
 }
 
 impl AppState {
