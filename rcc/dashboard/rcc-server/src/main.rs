@@ -1,6 +1,4 @@
-use axum::{
-    Router,
-};
+use axum::Router;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{CorsLayer, Any};
@@ -8,6 +6,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod routes;
 pub mod state;
+pub mod brain;
 
 pub use state::AppState;
 
@@ -36,6 +35,8 @@ async fn main() {
         .unwrap_or_else(|_| format!("{}/secrets.json", data_dir));
     let bus_log_path = std::env::var("BUS_LOG_PATH")
         .unwrap_or_else(|_| format!("{}/bus.jsonl", data_dir));
+    let projects_path = std::env::var("PROJECTS_PATH")
+        .unwrap_or_else(|_| format!("{}/projects.json", data_dir));
 
     let auth_tokens: std::collections::HashSet<String> = std::env::var("RCC_AUTH_TOKENS")
         .unwrap_or_default()
@@ -50,9 +51,12 @@ async fn main() {
         agents_path,
         secrets_path,
         bus_log_path,
+        projects_path,
         queue: RwLock::new(state::QueueData::default()),
         agents: RwLock::new(serde_json::Value::Object(serde_json::Map::new())),
         secrets: RwLock::new(serde_json::Map::new()),
+        projects: tokio::sync::RwLock::new(Vec::new()),
+        brain: Arc::new(brain::BrainQueue::new()),
         bus_tx: tokio::sync::broadcast::channel(256).0,
         bus_seq: std::sync::atomic::AtomicU64::new(0),
         start_time: std::time::SystemTime::now(),
@@ -60,6 +64,7 @@ async fn main() {
 
     // Load persisted state
     state::load_all(&app_state).await;
+    routes::lessons::load_lessons().await;
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -72,6 +77,12 @@ async fn main() {
         .merge(routes::agents::router())
         .merge(routes::secrets::router())
         .merge(routes::bus::router())
+        .merge(routes::projects::router())
+        .merge(routes::brain::router())
+        .merge(routes::services::router())
+        .merge(routes::lessons::router())
+        .merge(routes::exec::router())
+        .merge(routes::geek::router())
         .layer(cors)
         .with_state(app_state.clone());
 
@@ -94,6 +105,14 @@ async fn main() {
             state::flush_queue(&flush_state).await;
         }
     });
+
+    // Spawn brain worker
+    let brain_arc = app_state.brain.clone();
+    let brain_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .expect("Failed to build reqwest client");
+    tokio::spawn(brain::run_brain_worker(brain_arc, brain_client));
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

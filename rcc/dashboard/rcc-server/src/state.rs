@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use tokio::sync::{RwLock, broadcast};
+use crate::brain::BrainQueue;
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct QueueData {
@@ -18,9 +19,12 @@ pub struct AppState {
     pub agents_path: String,
     pub secrets_path: String,
     pub bus_log_path: String,
+    pub projects_path: String,
     pub queue: RwLock<QueueData>,
     pub agents: RwLock<serde_json::Value>,
     pub secrets: RwLock<serde_json::Map<String, serde_json::Value>>,
+    pub projects: RwLock<Vec<serde_json::Value>>,
+    pub brain: Arc<BrainQueue>,
     pub bus_tx: broadcast::Sender<String>,
     pub bus_seq: AtomicU64,
     pub start_time: std::time::SystemTime,
@@ -53,6 +57,22 @@ pub async fn load_all(state: &Arc<AppState>) {
     load_queue(state).await;
     load_agents(state).await;
     load_secrets(state).await;
+    load_projects(state).await;
+}
+
+pub async fn load_projects(state: &Arc<AppState>) {
+    match tokio::fs::read_to_string(&state.projects_path).await {
+        Ok(content) => {
+            if let Ok(data) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                *state.projects.write().await = data;
+                tracing::info!("Loaded projects from {}", state.projects_path);
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!("Projects file not found, starting empty");
+        }
+        Err(e) => tracing::warn!("Failed to load projects: {}", e),
+    }
 }
 
 pub async fn load_queue(state: &Arc<AppState>) {

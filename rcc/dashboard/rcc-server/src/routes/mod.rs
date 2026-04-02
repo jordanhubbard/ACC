@@ -3,6 +3,12 @@ pub mod queue;
 pub mod agents;
 pub mod secrets;
 pub mod bus;
+pub mod projects;
+pub mod brain;
+pub mod services;
+pub mod lessons;
+pub mod exec;
+pub mod geek;
 
 use axum::{
     http::StatusCode,
