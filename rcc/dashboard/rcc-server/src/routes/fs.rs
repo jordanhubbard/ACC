@@ -1,4 +1,4 @@
-/// /api/fs/* — S3-backed AgentFS API (wq-AGENTFS-001)
+/// /api/fs/* — S3-backed ClawFS API (wq-AGENTFS-001)
 ///
 /// MinIO endpoint from MINIO_ENDPOINT env (default http://localhost:9000).
 /// Bucket from MINIO_BUCKET env (default "agents").

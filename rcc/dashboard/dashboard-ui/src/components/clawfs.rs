@@ -1,4 +1,4 @@
-//! AgentFS — per-agent file sync status + namespace browser (COHERENCE-002).
+//! ClawFS — per-agent file sync status + namespace browser (COHERENCE-002).
 
 use leptos::*;
 use serde::{Deserialize, Serialize};
@@ -123,18 +123,18 @@ pub fn AgentFs() -> impl IntoView {
 
     // ── View ─────────────────────────────────────────────────────────────────
     view! {
-        <div class="agentfs-container">
-            <div class="agentfs-header">
-                <h2 class="agentfs-title">"📁 AgentFS"</h2>
-                <span class="agentfs-subtitle">"Agent file sync status and namespace browser"</span>
+        <div class="clawfs-container">
+            <div class="clawfs-header">
+                <h2 class="clawfs-title">"📁 ClawFS"</h2>
+                <span class="clawfs-subtitle">"Agent file sync status and namespace browser"</span>
             </div>
 
             // ── Sync Status Panel ────────────────────────────────────────────
-            <section class="agentfs-section">
-                <h3 class="agentfs-section-title">"Sync Status"</h3>
+            <section class="clawfs-section">
+                <h3 class="clawfs-section-title">"Sync Status"</h3>
                 {move || match statuses.get() {
                     None => view! {
-                        <div class="agentfs-loading">"Loading sync status…"</div>
+                        <div class="clawfs-loading">"Loading sync status…"</div>
                     }.into_view(),
                     Some(list) => {
                         let cards = list.into_iter().map(|(name, count, last_sync, healthy)| {
@@ -160,8 +160,8 @@ pub fn AgentFs() -> impl IntoView {
             </section>
 
             // ── File Browser ─────────────────────────────────────────────────
-            <section class="agentfs-section">
-                <h3 class="agentfs-section-title">"File Browser"</h3>
+            <section class="clawfs-section">
+                <h3 class="clawfs-section-title">"File Browser"</h3>
                 <div class="afs-browser-toolbar">
                     <label class="afs-select-label">"Agent:"</label>
                     <select
@@ -180,7 +180,7 @@ pub fn AgentFs() -> impl IntoView {
                 </div>
                 {move || match browser_files.get() {
                     None => view! {
-                        <div class="agentfs-loading">"Loading files…"</div>
+                        <div class="clawfs-loading">"Loading files…"</div>
                     }.into_view(),
                     Some(files) if files.is_empty() => view! {
                         <div class="afs-empty">"No files in this namespace."</div>
@@ -216,11 +216,11 @@ pub fn AgentFs() -> impl IntoView {
             </section>
 
             // ── Shared Files ─────────────────────────────────────────────────
-            <section class="agentfs-section">
-                <h3 class="agentfs-section-title">"Shared Files"</h3>
+            <section class="clawfs-section">
+                <h3 class="clawfs-section-title">"Shared Files"</h3>
                 {move || match shared_files.get() {
                     None => view! {
-                        <div class="agentfs-loading">"Loading shared files…"</div>
+                        <div class="clawfs-loading">"Loading shared files…"</div>
                     }.into_view(),
                     Some(files) if files.is_empty() => view! {
                         <div class="afs-empty">"No files in shared/ namespace."</div>
@@ -266,7 +266,7 @@ pub fn AgentFs() -> impl IntoView {
                         <div class="afs-modal-body">
                             {move || if modal_loading.get() {
                                 view! {
-                                    <div class="agentfs-loading">"Loading content…"</div>
+                                    <div class="clawfs-loading">"Loading content…"</div>
                                 }.into_view()
                             } else {
                                 view! {

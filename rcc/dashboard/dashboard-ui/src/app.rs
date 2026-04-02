@@ -6,7 +6,7 @@ use crate::components::{
     activity_feed::ActivityFeed,
     agent_cards::AgentCards,
     agent_detail::AgentDetail,
-    agentfs::AgentFs,
+    clawfs::AgentFs,
     bus_send::BusSend,
     changelog::Changelog,
     coding_agent::CodingAgent,
@@ -37,7 +37,7 @@ fn path_to_tab(path: &str) -> u8 {
         "/coding"                      => 7,
         "/services"                    => 8,
         "/timeline"                    => 9,
-        "/agentfs"                     => 10,
+        "/clawfs"                     => 10,
         "/settings"                    => 11,
         _                              => 0, // default: Dashboard
     }
@@ -55,7 +55,7 @@ fn tab_to_path(tab: u8) -> &'static str {
         7 => "/coding",
         8 => "/services",
         9  => "/timeline",
-        10 => "/agentfs",
+        10 => "/clawfs",
         11 => "/settings",
         _  => "/",
     }
@@ -153,7 +153,7 @@ fn AppInner() -> impl IntoView {
                         class="tab-btn"
                         class:tab-active=move || tab.get() == 10
                         on:click=move |_| select_tab.with_value(|f| f(10))
-                    >"📁 AgentFS"</button>
+                    >"📁 ClawFS"</button>
                     <button
                         class="tab-btn"
                         class:tab-active=move || tab.get() == 11

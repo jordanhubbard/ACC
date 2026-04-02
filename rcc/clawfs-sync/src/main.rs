@@ -1,4 +1,4 @@
-//! agentfs-sync — watches local workspace dirs and syncs to/from MinIO S3
+//! clawfs-sync — watches local workspace dirs and syncs to/from MinIO S3
 //! wq-AGENTFS-002
 
 use aws_credential_types::Credentials;
@@ -277,7 +277,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("agentfs_sync=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("clawfs_sync=info")),
         )
         .init();
 
@@ -434,7 +434,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     info!(
-        "agentfs-sync running (agent={}, dirs={})",
+        "clawfs-sync running (agent={}, dirs={})",
         agent_name,
         watch_dirs.len()
     );

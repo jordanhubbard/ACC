@@ -7,11 +7,11 @@ Wants=network-online.target
 Type=simple
 User=AGENT_USER
 EnvironmentFile=-/home/AGENT_USER/.rcc/.env
-ExecStart=/usr/local/bin/agentfs-sync
+ExecStart=/usr/local/bin/clawfs-sync
 Restart=always
 RestartSec=15
-StandardOutput=append:/home/AGENT_USER/.rcc/logs/agentfs-sync.log
-StandardError=append:/home/AGENT_USER/.rcc/logs/agentfs-sync.log
+StandardOutput=append:/home/AGENT_USER/.rcc/logs/clawfs-sync.log
+StandardError=append:/home/AGENT_USER/.rcc/logs/clawfs-sync.log
 
 [Install]
 WantedBy=multi-user.target

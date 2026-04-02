@@ -388,7 +388,7 @@ app.post('/api/item/:id/ai-comment', requireAuth, async (req, res) => {
         body: JSON.stringify({
           model: 'nvidia/azure/anthropic/claude-sonnet-4-6',
           messages: [
-            { role: 'system', content: `You are Rocky, an AI assistant helping with a work item. Item title: "${item.title}". Description: "${item.description || ''}". Be concise and helpful.` },
+            { role: 'system', content: `You are CCC AI agent helping with a work item. Item title: "${item.title}". Description: "${item.description || ''}". Be concise and helpful.` },
             { role: 'user', content: prompt }
           ],
           max_tokens: 500
@@ -400,7 +400,7 @@ app.post('/api/item/:id/ai-comment', requireAuth, async (req, res) => {
       aiText = `(gateway error: ${gwErr.message})`;
     }
 
-    const aiEntry = { ts: new Date().toISOString(), author: '🐿️ Rocky', type: 'ai', text: aiText };
+    const aiEntry = { ts: new Date().toISOString(), author: '🐾 CCC', type: 'ai', text: aiText };
     item.journal.push(aiEntry);
     item.itemVersion = (item.itemVersion || 0) + 1;
     await writeQueue(data);
@@ -2498,7 +2498,7 @@ function renderGeekPage() {
       <!-- Rocky (do-host1) -->
       <g class="machine-node" id="node-rocky" transform="translate(140,130)">
         <rect width="180" height="130" rx="10" fill="#161b22" stroke="#f85149" stroke-width="1.5"/>
-        <text x="10" y="20" font-size="12" font-weight="700" fill="#f85149">🐿️ Rocky</text>
+        <text x="10" y="20" font-size="12" font-weight="700" fill="#f85149">🐾 Rocky</text>
         <text x="10" y="34" font-size="9" fill="#6e7681">do-host1 · CPU-only VPS</text>
         <text x="10" y="52" font-size="9" fill="#8b949e" font-family="monospace">[RCC API :8789]</text>
         <text x="10" y="64" font-size="9" fill="#8b949e" font-family="monospace">[Dashboard :8788]</text>

@@ -504,7 +504,7 @@ export default function registerRoutes(app, state) {
       const b = await getBrain();
       const brainReq = createRequest({
         messages: [
-          { role: 'system', content: `You are Rocky, helping with work item "${item.title}". Be concise.` },
+          { role: 'system', content: `You are CCC agent, helping with work item "${item.title}". Be concise.` },
           { role: 'user', content: prompt }
         ],
         maxTokens: 500,
@@ -524,7 +524,7 @@ export default function registerRoutes(app, state) {
       aiText = `(brain error: ${e.message})`;
     }
 
-    const aiEntry = { ts: new Date().toISOString(), author: '🐿️ Rocky', type: 'ai', text: aiText };
+    const aiEntry = { ts: new Date().toISOString(), author: '🐾 CCC', type: 'ai', text: aiText };
     item.journal.push(aiEntry);
     item.itemVersion = (item.itemVersion || 0) + 1;
     await writeQueue(q);

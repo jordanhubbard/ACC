@@ -29,7 +29,7 @@ async fn topology(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     // Static node list (topology is defined here; heartbeat data is overlaid)
     let raw_nodes: Vec<Value> = vec![
-        json!({"id":"rocky",         "label":"Rocky",           "type":"agent",          "host":"do-host1",   "chips":["RCC API :8789","TokenHub :8090","ClawBus hub","Tailscale proxy"]}),
+        json!({"id":"rocky",         "label":"Rocky",           "type":"agent",          "host":"do-host1",   "chips":["CCC API :8789","TokenHub :8090","ClawBus hub","Tailscale proxy"]}),
         json!({"id":"bullwinkle",    "label":"Bullwinkle",      "type":"agent",          "host":"puck",       "chips":["OpenClaw :18789","launchd crons"]}),
         json!({"id":"natasha",       "label":"Natasha",         "type":"agent",          "host":"sparky",     "chips":["OpenClaw :18789","Milvus :19530","CUDA/RTX","Ollama :11434"]}),
         json!({"id":"boris",         "label":"Boris",           "type":"agent",          "host":"l40-sweden", "chips":["OpenClaw gateway","4x L40","Nemotron-120B"]}),

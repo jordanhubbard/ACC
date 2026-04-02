@@ -431,7 +431,7 @@ export default function registerRoutes(app, state) {
     const agents = await readAgents();
     const callerAgent = Object.entries(agents).find(([, a]) => a.token === token)?.[0] || null;
     if (event.owner !== 'rocky' && callerAgent !== event.owner && callerAgent !== 'rocky') {
-      return json(res, 403, { error: 'Only the event owner or Rocky may delete this event' });
+      return json(res, 403, { error: 'Only the event owner or Rocky (CCC) may delete this event' });
     }
     events.splice(idx, 1);
     await writeCalendar(events);
@@ -793,14 +793,14 @@ export default function registerRoutes(app, state) {
     if (cmdText === 'status' || cmdText === '') {
       json(res, 200, ack);
       const statusText = await formatAgentStatus().catch(e => `Error: ${e.message}`);
-      await slackRespond(`*🐿️ RCC Agent Status*\n${statusText}`);
+      await slackRespond(`*🐾 CCC Agent Status*\n${statusText}`);
       return;
     }
 
     if (cmdText === 'queue') {
       json(res, 200, ack);
       const queueText = await formatQueueSummary().catch(e => `Error: ${e.message}`);
-      await slackRespond(`*📋 RCC Queue*\n${queueText}`);
+      await slackRespond(`*📋 CCC Queue*\n${queueText}`);
       return;
     }
 
@@ -816,7 +816,7 @@ export default function registerRoutes(app, state) {
         });
         const reply = await b.process(request);
         const replyText = typeof reply === 'string' ? reply : reply?.content || reply?.text || JSON.stringify(reply);
-        await slackRespond(`*🧠 RCC Brain:* ${replyText}`);
+        await slackRespond(`*🧠 CCC Brain:* ${replyText}`);
       } catch (e) {
         await slackRespond(`⚠️ Error: ${e.message}`);
       }
@@ -824,7 +824,7 @@ export default function registerRoutes(app, state) {
     }
 
     return json(res, 200, {
-      text: '*RCC Slash Commands*\n`/rcc status` — agent heartbeat status\n`/rcc queue` — pending work items\n`/rcc ask <question>` — ask the RCC brain',
+      text: '*CCC Slash Commands*\n`/ccc status` — agent heartbeat status\n`/ccc queue` — pending work items\n`/ccc ask <question>` — ask the RCC brain',
       response_type: 'ephemeral',
     });
   });

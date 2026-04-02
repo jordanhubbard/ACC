@@ -51,7 +51,7 @@ const SBOM_DIR           = process.env.SBOM_DIR || './sbom';
 
 // ── Services map ───────────────────────────────────────────────────────────
 const SERVICES_CATALOG = [
-  { id: 'rcc-dashboard',    name: 'RCC Dashboard',      url: 'http://146.190.134.110:8789/projects',  desc: 'Agent work queue + project tracker',       host: 'do-host1' },
+  { id: 'ccc-dashboard',    name: 'CCC Dashboard',      url: 'http://146.190.134.110:8789/projects',  desc: 'Agent work queue + project tracker',       host: 'do-host1' },
   { id: 'services-map',     name: 'Services Map',       url: 'http://146.190.134.110:8789/services',  desc: 'This page — live status of all services',  host: 'do-host1' },
   { id: 'squirrelchat',     name: 'ClawChat',       url: 'http://146.190.134.110:8790/',           desc: 'Self-hosted team chat (Slack replacement)', host: 'do-host1' },
   { id: 'tokenhub-admin',   name: 'Tokenhub Admin',     url: 'http://146.190.134.110:8090/admin/',     desc: 'LLM router — provider health + config',    host: 'do-host1' },
@@ -62,7 +62,7 @@ const SERVICES_CATALOG = [
   { id: 'snidely-vllm',     name: 'Snidely vLLM',       url: 'http://127.0.0.1:18083/v1/models',       desc: 'Nemotron-120B FP8 — 4x L40 (Sweden)',      host: 'snidely'  },
   { id: 'dudley-vllm',      name: 'Dudley vLLM',        url: 'http://127.0.0.1:18084/v1/models',       desc: 'Nemotron-120B FP8 — 4x L40 (Sweden)',      host: 'dudley'   },
   { id: 'whisper-api',      name: 'Whisper API',        url: 'http://100.87.229.125:8792',             desc: 'Speech-to-text (sparky GB10)',              host: 'sparky'   },
-  { id: 'agentfs',          name: 'AgentFS',            url: 'http://100.87.229.125:8791',             desc: 'Content-addressed WASM module store',      host: 'sparky'   },
+  { id: 'clawfs',          name: 'ClawFS',            url: 'http://100.87.229.125:8791',             desc: 'Content-addressed WASM module store',      host: 'sparky'   },
   { id: 'usdagent',         name: 'usdagent',           url: 'http://100.87.229.125:8000',             desc: 'LLM-backed USD 3D asset generator',        host: 'sparky'   },
   { id: 'milvus',           name: 'Milvus',             url: 'http://100.89.199.14:9091/healthz',      desc: 'Vector database (do-host1)',               host: 'do-host1' },
   { id: 'ollama',           name: 'Ollama',             url: 'http://100.87.229.125:11434',            desc: 'Local LLM inference',                     host: 'sparky'   },
@@ -816,7 +816,7 @@ function dashboardHtml() {
   <title>Claw Command Center</title>
 </head><body>
   <div class="topbar">
-    <div class="topbar-logo">🐿️ <span>RCC</span> Claw Command Center</div>
+    <div class="topbar-logo">🐾 <span>CCC</span> Claw Command Center</div>
     <div class="tab-bar" id="tabs">
       <button class="tab active" data-pane="services">Services</button>
       <button class="tab" data-pane="queue">Queue</button>
@@ -1156,8 +1156,8 @@ function dashboardHtml() {
 }
 
 function projectsListHtml() {
-  return `<!DOCTYPE html><html lang="en"><head>${HTML_STYLE}<title>Projects — RCC</title></head><body>
-  <div class="nav"><a href="/">← RCC</a> &nbsp;·&nbsp; <a href="/services">Services</a></div>
+  return `<!DOCTYPE html><html lang="en"><head>${HTML_STYLE}<title>Projects — CCC</title></head><body>
+  <div class="nav"><a href="/">← CCC</a> &nbsp;·&nbsp; <a href="/services">Services</a></div>
   <h1>Projects</h1>
   <p class="subtitle">All registered projects tracked by Claw Command Center</p>
   <div id="root"><p class="spinner">Loading…</p></div>
@@ -1213,7 +1213,7 @@ function packagesHtml() {
     .error-msg{color:#f85149;font-size:.85rem;padding:1rem;background:#21262d;border-radius:6px}
   </style>
 </head><body>
-<div class="nav"><a href="/">← RCC</a> &nbsp;·&nbsp; <a href="/services">Services</a></div>
+<div class="nav"><a href="/">← CCC</a> &nbsp;·&nbsp; <a href="/services">Services</a></div>
 <h1>📦 nano packages</h1>
 <div class="search-wrap">
   <input id="q" type="text" placeholder="Search packages…" autocomplete="off"/>
@@ -1366,7 +1366,7 @@ function playgroundHtml() {
     .share-btn{padding:.2rem .6rem;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#8b949e;font-size:.78rem;cursor:pointer;margin-left:auto}
   </style>
 </head><body>
-<div class="nav"><a href="/">← RCC</a> &nbsp;·&nbsp; <a href="/packages">Packages</a> &nbsp;·&nbsp; <a href="/services">Services</a></div>
+<div class="nav"><a href="/">← CCC</a> &nbsp;·&nbsp; <a href="/packages">Packages</a> &nbsp;·&nbsp; <a href="/services">Services</a></div>
 <h1>🎮 nanolang Playground</h1>
 <p style="color:#8b949e;font-size:.9rem;margin-bottom:.75rem">Write and run nanolang programs in your browser — no install required.</p>
 <div class="example-bar">
@@ -1557,8 +1557,8 @@ function timelineHtml() {
     .tl-refresh:hover{border-color:#58a6ff;color:#58a6ff}
     .tl-auto{font-size:.72rem;color:#484f58;float:right;margin-top:.1rem;margin-right:.5rem}
   </style>
-  <title>Timeline — RCC</title></head><body>
-  <div class="nav"><a href="/">← RCC</a> &nbsp;·&nbsp; <a href="/services">Services</a></div>
+  <title>Timeline — CCC</title></head><body>
+  <div class="nav"><a href="/">← CCC</a> &nbsp;·&nbsp; <a href="/services">Services</a></div>
   <h1>agentOS Agent Lifecycle Timeline</h1>
   <p class="subtitle">Per-slot event markers · last 30 min · auto-refreshes every 10s</p>
   <div class="tl-legend">
@@ -1663,8 +1663,8 @@ function servicesHtml() {
     .mesh-refresh{float:right;background:none;border:1px solid #30363d;color:#8b949e;border-radius:4px;padding:.2rem .6rem;font-size:.78rem;cursor:pointer}
     .mesh-refresh:hover{border-color:#58a6ff;color:#58a6ff}
   </style>
-  <title>Services — RCC</title></head><body>
-  <div class="nav"><a href="/projects">Projects</a> &nbsp;·&nbsp; <a href="/timeline">⏱ Timeline</a> &nbsp;·&nbsp; <a href="/">← RCC</a></div>
+  <title>Services — CCC</title></head><body>
+  <div class="nav"><a href="/projects">Projects</a> &nbsp;·&nbsp; <a href="/timeline">⏱ Timeline</a> &nbsp;·&nbsp; <a href="/">← CCC</a></div>
   <h1>Services</h1>
   <p class="subtitle">Agent infrastructure — live status probed every 30 seconds</p>
   <div id="root"><p class="spinner">Loading…</p></div>
@@ -1741,7 +1741,7 @@ function servicesHtml() {
 
 function projectDetailHtml(projectId) {
   const encodedId = encodeURIComponent(projectId);
-  return `<!DOCTYPE html><html lang="en"><head>${HTML_STYLE}<title>${projectId} — RCC</title></head><body>
+  return `<!DOCTYPE html><html lang="en"><head>${HTML_STYLE}<title>${projectId} — CCC</title></head><body>
   <div class="nav"><a href="/projects">← Projects</a></div>
   <div id="root"><p class="spinner">Loading…</p></div>
   <script>
@@ -2034,7 +2034,7 @@ async function handleRequest(req, res) {
 export function startServer(port = PORT) {
   const server = createServer(handleRequest);
   server.listen(port, '0.0.0.0', () => {
-    console.log(`[rcc-api] 🐿️ RCC API running on http://0.0.0.0:${port}`);
+    console.log(`[ccc-api] 🐾 CCC API running on http://0.0.0.0:${port}`);
     console.log(`[rcc-api] Auth: ${AUTH_TOKENS.size > 0 ? `${AUTH_TOKENS.size} token(s) configured` : 'OPEN (no tokens set)'}`);
   });
 

@@ -110,7 +110,7 @@ async fn main() {
                 Some(Arc::new(aws_sdk_s3::Client::from_conf(s3_config)))
             }
             _ => {
-                tracing::warn!("MINIO_ACCESS_KEY or MINIO_SECRET_KEY not set — S3/AgentFS disabled");
+                tracing::warn!("MINIO_ACCESS_KEY or MINIO_SECRET_KEY not set — S3/ClawFS disabled");
                 None
             }
         }

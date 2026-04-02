@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * agentfs-metrics-push.mjs
+ * clawfs-metrics-push.mjs
  *
  * Runs on sparky. Every 5 seconds:
  *   1. Fetches GET /api/agentos/metrics (Prometheus text format) from local RCC
@@ -60,7 +60,7 @@ async function tick() {
     const text = await resp.text();
     metrics = parsePrometheus(text);
   } catch (e) {
-    process.stderr.write(`[agentfs-push] fetch error: ${e.message}\n`);
+    process.stderr.write(`[clawfs-push] fetch error: ${e.message}\n`);
     return;
   }
 
@@ -76,10 +76,10 @@ async function tick() {
     });
     if (!resp.ok) throw new Error(`bus send HTTP ${resp.status}`);
     process.stderr.write(
-      `[agentfs-push] vibe=${metrics.vibe_active}/${metrics.vibe_total} gpu_q=${metrics.gpu_queue_depth} pool=${metrics.agent_pool_available}/${metrics.agent_pool_total} wdog=${metrics.watchdog_miss_total}\n`
+      `[clawfs-push] vibe=${metrics.vibe_active}/${metrics.vibe_total} gpu_q=${metrics.gpu_queue_depth} pool=${metrics.agent_pool_available}/${metrics.agent_pool_total} wdog=${metrics.watchdog_miss_total}\n`
     );
   } catch (e) {
-    process.stderr.write(`[agentfs-push] bus send error: ${e.message}\n`);
+    process.stderr.write(`[clawfs-push] bus send error: ${e.message}\n`);
   }
 }
 

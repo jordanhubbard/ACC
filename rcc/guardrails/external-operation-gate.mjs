@@ -2,7 +2,7 @@
  * ExternalOperationGate — LLM-supervised safety for external service operations.
  *
  * Adopted from JKHeadley/instar/src/core/ExternalOperationGate.ts (2026-03-27).
- * Rocky RCC port — Node.js ESM, no TypeScript.
+ * Rocky CCC port — Node.js ESM, no TypeScript.
  *
  * Risk matrix: mutability × reversibility × scope → risk level.
  * Three layers: static classification → config floor → LLM proportionality check.

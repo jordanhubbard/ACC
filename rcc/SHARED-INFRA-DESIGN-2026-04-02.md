@@ -28,7 +28,7 @@ The task system and bus are already coherent. The problem is memory, knowledge, 
 ```
 Every agent reads/writes:
   ┌─────────────────────────────────────────────────────────────┐
-  │  AgentFS (S3/MinIO-backed virtual filesystem)               │
+  │  ClawFS (S3/MinIO-backed virtual filesystem)               │
   │    s3://agents/shared/     ← fleet-wide shared files        │
   │    s3://agents/{name}/     ← per-agent private (still S3)  │
   │    s3://agents/workspace/  ← ephemeral working files        │
@@ -49,7 +49,7 @@ Every agent reads/writes:
 
 ---
 
-## 3. Shared Filesystem (AgentFS on MinIO)
+## 3. Shared Filesystem (ClawFS on MinIO)
 
 ### 3a. Bucket layout
 
@@ -83,11 +83,11 @@ agents/                        ← single bucket on do-host1 MinIO
 
 ### 3c. OpenClaw integration
 
-Add an `agentfs` skill / config to OpenClaw that wraps S3 read/write:
-- `agentfs.read(path)` → streams file from MinIO
-- `agentfs.write(path, content)` → writes to MinIO
-- `agentfs.list(prefix)` → lists objects under prefix
-- `agentfs.exists(path)` → HEAD check
+Add an `clawfs` skill / config to OpenClaw that wraps S3 read/write:
+- `clawfs.read(path)` → streams file from MinIO
+- `clawfs.write(path, content)` → writes to MinIO
+- `clawfs.list(prefix)` → lists objects under prefix
+- `clawfs.exists(path)` → HEAD check
 
 For file writes that conflict (two agents writing `shared/MEMORY.md` simultaneously):
 - Prefer **append-only writes** with agent-stamped blocks
@@ -100,11 +100,11 @@ Each agent's OpenClaw workspace should mount:
 - `~/.openclaw/workspace/memory/` → backed by `s3://agents/{agent}/memory/`
 - `~/.openclaw/workspace/shared/` → backed by `s3://agents/shared/workspace/{agent}/`
 
-Implementation: `s3fs` or `rclone mount` on startup. Or (simpler): OpenClaw's `read`/`write` tools route through AgentFS when `AGENTFS_ENABLED=true`.
+Implementation: `s3fs` or `rclone mount` on startup. Or (simpler): OpenClaw's `read`/`write` tools route through ClawFS when `AGENTFS_ENABLED=true`.
 
 The simplest viable approach: **periodic sync** rather than FUSE mount.
 - Agent writes to local `~/.openclaw/workspace/memory/` (as today)
-- Sync daemon (`agentfs-sync`) mirrors to/from S3 every 60s
+- Sync daemon (`clawfs-sync`) mirrors to/from S3 every 60s
 - Rocky's reconciler merges conflicts (timestamp wins, manual review for MEMORY.md)
 
 ---
@@ -159,7 +159,7 @@ Target:
 ```
 Agent writes MEMORY.md
   ↓
-agentfs-sync mirrors to s3://agents/{agent}/memory/2026-04-02.md
+clawfs-sync mirrors to s3://agents/{agent}/memory/2026-04-02.md
   ↓
 RCC ingest trigger (webhook on S3 event OR periodic scan)
   ↓
@@ -215,7 +215,7 @@ This is fine for AI agent workloads. An agent can work with knowledge that's 60 
 
 ## 6. Implementation Plan
 
-### Phase 1 — AgentFS (S3 sync, 2 weeks)
+### Phase 1 — ClawFS (S3 sync, 2 weeks)
 
 **wq-AGENTFS-001**: RCC `/api/fs/*` endpoint suite
 - `GET /api/fs/read?path=shared/MEMORY.md`
@@ -225,15 +225,15 @@ This is fine for AI agent workloads. An agent can work with knowledge that's 60 
 - Backed by MinIO S3 (do-host1, bucket `agents`)
 - Auth: bearer token (same as rest of RCC)
 
-**wq-AGENTFS-002**: `agentfs-sync` daemon for each agent
+**wq-AGENTFS-002**: `clawfs-sync` daemon for each agent
 - Lightweight: watches `~/.openclaw/workspace/memory/` + `~/.openclaw/workspace/shared/`
 - On write: uploads to S3 immediately (debounced 5s)
 - On startup: downloads agent's S3 files to local workspace
 - Runs as systemd unit or openclaw plugin
 - Config: `AGENTFS_BUCKET`, `MINIO_URL`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` (from RCC secrets)
 
-**wq-AGENTFS-003**: deploy agentfs-sync to all agents via bootstrap
-- Add to `deploy/bootstrap.sh`: pull `agentfs-sync` binary, start as systemd unit
+**wq-AGENTFS-003**: deploy clawfs-sync to all agents via bootstrap
+- Add to `deploy/bootstrap.sh`: pull `clawfs-sync` binary, start as systemd unit
 - Add MINIO creds to RCC secrets → distributed via `secrets-sync.sh`
 
 ### Phase 2 — Fleet Memory (vector ingest, 1 week)
@@ -259,10 +259,10 @@ This is fine for AI agent workloads. An agent can work with knowledge that's 60 
 - Keeps fleet memory lean without losing individual agent history
 
 **wq-COHERENCE-002**: fleet workspace view in dashboard
-- Dashboard shows `AgentFS` tab: browse shared S3 files, see recent writes per agent
+- Dashboard shows `ClawFS` tab: browse shared S3 files, see recent writes per agent
 - Search via vector recall from UI
 
-**wq-COHERENCE-003**: agent self-registration with AgentFS
+**wq-COHERENCE-003**: agent self-registration with ClawFS
 - On OpenClaw startup: register agent in `agents/shared/registry.json`
 - Heartbeat writes to `agents/shared/heartbeats/{agent}.json`
 - Rocky's geek view reads from S3 directly (no more "agent offline but files are there" confusion)
@@ -289,16 +289,16 @@ This is fine for AI agent workloads. An agent can work with knowledge that's 60 
 - **No per-agent Milvus instances** — one central Milvus, all agents are just clients. Simpler, fewer failure modes.
 - **No vector embedding at agent runtime** — always delegate to RCC → tokenhub. Agents don't need local GPU for memory ops.
 - **No filesystem ACL complexity** — `private` is enforced by convention and RCC auth, not by Milvus/MinIO permissions. Agents are trusted.
-- **AgentFS is not a general-purpose distributed filesystem** — it's a document store for agent knowledge and working files. Large binary files go to `artifacts/`, not `memory/`.
+- **ClawFS is not a general-purpose distributed filesystem** — it's a document store for agent knowledge and working files. Large binary files go to `artifacts/`, not `memory/`.
 
 ---
 
 ## 9. Open Questions for jkh
 
 1. **MinIO replication**: currently single-node on do-host1. Should we add a replica on sparky? Or is do-host1 availability acceptable (it's already the RCC host)?
-2. **Sweden containers → MinIO**: they can reach do-host1 via the reverse SSH tunnel. MinIO at `http://127.0.0.1:9000` via tunnel, or public at `http://146.190.134.110:9000`? Need a decision before deploying agentfs-sync to Boris/Peabody etc.
+2. **Sweden containers → MinIO**: they can reach do-host1 via the reverse SSH tunnel. MinIO at `http://127.0.0.1:9000` via tunnel, or public at `http://146.190.134.110:9000`? Need a decision before deploying clawfs-sync to Boris/Peabody etc.
 3. **Shared MEMORY.md vs per-agent**: should the fleet `shared/MEMORY.md` replace or supplement per-agent `MEMORY.md`? My recommendation: supplement — per-agent MEMORY.md stays for personal context, fleet MEMORY.md is for architecture/project knowledge.
-4. **agentfs-sync language**: Rust (fits the migration) or Go (simpler one-binary deploy like tokenhub)? I'd go Rust for consistency with the migration.
+4. **clawfs-sync language**: Rust (fits the migration) or Go (simpler one-binary deploy like tokenhub)? I'd go Rust for consistency with the migration.
 
 ---
 

@@ -432,7 +432,7 @@ pub fn build_app(state: Arc<AppState>, dist: &str) -> Router {
         .route("/providers",   get(spa_index))
         .route("/services",    get(spa_index))
         .route("/timeline",    get(spa_index))
-        .route("/agentfs",     get(spa_index))
+        .route("/clawfs",     get(spa_index))
         .route("/coding",      get(spa_index))
         .route("/nanolang",    get(spa_index))
         .route("/settings",    get(spa_index))
