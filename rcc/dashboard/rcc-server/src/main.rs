@@ -7,6 +7,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod routes;
 pub mod state;
 pub mod brain;
+pub mod supervisor;
 
 pub use state::AppState;
 
@@ -44,6 +45,47 @@ async fn main() {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
+
+    // Build optional process supervisor
+    let supervisor_handle = if std::env::var("SUPERVISOR_ENABLED").unwrap_or_default() == "true" {
+        let tokenhub_bin = std::env::var("TOKENHUB_BIN")
+            .unwrap_or_else(|_| "/home/jkh/tokenhub/bin/tokenhub".to_string());
+        let squirrelchat_bin = std::env::var("SQUIRRELCHAT_BIN").unwrap_or_else(|_| {
+            std::process::Command::new("which")
+                .arg("squirrelchat-server")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "/usr/local/bin/squirrelchat-server".to_string())
+        });
+        let processes = vec![
+            supervisor::ManagedProcess {
+                name: "tokenhub".to_string(),
+                command: tokenhub_bin,
+                args: vec![],
+                env: vec![],
+                health_url: Some("http://127.0.0.1:8090/health".to_string()),
+                restart_delay_ms: 5000,
+            },
+            supervisor::ManagedProcess {
+                name: "squirrelchat".to_string(),
+                command: squirrelchat_bin,
+                args: vec![],
+                env: vec![],
+                health_url: Some("http://127.0.0.1:8793/health".to_string()),
+                restart_delay_ms: 5000,
+            },
+        ];
+        let (sup, handle) = supervisor::Supervisor::new(processes);
+        tokio::spawn(sup.run());
+        tracing::info!("Supervisor enabled: managing tokenhub + squirrelchat");
+        Some(handle)
+    } else {
+        tracing::info!("Supervisor disabled (set SUPERVISOR_ENABLED=true to enable)");
+        None
+    };
 
     // Build MinIO/S3 client
     let s3_bucket = std::env::var("MINIO_BUCKET").unwrap_or_else(|_| "agents".to_string());
@@ -91,6 +133,7 @@ async fn main() {
         start_time: std::time::SystemTime::now(),
         s3_client,
         s3_bucket,
+        supervisor: supervisor_handle,
     });
 
     // Load persisted state
@@ -120,6 +163,7 @@ async fn main() {
         .merge(routes::memory::router())
         .merge(routes::issues::router())
         .merge(routes::fs::router())
+        .merge(routes::supervisor::router())
         .layer(cors)
         .with_state(app_state.clone());
 
