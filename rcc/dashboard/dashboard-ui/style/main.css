@@ -1685,3 +1685,255 @@ html, body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── AgentFS ──────────────────────────────────────────────────────────────── */
+
+.agentfs-container {
+  padding: 16px 20px;
+  max-width: 1200px;
+}
+
+.agentfs-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.agentfs-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.agentfs-subtitle {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.agentfs-section {
+  margin-bottom: 28px;
+}
+
+.agentfs-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 10px 0;
+}
+
+.agentfs-loading {
+  color: var(--text-dimmer);
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+/* Sync Status grid */
+.afs-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.afs-status-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.afs-card-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+}
+
+.afs-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.afs-dot-ok  { background: var(--green); box-shadow: 0 0 4px var(--green); }
+.afs-dot-err { background: var(--red); }
+
+.afs-agent-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  flex: 1;
+}
+
+.afs-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.afs-badge-ok  { background: rgba(63,185,80,0.15);  color: var(--green); }
+.afs-badge-err { background: rgba(248,81,73,0.15);  color: var(--red); }
+
+.afs-card-stat {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+
+.afs-card-ts {
+  color: var(--text-dimmer);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* File browser */
+.afs-browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.afs-select-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.afs-agent-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.afs-agent-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.afs-empty {
+  font-size: 12px;
+  color: var(--text-dimmer);
+  padding: 8px 0;
+}
+
+.afs-file-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.afs-file-table th {
+  text-align: left;
+  padding: 5px 10px;
+  color: var(--text-dim);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+
+.afs-file-row {
+  cursor: pointer;
+}
+
+.afs-file-row:hover td {
+  background: var(--surface2);
+}
+
+.afs-file-row td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(48,54,61,0.5);
+}
+
+.afs-col-name {
+  color: var(--blue);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.afs-col-size {
+  color: var(--text-dim);
+  white-space: nowrap;
+  width: 80px;
+}
+
+.afs-col-ts {
+  color: var(--text-dimmer);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  width: 130px;
+}
+
+/* File content modal */
+.afs-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.afs-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: min(800px, 92vw);
+  max-height: 75vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.afs-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  gap: 10px;
+}
+
+.afs-modal-key {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--blue);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.afs-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.afs-modal-close:hover { color: var(--text); }
+
+.afs-modal-body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.afs-modal-pre {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
