@@ -6,6 +6,7 @@ use crate::components::{
     activity_feed::ActivityFeed,
     agent_cards::AgentCards,
     agent_detail::AgentDetail,
+    agentfs::AgentFs,
     bus_send::BusSend,
     changelog::Changelog,
     coding_agent::CodingAgent,
@@ -35,6 +36,7 @@ fn path_to_tab(path: &str) -> u8 {
         "/coding"                      => 7,
         "/services"                    => 8,
         "/timeline"                    => 9,
+        "/agentfs"                     => 10,
         _                              => 0, // default: Dashboard
     }
 }
@@ -50,8 +52,9 @@ fn tab_to_path(tab: u8) -> &'static str {
         6 => "/providers",
         7 => "/coding",
         8 => "/services",
-        9 => "/timeline",
-        _ => "/",
+        9  => "/timeline",
+        10 => "/agentfs",
+        _  => "/",
     }
 }
 
@@ -143,6 +146,11 @@ fn AppInner() -> impl IntoView {
                         class:tab-active=move || tab.get() == 9
                         on:click=move |_| select_tab.with_value(|f| f(9))
                     >"⏱️ Timeline"</button>
+                    <button
+                        class="tab-btn"
+                        class:tab-active=move || tab.get() == 10
+                        on:click=move |_| select_tab.with_value(|f| f(10))
+                    >"📁 AgentFS"</button>
                 </div>
             </header>
             <main class="dash-main">
@@ -156,7 +164,8 @@ fn AppInner() -> impl IntoView {
                     6 => view! { <Providers /> }.into_view(),
                     7 => view! { <CodingAgent /> }.into_view(),
                     8 => view! { <Services /> }.into_view(),
-                    9 => view! { <Timeline /> }.into_view(),
+                    9  => view! { <Timeline /> }.into_view(),
+                    10 => view! { <AgentFs /> }.into_view(),
                     _ => view! {
                         <div class="dash-main-content">
                             <div class="dash-row dash-row-top">
