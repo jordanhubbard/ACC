@@ -27,7 +27,7 @@ fn crush_base_url() -> String {
         .and_then(|w| w.location().hostname().ok())
         .unwrap_or_default();
     let port = if hostname.contains("146.190.134.110") || hostname == "do-host1" {
-        8794 // do-host1 fallback crush-server port
+        8795 // do-host1 crush-server port
     } else {
         8793 // sparky (default)
     };

@@ -23,3 +23,4 @@ pub mod squirrelbus;
 pub mod squirrelchat;
 pub mod timeline;
 pub mod work_queue;
+pub mod settings;

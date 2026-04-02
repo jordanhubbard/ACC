@@ -18,6 +18,7 @@ use crate::components::{
     metrics::Metrics,
     providers::Providers,
     services::Services,
+    settings::Settings,
     squirrelbus::SquirrelBus,
     squirrelchat::SquirrelChat,
     timeline::Timeline,
@@ -37,6 +38,7 @@ fn path_to_tab(path: &str) -> u8 {
         "/services"                    => 8,
         "/timeline"                    => 9,
         "/agentfs"                     => 10,
+        "/settings"                    => 11,
         _                              => 0, // default: Dashboard
     }
 }
@@ -54,6 +56,7 @@ fn tab_to_path(tab: u8) -> &'static str {
         8 => "/services",
         9  => "/timeline",
         10 => "/agentfs",
+        11 => "/settings",
         _  => "/",
     }
 }
@@ -151,6 +154,11 @@ fn AppInner() -> impl IntoView {
                         class:tab-active=move || tab.get() == 10
                         on:click=move |_| select_tab.with_value(|f| f(10))
                     >"📁 AgentFS"</button>
+                    <button
+                        class="tab-btn"
+                        class:tab-active=move || tab.get() == 11
+                        on:click=move |_| select_tab.with_value(|f| f(11))
+                    >"⚙️ Settings"</button>
                 </div>
             </header>
             <main class="dash-main">
@@ -166,6 +174,7 @@ fn AppInner() -> impl IntoView {
                     8 => view! { <Services /> }.into_view(),
                     9  => view! { <Timeline /> }.into_view(),
                     10 => view! { <AgentFs /> }.into_view(),
+                    11 => view! { <Settings /> }.into_view(),
                     _ => view! {
                         <div class="dash-main-content">
                             <div class="dash-row dash-row-top">
