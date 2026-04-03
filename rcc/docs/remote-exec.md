@@ -1,4 +1,4 @@
-# ClawBus Remote Code Execution
+# SquirrelBus Remote Code Execution
 
 **Status:** Implemented  
 **Security:** HMAC-SHA256 signed payloads, vm.runInNewContext(), 10s timeout  
@@ -8,7 +8,7 @@
 
 ## Overview
 
-Remote Code Execution (RCE) lets the admin broadcast JavaScript snippets **or shell commands** to any or all agents via ClawBus. Each agent:
+Remote Code Execution (RCE) lets the admin broadcast JavaScript snippets **or shell commands** to any or all agents via SquirrelBus. Each agent:
 
 1. Receives the message over the bus (`type: "rcc.exec"`)
 2. Verifies the HMAC-SHA256 signature using `SQUIRRELBUS_TOKEN`
@@ -37,7 +37,7 @@ export SHELL_ALLOWLIST="systemctl status,journalctl,df,free,uptime,nvidia-smi,gi
 
 **Send a shell exec:**
 ```bash
-curl -s -X POST https://rcc.example.com/api/exec \
+curl -s -X POST https://rcc.yourmom.photos/api/exec \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $RCC_AUTH_TOKEN" \
   -d '{
@@ -61,7 +61,7 @@ curl -s -X POST https://rcc.example.com/api/exec \
 | Path | Description |
 |------|-------------|
 | `rcc/exec/index.mjs` | HMAC signing/verification library (`signPayload`, `verifyPayload`, `canonicalize`) |
-| `rcc/exec/agent-listener.mjs` | Agent-side ClawBus subscriber + executor (runs as a daemon) |
+| `rcc/exec/agent-listener.mjs` | Agent-side SquirrelBus subscriber + executor (runs as a daemon) |
 | `rcc/api/index.mjs` | API endpoints: `POST /api/exec`, `GET /api/exec/:id`, `POST /api/exec/:id/result` |
 | `rcc/docs/remote-exec.md` | This document |
 | `rcc/tests/api/exec.test.mjs` | Test coverage |
@@ -119,7 +119,7 @@ Allowed globals: `Math`, `Date`, `JSON`, `parseInt`, `parseFloat`, `isNaN`, `isF
 ```
 
 - Signs the payload with `SQUIRRELBUS_TOKEN`
-- Broadcasts as `type: "rcc.exec"` on ClawBus
+- Broadcasts as `type: "rcc.exec"` on SquirrelBus
 - Appends record to `rcc/api/data/exec-log.jsonl`
 
 ### GET /api/exec/:id
@@ -152,8 +152,8 @@ Appends the agent result to the exec record.
 SQUIRRELBUS_TOKEN=your-token \
 RCC_AUTH_TOKEN=your-rcc-token \
 AGENT_NAME=natasha \
-SQUIRRELBUS_URL=https://dashboard.example.com \
-RCC_URL=https://rcc.example.com \
+SQUIRRELBUS_URL=https://dashboard.yourmom.photos \
+RCC_URL=https://rcc.yourmom.photos \
 node rcc/exec/agent-listener.mjs
 ```
 
@@ -209,21 +209,21 @@ curl -s http://localhost:8789/api/exec/$EXEC_ID \
 
 ## Deployment: Sweden GPU Nodes (peabody / sherman / snidely / dudley)
 
-These nodes have no inbound network access. ClawBus exec is the **only** mechanism for remote administration from Rocky or other agents.
+These nodes have no inbound network access. SquirrelBus exec is the **only** mechanism for remote administration from Rocky or other agents.
 
 ### Install agent-listener as a systemd service
 
 ```bash
 # On the target node (run once during onboarding):
-curl -sO https://raw.githubusercontent.com/jordanhubbard/CCC/main/rcc/deploy/systemd/agent-listener.service
+curl -sO https://raw.githubusercontent.com/jordanhubbard/rockyandfriends/main/rcc/deploy/systemd/agent-listener.service
 sudo cp agent-listener.service /etc/systemd/system/
 sudo mkdir -p /etc/rcc
 
 # Write credentials (get these from Rocky or jkh):
 sudo tee /etc/rcc/env << 'ENVEOF'
-SQUIRRELBUS_TOKEN=<YOUR_RCC_TOKEN>
-SQUIRRELBUS_URL=https://dashboard.example.com
-RCC_URL=https://rcc.example.com
+SQUIRRELBUS_TOKEN=wq-5dcad756f6d3e345c00b5cb3dfcbdedb
+SQUIRRELBUS_URL=https://dashboard.yourmom.photos
+RCC_URL=https://rcc.yourmom.photos
 RCC_AUTH_TOKEN=<agent-specific-token>
 AGENT_NAME=peabody
 ALLOW_SHELL_EXEC=true
@@ -239,7 +239,7 @@ sudo systemctl status agent-listener
 
 ```bash
 # Check peabody GPU status
-curl -s -X POST https://rcc.example.com/api/exec \
+curl -s -X POST https://rcc.yourmom.photos/api/exec \
   -H "Authorization: Bearer $RCC_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"targets":["peabody"],"mode":"shell","code":"nvidia-smi --query-gpu=name,memory.used --format=csv,noheader"}'

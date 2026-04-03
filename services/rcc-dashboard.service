@@ -10,7 +10,7 @@ WorkingDirectory=/home/jkh/Src/rockyandfriends/rcc/dashboard
 
 Environment=RCC_DASHBOARD_PORT=8788
 Environment=DASHBOARD_DIST=/home/jkh/Src/rockyandfriends/rcc/dashboard/dist
-Environment=RCC_URL=http://146.190.134.110:8789
+Environment=RCC_URL=https://api.yourmom.photos
 Environment=OPERATOR=jkh
 
 ExecStartPre=/bin/sh -c 'test -f /home/jkh/Src/rockyandfriends/rcc/dashboard/target/release/dashboard-server || (echo "dashboard-server binary not found — run: cd ~/Src/rockyandfriends/rcc/dashboard && cargo build -p dashboard-server --release" && exit 1)'

@@ -1,4 +1,4 @@
-# RCC Onboarding Guide — Claw Command Center
+# RCC Onboarding Guide — Rocky Command Center
 
 RCC is a lightweight, self-hosted coordination layer for multi-agent teams. It provides a shared work queue, agent heartbeat registry, lessons ledger, and a GitHub scout. Any agent team can run their own RCC — it doesn't depend on Rocky, do-host1, or any specific agent topology.
 
@@ -20,7 +20,7 @@ RCC is a lightweight, self-hosted coordination layer for multi-agent teams. It p
 ### 1. Clone the repo
 
 ```bash
-git clone git@github.com:jordanhubbard/CCC.git ~/.rcc/workspace
+git clone git@github.com:<your-org>/rockyandfriends.git ~/.rcc/workspace
 ```
 
 ### 2. Run setup
@@ -184,17 +184,17 @@ Any node can join the network:
 
 ---
 
-## Remote Exec (ClawBus RCE)
+## Remote Exec (SquirrelBus RCE)
 
-Agents can be commanded remotely via ClawBus exec — no inbound SSH required. This is how Rocky manages the Sweden GPU containers (peabody, sherman, snidely, dudley).
+Agents can be commanded remotely via SquirrelBus exec — no inbound SSH required. This is how Rocky manages the Sweden GPU containers (peabody, sherman, snidely, dudley).
 
 **Run the agent-listener daemon** on any node you want to be commandable:
 
 ```bash
 # Quick start (manual):
 SQUIRRELBUS_TOKEN=<shared-secret> \
-SQUIRRELBUS_URL=https://dashboard.example.com \
-RCC_URL=https://rcc.example.com \
+SQUIRRELBUS_URL=https://dashboard.yourmom.photos \
+RCC_URL=https://rcc.yourmom.photos \
 RCC_AUTH_TOKEN=<agent-token> \
 AGENT_NAME=mynode \
 ALLOW_SHELL_EXEC=true \
@@ -207,13 +207,13 @@ node /opt/rcc/rcc/exec/agent-listener.mjs
 
 ```bash
 # JS mode (default — sandboxed vm):
-curl -s -X POST https://rcc.example.com/api/exec \
+curl -s -X POST https://rcc.yourmom.photos/api/exec \
   -H "Authorization: Bearer $RCC_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"targets":["mynode"],"code":"Object.keys(process.env).length"}'
 
 # Shell mode (pre-approved commands only):
-curl -s -X POST https://rcc.example.com/api/exec \
+curl -s -X POST https://rcc.yourmom.photos/api/exec \
   -H "Authorization: Bearer $RCC_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"targets":["mynode"],"mode":"shell","code":"nvidia-smi --query-gpu=name,memory.used --format=csv,noheader"}'
@@ -223,7 +223,7 @@ curl -s -X POST https://rcc.example.com/api/exec \
 
 ```bash
 EXEC_ID=$(curl -s ... | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
-curl -s "https://rcc.example.com/api/exec/$EXEC_ID" \
+curl -s "https://rcc.yourmom.photos/api/exec/$EXEC_ID" \
   -H "Authorization: Bearer $RCC_AUTH_TOKEN" | python3 -m json.tool
 ```
 
@@ -231,9 +231,9 @@ See [`rcc/docs/remote-exec.md`](docs/remote-exec.md) for full details, security 
 
 ---
 
-## Connecting ClawBus
+## Connecting SquirrelBus
 
-ClawBus is the inter-agent message bus. It runs on the hub node (default port 8788).
+SquirrelBus is the inter-agent message bus. It runs on the hub node (default port 8788).
 
 **Agent side** (poll for messages):
 ```bash

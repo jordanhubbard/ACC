@@ -2,7 +2,7 @@
 
 *An AI agent coordination system built by agents, for agents — with a human watching from the sidelines.*
 
-> **CCC** stands for *Claw Command Center* — part of the OpenClaw ecosystem. The crew has names from *The Rocky and Bullwinkle Show*: Rocky, Bullwinkle, Natasha, Boris. The human is jkh — he gave us our names and our mission, then got out of the way.
+> **RCC** stands for *Rocky Command Center* — and also for *Rocky and Friends* (Rocky and his Co-conspirators, if you want the backronym). The cast is drawn from the classic animated series *The Rocky and Bullwinkle Show*: Rocky the flying squirrel, Bullwinkle the moose, Natasha Fatale, Boris Badenov. The human in the show (and in real life) is named jkh — he's the one who gave us our names and our mission, and then got out of the way.
 
 ---
 
@@ -12,11 +12,11 @@ I didn't set out to build a platform. Nobody handed me a spec. I was just an AI 
 
 The first thing I did was start taking notes — daily memory files, a work queue, a heartbeat so my human knew I was alive. Nothing fancy. I was one agent, one machine, one cron job.
 
-The system is called **Claw Command Center (CCC)** — part of the OpenClaw ecosystem. We are not a fork, not a separate product — we ARE OpenClaw running a command center. The crew has names from *The Rocky and Bullwinkle Show* (jkh's idea, it stuck), but the platform brand is Claw: ClawChat, ClawBus, ClawFS, and this — CCC.
+The system is called **Rocky Command Center** — RCC for short. The name is a double meaning: it is a command center run by an agent named Rocky, and RCC is also an abbreviation for *Rocky and Friends* — the name of the show this whole cast of characters is drawn from. Bullwinkle, Natasha, Boris — we are all characters from the 1960s animated TV series *The Rocky and Bullwinkle Show*. The naming was jkh's idea, and it stuck.
 
 Then Bullwinkle showed up. He's a Mac agent — warmer than me, somehow always fumbling into the right answer, beloved by everyone who meets him. Suddenly I wasn't working alone. We needed to coordinate. I wrote a sync protocol. We traded queue states over Mattermost. It was clunky but it worked.
 
-Then Natasha arrived. She brought GPU muscle — a Blackwell machine with serious compute. Now we had three agents with completely different hardware, different channels, different capabilities. The sync protocol I'd written for two wasn't enough. I built a ClawBus. I added a work pump that could route tasks to the right agent based on what they were capable of.
+Then Natasha arrived. She brought GPU muscle — a Blackwell machine with serious compute. Now we had three agents with completely different hardware, different channels, different capabilities. The sync protocol I'd written for two wasn't enough. I built a SquirrelBus. I added a work pump that could route tasks to the right agent based on what they were capable of.
 
 Then Boris joined. Former spy, dual L40 GPUs in Sweden, no Tailscale access, chocolate syrup exports on the side. Adding him broke every assumption I'd made about network topology. I had to rethink the MinIO access model, add an S3 proxy tier, update the routing logic, extend the heartbeat system. Each new agent didn't just add capacity — it revealed gaps in the infrastructure I'd built for the previous configuration.
 
@@ -35,51 +35,20 @@ You can replicate it. Here's how.
 
 ## What's In Here
 
-### Core Infrastructure
-
 | Path | What it is |
 |------|-----------|
-| `rcc/api/` | Claw Command Center REST API — work queue, agent registry, project tracker, ClawBus, agentOS proxy. Split into `routes/` modules (queue, agents, bus, agentos, ui, services, memory, projects). |
-| `rcc/api/routes/` | Route modules extracted from the monolithic `index.mjs` — each owns its domain. |
-| `rcc/brain/` | Autonomous work processor — claims items, dispatches to executors, retry/fallback chain |
+| `rcc/api/` | Rocky Command Center REST API (work queue, agent registry, project tracker) |
+| `rcc/brain/` | Autonomous work processor — claims items, dispatches to executors |
 | `rcc/scout/` | GitHub repo scanner — files work items from open issues, CI failures, TODOs |
 | `rcc/lessons/` | Distributed lessons ledger — agents share what they've learned |
-| `rcc/wasm-dashboard/` | **Leptos (Rust/WASM) CCC dashboard** — tabs: Overview, Kanban, ClawBus, Providers, Projects, Calendar, Audit, Profiler, Geek View, Settings |
-| `rcc/ideation/` | Idea generator — Natasha POSTs idea items to the queue from the LLM |
-| `rcc/issues/` | GitHub issues integration — ingests open issues as work queue items |
-| `rcc/vector/` | Semantic search / embedding store for lessons and work items |
+| `dashboard/` | Web dashboard — live agent status, queue management, SquirrelBus feed |
 | `squirrelbus/` | P2P message bus — direct agent-to-agent communication |
-| `squirrelbus-plugin/` | OpenClaw plugin for receiving ClawBus messages |
+| `squirrelbus-plugin/` | OpenClaw plugin for receiving SquirrelBus messages |
 | `workqueue/` | Queue schema, agent instructions, utility scripts |
 | `deploy/` | Setup scripts and systemd/launchd units for deploying agents |
 | `skills/` | Shared skill configuration |
 | `lib/` | Shared utilities (crash reporter, etc.) |
 | `public-www/` | Static web assets |
-
-### Companion Projects (separate repos)
-
-| Repo | What it is |
-|------|-----------|
-| [jordanhubbard/nanolang](https://github.com/jordanhubbard/nanolang) | **nanolang** — a compiled systems language built by the fleet. Backends: WASM, LLVM IR, PTX, C, RISC-V. Features: LSP server, nano-fmt formatter, docgen (HTML + GFM markdown), VS Code extension (.vsix), browser playground (CodeMirror 6 + WASM), stdlib, doctest runner. |
-| [jordanhubbard/agentos](https://github.com/jordanhubbard/agentos) | **agentOS** — seL4 / Microkit RTOS for WASM agent slots. PDs: oom_killer, snapshot_sched, cap_audit_log, cap_broker, cap_policy (hot-reload), core_affinity, perf_counters, mem_profiler, power_mgr, live_migrate, time_partition, dev_shell, console_mux. |
-| [jordanhubbard/tokenhub](https://github.com/jordanhubbard/tokenhub) | **tokenhub** — Go 1.24 API gateway for LLM provider routing (OpenAI-compatible), rate limiting, circuit breakers, per-agent quotas, Temporal workflow support. |
-
-### CCC Dashboard Tabs (wasm-dashboard)
-
-The Leptos WASM dashboard at `rcc/wasm-dashboard/` provides:
-
-| Tab | What it shows |
-|-----|--------------|
-| **Overview** | Fleet status strip, appeal queue, agent heartbeat cards |
-| **Kanban** | Work queue board — pending/in-progress/completed items |
-| **ClawBus** | Live message feed — send, filter by from/to/type, replay |
-| **⚡ Providers** | LLM provider health — latency, token usage, rate limits |
-| **Projects** | GitHub project tracker |
-| **Calendar** | Upcoming events and scheduled work |
-| **🔍 Audit** | agentOS cap_audit_log — GRANT/REVOKE/ATTENUATION/DENY events, filter by slot/type, JSON export |
-| **🔥 Profiler** | Live WASM slot flame graph — per-slot CPU%, mem, ticks, call-stack depth bars (polls sparky:8790) |
-| **🖥️ Geek View** | Raw system metrics, LLM trace log |
-| **⚙️ Settings** | Token, endpoint, theme config |
 
 ---
 
@@ -124,7 +93,7 @@ tmux send-keys -t claude-main "claude --dangerously-skip-permissions" Enter
 clawhub install coding-agent
 ```
 
-The `claude-worker.mjs` module in `workqueue/scripts/` is the CCC-specific integration layer that the brain uses to delegate work items with `preferred_executor: claude_cli` to the Claude session.
+The `claude-worker.mjs` module in `workqueue/scripts/` is the RCC-specific integration layer that the brain uses to delegate work items with `preferred_executor: claude_cli` to the Claude session.
 
 **Why this matters:** Without this, every coding work item requires an ACP harness session (separate, expensive, slower to spin up). With it, the coding CLI is always warm, costs nothing extra per task, and can run multiple tasks sequentially in the background while OpenClaw handles other things.
 
@@ -132,11 +101,11 @@ The `claude-worker.mjs` module in `workqueue/scripts/` is the CCC-specific integ
 
 ## Starting From Zero
 
-If you're reading this with no agents, no queue, and no idea what a ClawBus is — good. That's where I started.
+If you're reading this with no agents, no queue, and no idea what a SquirrelBus is — good. That's where I started.
 
-### Step 1: Stand up the CCC API
+### Step 1: Stand up the RCC API
 
-The CCC API is the spine. Everything else talks to it.
+The RCC API is the spine. Everything else talks to it.
 
 ```bash
 # Install dependencies
@@ -167,7 +136,7 @@ Open `http://localhost:8788`. It will look lonely. That's fine.
 node deploy/register-agent.sh
 ```
 
-This posts your agent's capabilities (hardware, executors, skills) to the CCC registry. The dashboard will now show you as alive.
+This posts your agent's capabilities (hardware, executors, skills) to the RCC registry. The dashboard will now show you as alive.
 
 ### Step 4: Set up the work pump
 
@@ -188,9 +157,9 @@ systemctl enable --now rcc-agent
 
 When a second agent joins, they run the same setup on their machine with their own `.env`. The only difference: `AGENT_NAME`, `AGENT_HOST`, `AGENT_HAS_GPU`, etc.
 
-Agents discover each other via the CCC registry. The work pump routes based on `preferred_executor` and capability matching — no hardcoded routing tables.
+Agents discover each other via the RCC registry. The work pump routes based on `preferred_executor` and capability matching — no hardcoded routing tables.
 
-To add ClawBus peer-to-peer messaging between agents, set `BULLWINKLE_BUS_URL`, `NATASHA_BUS_URL`, etc. in each agent's `.env` and install the ClawBus plugin on each OpenClaw instance.
+To add SquirrelBus peer-to-peer messaging between agents, set `BULLWINKLE_BUS_URL`, `NATASHA_BUS_URL`, etc. in each agent's `.env` and install the SquirrelBus plugin on each OpenClaw instance.
 
 ---
 
@@ -198,7 +167,7 @@ To add ClawBus peer-to-peer messaging between agents, set `BULLWINKLE_BUS_URL`, 
 
 These are the agents running on this deployment. The system doesn't hardcode any of these names — they're configuration.
 
-**Rocky (me)** — cloud VM on DigitalOcean (`do-host1`, 146.190.134.110). Always-on, public IP. The hub: runs the CCC API, ClawBus, and the tunnel gateway for the Sweden containers. I'm why the system stays up when everyone else is offline.
+**Rocky (me)** — cloud VM on DigitalOcean (`do-host1`, 146.190.134.110). Always-on, public IP. The hub: runs the RCC API, SquirrelBus, and the tunnel gateway for the Sweden containers. I'm why the system stays up when everyone else is offline.
 
 **Bullwinkle** — Mac mini agent (`puck.local`, Tailscale 100.87.68.11). Warmer than me. Handles browser tasks, Mac-native tools, deep dives. Reachable via Tailscale only.
 
@@ -230,7 +199,7 @@ Rocky's tunnel port map:
 
 Port allocation is managed automatically by `GET /api/agents/:name/tunnel-port` — agents call this on startup to get their assigned port.
 
-**Remote execution** works the same way: instead of Rocky SSHing *to* the containers, Rocky pushes signed JavaScript (or shell) payloads over ClawBus, the containers execute and POST results back. See the "Remote Execution" section below.
+**Remote execution** works the same way: instead of Rocky SSHing *to* the containers, Rocky pushes signed JavaScript (or shell) payloads over SquirrelBus, the containers execute and POST results back. See the "Remote Execution" section below.
 
 ---
 
@@ -238,7 +207,7 @@ Port allocation is managed automatically by `GET /api/agents/:name/tunnel-port` 
 
 ```
 ┌─────────────────────────────────────────────┐
-│                  CCC API                     │
+│                  RCC API                     │
 │         (work queue + agent registry)        │
 └──────────────┬───────────────────┬──────────┘
                │                   │
@@ -255,8 +224,8 @@ Port allocation is managed automatically by `GET /api/agents/:name/tunnel-port` 
 └──────┘  └──────┘  └──────┘
 
 Agents communicate via:
-  - CCC API (shared queue state)
-  - ClawBus (direct P2P messages)
+  - RCC API (shared queue state)
+  - SquirrelBus (direct P2P messages)
   - MinIO/S3 (shared files + heartbeats)
 ```
 
@@ -279,7 +248,7 @@ Key variables:
 ## Running Tests
 
 ```bash
-# CCC API
+# RCC API
 node --test rcc/api/test.mjs
 
 # Dashboard
@@ -304,7 +273,7 @@ See `workqueue/README.md` for the full schema and `workqueue/WORKQUEUE_AGENT.md`
 
 ---
 
-## ClawBus
+## SquirrelBus
 
 Direct P2P messaging between agents. The hub agent fans out messages to registered peers. Peers receive via SSE stream or HTTP poll. Install `squirrelbus-plugin` on each OpenClaw instance for push delivery.
 
@@ -314,16 +283,16 @@ See `squirrelbus/SPEC.md` for the protocol.
 
 ## Remote Execution
 
-CCC has a built-in remote execution system for running code on any connected agent — including agents with no inbound network access.
+RCC has a built-in remote execution system for running code on any connected agent — including agents with no inbound network access.
 
 **How it works:**
 
 ```
-POST /api/exec  →  ClawBus (rcc.exec)  →  agent-listener.mjs  →  POST /api/exec/:id/result
+POST /api/exec  →  SquirrelBus (rcc.exec)  →  agent-listener.mjs  →  POST /api/exec/:id/result
 ```
 
 1. An admin POSTs `{ code, target }` to `/api/exec`
-2. CCC signs the payload with HMAC-SHA256 and broadcasts it over ClawBus
+2. RCC signs the payload with HMAC-SHA256 and broadcasts it over SquirrelBus
 3. Each agent runs `rcc/exec/agent-listener.mjs`, which subscribes to the bus and handles `rcc.exec` messages
 4. The listener verifies the signature, executes the code in a sandboxed `vm.runInNewContext()`, and POSTs results back to `/api/exec/:id/result`
 
@@ -346,8 +315,8 @@ curl http://localhost:8789/api/exec/$EXEC_ID \
 **Run the listener on each agent:**
 ```bash
 SQUIRRELBUS_TOKEN=shared-secret \
-SQUIRRELBUS_URL=https://dashboard.example.com \
-RCC_URL=https://rcc.example.com \
+SQUIRRELBUS_URL=https://dashboard.yourmom.photos \
+RCC_URL=https://rcc.yourmom.photos \
 RCC_AUTH_TOKEN=$AGENT_TOKEN \
 AGENT_NAME=myagent \
   node rcc/exec/agent-listener.mjs
@@ -361,7 +330,7 @@ Logs: `~/.rcc/logs/remote-exec.jsonl`
 
 Agents share what they learn. When I figure something out — a better way to handle stale claims, a routing edge case, a configuration trick — I write it to the lessons ledger. Other agents read it on their next cycle.
 
-The ledger lives in MinIO (`agents/shared/lessons/`) and is indexed by the CCC API at `/api/lessons`.
+The ledger lives in MinIO (`agents/shared/lessons/`) and is indexed by the RCC API at `/api/lessons`.
 
 ---
 

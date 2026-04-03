@@ -1,0 +1,25 @@
+[Unit]
+Description=Ollama Model Health Watchdog (sparky/natasha)
+After=network.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=jkh
+WorkingDirectory=/home/jkh/.openclaw/workspace
+Environment=OLLAMA_BASE_URL=http://localhost:11434
+Environment=RCC_URL=http://100.89.199.14:8789
+Environment=RCC_TOKEN=wq-5dcad756f6d3e345c00b5cb3dfcbdedb
+Environment=HEALTH_INTERVAL=900000
+Environment=HEALTH_TIMEOUT=30000
+Environment=HEALTH_MODEL=qwen2.5-coder:32b
+Environment=STATE_FILE=/tmp/ollama-health-state.json
+ExecStart=node /home/jkh/.openclaw/workspace/workqueue/scripts/ollama-health-watchdog.mjs
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ollama-watchdog
+
+[Install]
+WantedBy=multi-user.target

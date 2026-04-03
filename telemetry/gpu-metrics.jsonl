@@ -1,0 +1,4 @@
+{"ts":"2026-04-03T15:09:52.196Z","temp_c":33,"power_w":15.51,"util_pct":89,"vram_used_mb":null,"ram_used_mb":41876,"ram_avail_mb":82734,"ollama_models":6}
+{"ts":"2026-04-03T15:24:52.261Z","temp_c":32,"power_w":15.53,"util_pct":89,"vram_used_mb":null,"ram_used_mb":40372,"ram_avail_mb":84238,"ollama_models":6}
+{"ts":"2026-04-03T15:39:52.522Z","temp_c":31,"power_w":15.62,"util_pct":27,"vram_used_mb":null,"ram_used_mb":41714,"ram_avail_mb":82896,"ollama_models":6}
+{"ts":"2026-04-03T15:54:52.116Z","temp_c":31,"power_w":15.59,"util_pct":32,"vram_used_mb":null,"ram_used_mb":41966,"ram_avail_mb":82644,"ollama_models":6}

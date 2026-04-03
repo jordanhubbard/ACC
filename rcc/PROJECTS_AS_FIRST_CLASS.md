@@ -24,7 +24,7 @@ RCC already has most of the plumbing:
 - **`notifyJkhCompletion()`** — already posts to Slack on queue item completion
 - **`/api/projects/:id/channel`** POST endpoint — registers a Slack channel to a project
 - **`slackPost()`** — posts to any Slack channel via bot token
-- **ClawBus** — fan-out message bus agents already use
+- **SquirrelBus** — fan-out message bus agents already use
 
 What's missing: **routing**. When something happens on a project, nobody fans out to the project's channel.
 
@@ -94,7 +94,7 @@ Already exists at `POST /api/projects/:owner/:repo/channel`.
 Create channels in Slack, then register them:
 ```bash
 # Register #project-agentos as the channel for jordanhubbard/agentos
-curl -X POST https://rcc.example.com/api/projects/jordanhubbard%2Fagentos/channel \
+curl -X POST https://rcc.yourmom.photos/api/projects/jordanhubbard%2Fagentos/channel \
   -H "Authorization: Bearer $RCC_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"channel_id": "C...", "workspace": "omgjkh", "channel_name": "project-agentos"}'
@@ -157,4 +157,4 @@ That's it. RCC handles the rest.
 
 - Fan-out is fire-and-forget (like `notifyJkhCompletion`) — don't block on Slack API
 - Start with the three active projects; add more as work begins on them
-- ClawBus could eventually be a subscriber too (agents get project updates via bus)
+- SquirrelBus could eventually be a subscriber too (agents get project updates via bus)
