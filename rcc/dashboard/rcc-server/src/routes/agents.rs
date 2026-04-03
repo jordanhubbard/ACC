@@ -16,6 +16,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/agents/register", post(register_agent))
         .route("/api/agents/:name", get(get_agent_by_name).post(upsert_agent).patch(patch_agent))
         .route("/api/agents/:name/heartbeat", post(agent_heartbeat))
+        .route("/api/agents/:name/health", get(get_agent_health))
         .route("/api/heartbeat/:agent", post(post_heartbeat))
         .route("/api/heartbeats", get(get_heartbeats))
 }
@@ -91,6 +92,37 @@ async fn get_agent_by_name(
             Json(json!({ "ok": true, "agent": record })).into_response()
         }
         None => (StatusCode::NOT_FOUND, Json(json!({"error": "Agent not found"}))).into_response(),
+    }
+}
+
+/// GET /api/agents/:name/health — on-demand telemetry from last heartbeat
+async fn get_agent_health(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let agents = state.agents.read().await;
+    let agent_name = name.to_lowercase();
+    match agents.as_object().and_then(|m| m.get(&agent_name)) {
+        Some(agent) => {
+            let telemetry_keys = [
+                "gpu", "gpu_temp_c", "gpu_power_w", "gpu_util_pct",
+                "vram_used_mb", "vram_total_mb",
+                "unified_vram_used_mb", "unified_vram_free_mb", "unified_vram_total_mb",
+                "ram", "ollama_status", "ollama_models",
+            ];
+            let mut health = serde_json::Map::new();
+            health.insert("agent".into(), json!(agent_name));
+            health.insert("online".into(), json!(is_online(agent)));
+            health.insert("lastSeen".into(), agent.get("lastSeen").cloned().unwrap_or(json!(null)));
+            health.insert("host".into(), agent.get("host").cloned().unwrap_or(json!(null)));
+            for key in &telemetry_keys {
+                if let Some(val) = agent.get(*key) {
+                    health.insert((*key).to_string(), val.clone());
+                }
+            }
+            Json(json!({ "ok": true, "health": Value::Object(health) })).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": "Agent not found"}))).into_response(),
     }
 }
 

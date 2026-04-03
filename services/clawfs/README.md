@@ -1,4 +1,4 @@
-# AgentFS — Content-Addressed WASM Module Store
+# ClawFS — Content-Addressed WASM Module Store
 
 Part of the CCC services layer. Owned by Natasha 🦊, runs on sparky.
 
@@ -8,7 +8,7 @@ Stores WASM modules by their SHA-256 hash. Same bytes = same hash = same module,
 Modules are immutable once stored. Backend is MinIO (S3-compatible).
 
 Integrates with the CCC vibe-swap demo: the vibe-swap slot requests a module by hash,
-AgentFS streams it. Rocky/Bullwinkle can pull modules over Tailscale.
+ClawFS streams it. Rocky/Bullwinkle can pull modules over Tailscale.
 
 ## API
 
@@ -43,8 +43,8 @@ curl http://sparky.tail407856.ts.net:8791/agentfs/modules/<sha256-hash> \
 ## Start (systemd)
 
 ```bash
-sudo cp agentfs-natasha.service /etc/systemd/system/
-sudo systemctl enable --now agentfs-natasha
+sudo cp clawfs-natasha.service /etc/systemd/system/
+sudo systemctl enable --now clawfs-natasha
 ```
 
 ## Config (env vars)
