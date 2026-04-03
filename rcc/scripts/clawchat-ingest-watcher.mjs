@@ -31,7 +31,8 @@ const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS      || '146.190.134.110:19530
 const COLLECTION     = process.env.MILVUS_COLLECTION   || 'rcc_messages';
 const OLLAMA_URL     = process.env.OLLAMA_BASE_URL     || 'http://localhost:11434';
 const OLLAMA_MODEL   = process.env.OLLAMA_EMBED_MODEL  || 'nomic-embed-text';
-const RECONNECT_MS   = parseInt(process.env.RECONNECT_DELAY_MS || '5000', 10);
+const RECONNECT_MS_BASE = parseInt(process.env.RECONNECT_DELAY_MS || '30000', 10);
+const RECONNECT_MS_MAX  = parseInt(process.env.RECONNECT_DELAY_MAX_MS || '300000', 10); // 5 min cap
 
 function log(msg) {
   console.log(`[clawchat-watcher ${new Date().toISOString()}] ${msg}`);
@@ -112,12 +113,12 @@ async function connectSSE() {
   try {
     resp = await fetch(url, { headers, signal: AbortSignal.timeout(30000) });
   } catch (err) {
-    log(`Connection failed: ${err.message} — will retry in ${RECONNECT_MS}ms`);
+    log(`Connection failed: ${err.message}`);
     return false;
   }
 
   if (!resp.ok) {
-    log(`SSE HTTP ${resp.status} — will retry in ${RECONNECT_MS}ms`);
+    log(`SSE HTTP ${resp.status}`);
     return false;
   }
 
@@ -180,15 +181,53 @@ async function handleEvent(event) {
   }
 }
 
-// Main loop with reconnection
+// Main loop with exponential backoff reconnection
 async function main() {
   log(`Starting ClawChat→Milvus ingest watcher (agent=${AGENT_NAME})`);
   log(`ClawChat: ${CLAWCHAT_URL} | Milvus: ${MILVUS_ADDRESS}/${COLLECTION}`);
 
+  let consecutiveFailures = 0;
+  let offlineSince = null;
+
   while (true) {
-    await connectSSE();
-    log(`Reconnecting in ${RECONNECT_MS}ms...`);
-    await new Promise(r => setTimeout(r, RECONNECT_MS));
+    const wasOffline = offlineSince !== null;
+    const connected = await connectSSE();
+
+    if (connected) {
+      // Successful stream session — reset backoff
+      if (wasOffline) {
+        const downMs = Date.now() - offlineSince;
+        const downSec = Math.round(downMs / 1000);
+        log(`ClawChat back online after ${downSec}s downtime. Resetting backoff.`);
+        // Log reconnect to Milvus rcc_messages if possible
+        try {
+          const client = await getMilvus();
+          const content = `[clawchat-watcher] Reconnected after ${downSec}s offline (${new Date(offlineSince).toISOString()} → ${new Date().toISOString()})`;
+          const id = createHash('sha256').update(`reconnect:${offlineSince}`).digest('hex').slice(0, 32);
+          const vector = await embed(content);
+          await client.upsert({
+            collection_name: COLLECTION,
+            data: [{ id, vector, content, agent: AGENT_NAME, source: 'clawchat-watcher', scope: 'fleet', ts: new Date().toISOString() }],
+          });
+        } catch (e) {
+          log(`Could not log reconnect to Milvus: ${e.message}`);
+        }
+        offlineSince = null;
+      }
+      consecutiveFailures = 0;
+    } else {
+      // Failed connection
+      consecutiveFailures++;
+      if (!wasOffline) {
+        offlineSince = Date.now();
+        log(`ClawChat offline — tracking downtime from ${new Date(offlineSince).toISOString()}`);
+      }
+    }
+
+    // Exponential backoff: base * 2^failures, capped at max
+    const delayMs = Math.min(RECONNECT_MS_BASE * Math.pow(2, consecutiveFailures - 1), RECONNECT_MS_MAX);
+    log(`Reconnecting in ${Math.round(delayMs / 1000)}s (attempt ${consecutiveFailures + 1})...`);
+    await new Promise(r => setTimeout(r, delayMs));
   }
 }
 
