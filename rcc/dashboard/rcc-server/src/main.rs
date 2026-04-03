@@ -125,6 +125,7 @@ async fn main() {
     // Load persisted state
     state::load_all(&app_state).await;
     routes::lessons::load_lessons().await;
+    routes::metrics::load_metrics().await;
     routes::issues::load_issues().await;
     routes::conversations::load_conversations().await;
 
@@ -152,6 +153,7 @@ async fn main() {
         .merge(routes::fs::router())
         .merge(routes::supervisor::router())
         .merge(routes::conversations::router())
+        .merge(routes::metrics::router())
         .merge(routes::setup::router())
         .merge(routes::providers::router())
         .merge(routes::acp::router())

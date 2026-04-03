@@ -551,15 +551,17 @@ async fn memory_recent(
 
     let limit = params.limit.unwrap_or(20).min(100);
 
-    let mut filter_parts: Vec<String> = vec!["ts > 0".to_string()];
+    // ts is stored as VarChar (stringified millis) — use string comparisons only
+    let mut filter_parts: Vec<String> = vec!["id != \"\"".to_string()];
     if let Some(agent) = &params.agent {
         if !agent.is_empty() {
             filter_parts.push(format!("agent == \"{}\"", agent.replace('"', "\\\"")));
         }
     }
     if let Some(since) = &params.since {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(since) {
-            filter_parts.push(format!("ts > {}", dt.timestamp_millis()));
+        if chrono::DateTime::parse_from_rfc3339(since).is_ok() {
+            // ts is VarChar storing ISO-8601 strings — compare lexicographically
+            filter_parts.push(format!("ts >= \"{}\"", since.replace('"', "\\\"")));
         }
     }
     let filter = filter_parts.join(" && ");
