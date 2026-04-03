@@ -28,10 +28,90 @@ const OLLAMA_MODELS       = (process.env.OLLAMA_MODELS      || 'qwen2.5-coder:32
 const CHECK_INTERVAL_MS   = parseInt(process.env.CHECK_INTERVAL_MS   || '900000', 10);  // 15 min
 const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || '30000', 10);   // 30s
 const RCC_API             = process.env.RCC_API             || 'https://api.yourmom.photos';
-const RCC_AUTH_TOKEN      = process.env.RCC_AUTH_TOKEN      || 'rcc-agent-rocky-20maaghccmbmnby63so';
+const RCC_AUTH_TOKEN      = process.env.RCC_AUTH_TOKEN      || 'rcc-agent-natasha-eeynvasslp8mna9bipx';
 const AGENT_NAME          = process.env.AGENT_NAME          || 'natasha';
 const STATUS_FILE         = resolve(process.env.STATUS_FILE || '/home/jkh/.rcc/ollama-status.json');
 const TEST_PROMPT         = 'Say "ok" in one word.';
+
+// GPU spike alerting — notify jkh via Mattermost DM when GPU util is sustained high
+const MM_URL              = process.env.MATTERMOST_URL   || 'https://chat.yourmom.photos';
+const MM_TOKEN            = process.env.MATTERMOST_TOKEN || '';
+const JKH_MM_USER         = process.env.JKH_MM_USER     || 'jkh';  // Mattermost username
+const GPU_ALERT_THRESHOLD = parseInt(process.env.GPU_ALERT_THRESHOLD_PCT || '80', 10);   // %
+const GPU_ALERT_STRIKES   = parseInt(process.env.GPU_ALERT_STRIKES      || '3', 10);     // checks in a row
+const GPU_ALERT_COOLDOWN  = parseInt(process.env.GPU_ALERT_COOLDOWN_MS  || '3600000', 10); // 1hr
+
+let gpuHighStrikes = 0;         // consecutive checks above threshold
+let lastAlertTs    = 0;         // timestamp of last alert sent
+
+/** Send a Mattermost DM to jkh */
+async function mmDm(message) {
+  if (!MM_TOKEN) { log('WARN: no MATTERMOST_TOKEN, skipping DM'); return; }
+  try {
+    // 1. Resolve jkh user id
+    const uRes = await fetch(`${MM_URL}/api/v4/users/username/${JKH_MM_USER}`, {
+      headers: { Authorization: `Bearer ${MM_TOKEN}` },
+    });
+    if (!uRes.ok) { log(`WARN: mm user lookup failed ${uRes.status}`); return; }
+    const user = await uRes.json();
+
+    // 2. Open/find DM channel
+    // Get bot's own id first
+    const meRes = await fetch(`${MM_URL}/api/v4/users/me`, {
+      headers: { Authorization: `Bearer ${MM_TOKEN}` },
+    });
+    const me = await meRes.json();
+
+    const dmRes = await fetch(`${MM_URL}/api/v4/channels/direct`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${MM_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify([me.id, user.id]),
+    });
+    if (!dmRes.ok) { log(`WARN: mm DM channel open failed ${dmRes.status}`); return; }
+    const dm = await dmRes.json();
+
+    // 3. Post message
+    const postRes = await fetch(`${MM_URL}/api/v4/posts`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${MM_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel_id: dm.id, message }),
+    });
+    if (postRes.ok) {
+      log(`MM DM sent to ${JKH_MM_USER}: ${message.slice(0, 80)}`);
+    } else {
+      log(`WARN: mm post failed ${postRes.status}`);
+    }
+  } catch (e) {
+    log(`WARN: mm DM error: ${e.message}`);
+  }
+}
+
+/** Check GPU utilization and fire alert if sustained high */
+function checkGpuSpike(gpuTelemetry) {
+  if (!gpuTelemetry || !gpuTelemetry[0]) return;
+  const g0 = gpuTelemetry[0];
+  const util = g0.utilization_pct;
+  if (util === null) return;  // GB10 [N/A] — skip
+
+  if (util >= GPU_ALERT_THRESHOLD) {
+    gpuHighStrikes++;
+    log(`GPU spike check: ${util}% util (strike ${gpuHighStrikes}/${GPU_ALERT_STRIKES})`);
+    if (gpuHighStrikes >= GPU_ALERT_STRIKES) {
+      const now = Date.now();
+      if (now - lastAlertTs > GPU_ALERT_COOLDOWN) {
+        lastAlertTs = now;
+        const msg = `⚠️ **sparky GPU alert** — utilization at **${util}%** for ${GPU_ALERT_STRIKES} consecutive checks (${Math.round(CHECK_INTERVAL_MS * GPU_ALERT_STRIKES / 60000)} min). Temp: ${g0.temp_c}°C, Power: ${g0.power_w}W. Natasha on it.`;
+        mmDm(msg).catch(e => log(`WARN alert DM failed: ${e.message}`));
+        gpuHighStrikes = 0;  // reset after alert
+      } else {
+        log(`GPU spike cooldown active — skipping alert`);
+      }
+    }
+  } else {
+    if (gpuHighStrikes > 0) log(`GPU util back to ${util}% — resetting strike counter`);
+    gpuHighStrikes = 0;
+  }
+}
 
 let ollamaStatus = {};
 
@@ -138,6 +218,7 @@ async function reportToRCC(model, status) {
       if (g0.vram_total_mb !== null)    payload.vram_total_mb = g0.vram_total_mb;
     }
     log(`GPU telemetry: ${gpuTelemetry.length} GPU(s). g0: temp=${gpuTelemetry[0]?.temp_c}°C power=${gpuTelemetry[0]?.power_w}W util=${gpuTelemetry[0]?.utilization_pct}%`);
+    checkGpuSpike(gpuTelemetry);
   }
 
   // GB10 unified memory — system RAM IS the GPU memory pool
