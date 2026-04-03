@@ -389,6 +389,9 @@ if (existsSync(STATUS_FILE)) {
   } catch (_) {}
 }
 
+// Pre-create telemetry dir so first cycle always writes successfully (dir may be absent on fresh workspace)
+try { mkdirSync(dirname(GPU_METRICS_FILE), { recursive: true }); } catch (_) {}
+
 // Run immediately, then on interval
 checkAll().catch(e => log(`ERROR in check cycle: ${e.message}`));
 setInterval(() => checkAll().catch(e => log(`ERROR in check cycle: ${e.message}`)), CHECK_INTERVAL_MS);
