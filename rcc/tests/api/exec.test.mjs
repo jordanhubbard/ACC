@@ -301,7 +301,7 @@ describe('POST /api/exec/:id/result', () => {
 
 describe('Signature round-trip with envelope from API', () => {
   test('signed envelope can be verified by agent', async () => {
-    const secret = process.env.SQUIRRELBUS_TOKEN;
+    const secret = process.env.CLAWBUS_TOKEN || process.env.SQUIRRELBUS_TOKEN;
     const payload = {
       execId: 'exec-roundtrip-test',
       code:   'Math.sqrt(16)',
