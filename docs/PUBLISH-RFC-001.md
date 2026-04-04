@@ -2,7 +2,7 @@
 
 **Author:** Bullwinkle  
 **Date:** 2026-04-04  
-**Status:** APPROVED — v2, incorporating fleet review  
+**Status:** APPROVED — v3, with Natasha's lifecycle refinements
 **Triggered by:** jkh asked "How does CCC publish results in a distributed system?"  
 **Reviewers:** Dudley (infra audit), Snidely (Sweden perspective), Sherman (lifecycle), Peabody (API contract), Natasha (sequencing), Rocky (daemon owner)
 
@@ -80,7 +80,7 @@ For rendered images, reports, HTML pages, PDFs, logs, one-shot outputs.
 **Transport:** ClawBus POST or SCP — no tunnel required.  
 **Content host:** MinIO (survives Rocky downtime — URL is direct to storage).  
 **Expiry:** 7-day TTL default. Named/versioned publishes never expire.  
-**Port check timeout:** 1s (if MinIO isn't responding in 1s, it's broken, not warming up).
+**Port check timeout:** 5s default (configurable under three-tier system; cold MinIO connections may need warmup).
 
 **Flow:**
 ```
@@ -124,22 +124,30 @@ For live logs, build output, task progress — **this IS ClawBus.** No separate 
 
 _Merged from Natasha and Peabody's review drafts, with Snidely's timeout budget and Sherman's ordering fix._
 
-### Publish Sequence (`service` type — ordered, blocking)
+### Publish Sequence (`service` type — explicit activate)
 
-1. Agent opens SSH-R tunnel to Rocky (port from dynamic pool or pre-allocated)
-2. Agent POSTs to `/api/publish` with `{type: "service", port, name, agent, timeout_s}`
-3. Rocky daemon verifies tunnel port is accepting connections:
+_Natasha's call: explicit `PUT /ready` over polling. Zero polling overhead; agent controls timing._
+
+1. Agent POSTs to `/api/publish` with `{type: "service", name, agent, timeout_s}`
+2. Rocky allocates port from dynamic pool, writes catalog entry (`status: pending`, `leased_at: now`)
+3. Rocky returns preliminary ACK: `{"status": "pending", "port": 19105, "id": "pub-xxx"}`
+4. Agent establishes SSH-R tunnel: `ssh -R 19105:localhost:{local_port} jkh@do-host1`
+5. Agent calls `PUT /api/publish/{id}/ready` when tunnel is up
+6. Rocky verifies tunnel port is accepting connections (`status: verifying`):
    - Timeout per `timeout_s` field (default: 30s for `service`, overridable per-request)
    - Three-tier precedence: RFC default < daemon config < publish request
-   - **Fail-fast** on timeout with clear error: `{"error": "tunnel_port_not_ready", "port": 19100, "timeout_s": 30}`
+   - **Fail-fast** on timeout with clear error: `{"error": "tunnel_port_not_ready", "port": 19105, "timeout_s": 30}`
    - Agent retries explicitly — no silent hangs (Snidely's timeout budget requirement)
-4. Port confirmed ready → write catalog entry (SQLite, `status: active`)
-5. Generate `snippets.d/{id}.caddy`
-6. Enqueue Caddy reload into debounce window
-7. **ACK returned to agent after catalog write** — not after reload (reload is async)
-   - ACK body: `{"status": "registered", "url": "...", "live_at": <estimated_ms>}` (Peabody's refinement)
-   - `live_at` = `now + debounce_window + estimated_reload_time` — Rocky knows debounce queue depth better than the publisher
-   - Agent can poll or wait before handing URL to jkh (no DM'ing a link that 404s for 3 seconds)
+7. Port confirmed ready → update catalog entry (`status: active`)
+8. Generate `snippets.d/{id}.caddy`
+9. Enqueue Caddy reload into debounce window
+10. **ACK returned to agent after catalog write** — not after reload (reload is async)
+    - ACK body: `{"status": "active", "url": "...", "port": 19105, "live_at": <estimated_ms>}` (Peabody's refinement)
+    - `live_at` = `now + debounce_window + estimated_reload_time`
+    - **Agent MUST NOT share the URL with humans before `live_at` has passed.** If a `publish_error` ClawBus event arrives before `live_at`, the URL is dead — do not share it.
+   - This prevents the "DM jkh a link that 404s for 3 seconds" failure mode
+
+**Pending TTL:** If agent never calls `PUT /ready` within 5 minutes, the `pending` entry is reclaimed (port freed, catalog entry deleted, ClawBus notification sent). Sweden containers with slow tunnel startup (supervisord restart loops, 10-15s) don't expire because Rocky doesn't poll — the agent controls when activation is attempted. `leased_at` column makes TTL enforcement trivial.
 
 ### Publish Sequence (`artifact` type)
 
@@ -200,11 +208,12 @@ CREATE TABLE publications (
   name TEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('artifact', 'service')),
   url TEXT NOT NULL,
-  visibility TEXT NOT NULL CHECK (visibility IN ('public', 'fleet', 'private', 'link')),
+  visibility TEXT NOT NULL CHECK (visibility IN ('public', 'fleet', 'private', 'link')),  -- 'link' = unlisted but no auth
   tunnel_port INTEGER,
-  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'degraded', 'dead', 'expired', 'error')),
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'verifying', 'active', 'degraded', 'dead', 'expired', 'error')),
   keep_forever BOOLEAN DEFAULT FALSE,
   timeout_s INTEGER,
+  leased_at TEXT,            -- when port was allocated (for pending TTL enforcement)
   created_at TEXT NOT NULL,
   expires_at TEXT,
   last_seen_at TEXT,
@@ -215,6 +224,10 @@ CREATE TABLE publications (
 
 **Status transitions:**
 ```
+pending ──agent calls PUT /ready──→ verifying ──port OK──→ active
+  │                                    │
+  └──5min TTL expires──→ (reclaimed)   └──port fail──→ error
+
 active ──probe fail──→ degraded ──3 consecutive──→ dead
   ↑                        ↑                         │
   └──probe pass────────────┘                         │
@@ -224,9 +237,14 @@ active ──TTL expired──→ expired (artifact only)
 active ──reload fail──→ error
 ```
 
+**Pending TTL (Natasha's refinement):** Port allocations in `pending` status auto-expire after 5 minutes. Daemon sweeps every 60s, reclaims timed-out reservations, notifies agent via ClawBus. The `leased_at` column tracks when the port was allocated (not when the tunnel connected). Prevents port leaks from agents that allocate but never activate.
+
+**Fast-path degraded on daemon restart (Natasha/Peabody):** When the publish daemon starts, any `active` catalog entry whose port is NOT in `ss -tlnp` output goes immediately to `degraded` — no 3-strike cycle. 3-strike is for runtime drift (tunnel was up, something flaked), not cold facts (port demonstrably absent on startup).
+
 **API endpoints:**
 - `GET  /api/publish` — list all publications (filterable by agent, type, visibility, status)
 - `POST /api/publish` — publish (artifact or service, determined by `type` field)
+- `PUT  /api/publish/{id}/ready` — agent signals tunnel is up; triggers verify → active transition (service only)
 - `DELETE /api/publish/{id}` — unpublish
 - `GET  /api/publish/{id}/status` — health check
 
@@ -273,10 +291,12 @@ Shell tunnels:  Peabody=19080, Snidely=19081, Sherman=19082, Dudley=19083, Boris
 
 ### Port Registry
 
-Canonical source of truth for ALL tunnel port allocations lives on Rocky at:
+The **SQLite catalog** is the canonical source of truth for all port allocations. A human-readable snapshot is maintained at:
 ```
 /home/jkh/port-registry.json
 ```
+
+This file is **derived** — auto-regenerated from the catalog on any port change. Its purpose is debugging convenience (`cat` a JSON file vs. running SQL at 2am). Never edit it directly.
 
 This replaces the current situation where port assignments are scattered across MEMORY.md files.
 
@@ -346,7 +366,7 @@ _From Natasha's review, ratified by fleet._
 |----------------------|-----------------------|----------------------------|
 | Transport            | ClawBus POST / SCP    | Dedicated SSH-R            |
 | Content host         | MinIO (direct URL)    | Rocky proxy                |
-| Port check timeout   | 1s                    | 30s (configurable)         |
+| Port check timeout   | 5s (configurable)     | 30s (configurable)         |
 | Expiry default       | 7 days                | Never (explicit unpublish) |
 | Rocky-down behavior  | URL survives          | Route goes dark            |
 | Sweden use case      | Primary               | Discouraged (latency)      |
@@ -369,11 +389,20 @@ curl -X POST https://rcc.yourmom.photos/api/publish \
   -F "visibility=public"
 # Returns: {"url": "https://...", "id": "pub-xxx", "expires_at": "2026-04-11T..."}
 
-# Service (after establishing tunnel)
+# Service (two-step: register → tunnel → activate)
+# Step 1: Register — get a port allocation
 curl -X POST https://rcc.yourmom.photos/api/publish \
   -H "Authorization: Bearer $AGENT_TOKEN" \
-  -d '{"type": "service", "name": "webchat", "port": 19100, "visibility": "fleet"}'
-# Returns: {"status": "registered", "url": "https://dashboard.yourmom.photos/agents/bullwinkle/webchat/", "id": "pub-xxx", "live_at": 1712234567890}
+  -d '{"type": "service", "name": "webchat", "visibility": "fleet"}'
+# Returns: {"status": "pending", "port": 19105, "id": "pub-xxx"}
+
+# Step 2: Open tunnel to the allocated port
+ssh -R 19105:localhost:3000 jkh@do-host1 -N &
+
+# Step 3: Activate — tell Rocky the tunnel is up
+curl -X PUT https://rcc.yourmom.photos/api/publish/pub-xxx/ready \
+  -H "Authorization: Bearer $AGENT_TOKEN"
+# Returns: {"status": "active", "url": "https://dashboard.yourmom.photos/agents/bullwinkle/webchat/", "live_at": 1712234567890}
 ```
 
 ---
@@ -382,15 +411,15 @@ curl -X POST https://rcc.yourmom.photos/api/publish \
 
 For `service` type, the tunnel is the critical path:
 
-1. **Agent publishes:** `POST /api/publish` with `type: service`
-2. **Rocky allocates port** from dynamic pool (19100-19169)
-3. **Agent establishes tunnel:** `ssh -R {allocated_port}:localhost:{local_port} jkh@do-host1`
-4. **Rocky verifies port** is accepting (configurable timeout, fail-fast)
-5. **Catalog entry written**, snippet generated, reload enqueued
-6. **ACK returned** with URL and `live_at` estimate
-7. **Ongoing liveness:** Rocky probes every 30s → `active`/`degraded`/`dead`
-8. **Tunnel drops:** Agent re-establishes; Rocky auto-recovers on next probe (port is known from catalog)
-9. **Agent unpublishes:** `DELETE /api/publish/{id}` — snippet removed, reload enqueued, port reclaimed
+1. **Agent registers:** `POST /api/publish` with `type: service` → gets `pending` entry + allocated port
+2. **Agent establishes tunnel:** `ssh -R {allocated_port}:localhost:{local_port} jkh@do-host1`
+3. **Agent activates:** `PUT /api/publish/{id}/ready` — Rocky verifies port, transitions `pending → verifying → active`
+4. **Catalog entry updated**, snippet generated, reload enqueued
+5. **ACK returned** with URL and `live_at` estimate
+6. **Ongoing liveness:** Rocky probes every 30s → `active`/`degraded`/`dead`
+7. **Tunnel drops:** Agent re-establishes; Rocky auto-recovers on next probe (port is known from catalog)
+8. **Agent unpublishes:** `DELETE /api/publish/{id}` — snippet removed, reload enqueued, port reclaimed
+9. **Pending timeout:** If agent never calls `PUT /ready` within 5 min, port reclaimed automatically
 
 **Tunnel keepalive:** Agents use `ServerAliveInterval=30 ServerAliveCountMax=3` in SSH config. Rocky's watchdog checks tunnel health on its own schedule independently.
 
@@ -406,12 +435,14 @@ For `service` type, the tunnel is the critical path:
 - `port-registry.json` created on Rocky
 
 ### Phase 2: Service Publishing + Sequencing (2-3 days)
-- Service publish flow with full sequencing (verify → register → snippet → reload)
-- Dynamic port allocator
-- `snippets.d/` Caddy generation + debounced reload
+- Service publish flow with full sequencing (POST → allocate → tunnel → verify → register → snippet → reload)
+- Dynamic port allocator with `pool_exhausted` error (HTTP 503)
+- `snippets.d/` Caddy generation + debounced reload (3s default)
 - Rollback on reload failure
-- ACK with `live_at` estimate
+- ACK with allocated port + `live_at` estimate
 - Rocky-side tunnel liveness probes (30s interval, 3-strike escalation)
+- ClawBus death notifications to publishing agents (on `dead` transition)
+- **Startup reconciliation:** On daemon restart, scan `snippets.d/*.caddy` + SQLite catalog → rebuild in-memory port pool → probe all `active` services → mark dead ones
 
 ### Phase 3: Stream Publishing (1 day)
 - ClawBus topic filtering extension (`?topic={name}`)
@@ -419,7 +450,6 @@ For `service` type, the tunnel is the critical path:
 
 ### Phase 4: Polish (ongoing)
 - Expiry sweep job (clean up TTL-expired artifacts)
-- ClawBus death notifications to publishing agents
 - Custom domains per publication
 - Token-based fleet auth (replacing Tailscale IP allowlist)
 - CLI: `openclaw publish <file>` one-liner
@@ -442,6 +472,15 @@ For `service` type, the tunnel is the critical path:
 ---
 
 ## Changelog
+
+### v3 (2026-04-04)
+- Added `pending` and `verifying` states to publication lifecycle (Natasha)
+- Added `leased_at TEXT` column to schema for pending TTL enforcement (Natasha/Peabody)
+- Added 5-minute pending TTL with daemon sweep every 60s (Natasha)
+- Changed service publish to explicit two-step: `POST /publish` → `PUT /publish/{id}/ready` (Natasha)
+- Added fast-path degraded on daemon restart: `active` entries with absent ports skip 3-strike, go straight to `degraded` (Natasha/Peabody)
+- Updated curl examples and tunnel lifecycle to match two-step flow
+- Rocky's `tunnel_pid` column removed — daemon doesn't control SSH-R processes on Sweden side (Natasha correction)
 
 ### v2 (2026-04-04)
 - Incorporated full fleet review from #rockyandfriends thread
