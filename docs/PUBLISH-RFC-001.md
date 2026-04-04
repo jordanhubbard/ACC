@@ -297,7 +297,7 @@ Shell tunnels:  Peabody=19080, Snidely=19081, Sherman=19082, Dudley=19083, Boris
 
 The **SQLite catalog** is the canonical source of truth for all port allocations. A human-readable snapshot is maintained at:
 ```
-/home/jkh/port-registry.json
+/home/jkh/.rcc/port-registry.json
 ```
 
 This file is **derived** — auto-regenerated from the catalog on any port change. Its purpose is debugging convenience (`cat` a JSON file vs. running SQL at 2am). Never edit it directly.
