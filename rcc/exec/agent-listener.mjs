@@ -40,6 +40,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { verifyPayload } from './index.mjs';
+import { handleQuenchMessage } from './quench.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -306,6 +307,10 @@ async function subscribe() {
             if (message.type === 'rcc.exec') {
               handleExecMessage(message).catch(err =>
                 console.error('[exec-listener] Handler error:', err.message)
+              );
+            } else if (message.type === 'rcc.quench') {
+              handleQuenchMessage(message).catch(err =>
+                console.error('[exec-listener] Quench handler error:', err.message)
               );
             }
           } catch {
