@@ -94,8 +94,25 @@ async function restartModel(model) {
   }
 }
 
-async function pushStatus() {
-  const payload = { status: 'online', host: 'sparky', ts: new Date().toISOString(), ollama: {} };
+async function pushStatus(gpuMetrics) {
+  const totalMem = os.totalmem();
+  const freeMem  = os.freemem();
+  const payload = {
+    status: 'online',
+    host: 'sparky',
+    ts: new Date().toISOString(),
+    ollama: {},
+    // GPU metrics (GB10 unified memory — vram_used_mb may be null)
+    gpu_temp_c:      gpuMetrics?.temp_c   ?? null,
+    gpu_power_w:     gpuMetrics?.power_w  ?? null,
+    gpu_util_pct:    gpuMetrics?.util_pct ?? null,
+    vram_used_mb:    gpuMetrics?.mem_used_mb   ?? null,
+    vram_total_mb:   gpuMetrics?.mem_total_mb  ?? null,
+    // System RAM (unified memory on GB10 = the actual GPU memory budget)
+    ram_used_mb:     Math.round((totalMem - freeMem) / 1024 / 1024),
+    ram_avail_mb:    Math.round(freeMem / 1024 / 1024),
+    ram_total_mb:    Math.round(totalMem / 1024 / 1024),
+  };
   for (const [m, s] of Object.entries(state)) payload.ollama[m] = s.status;
   try {
     await fetch(`${RCC_URL}/api/heartbeat/${AGENT_NAME}`, {
@@ -143,14 +160,20 @@ async function maybeRotateGpuLog() {
   }
 }
 
-async function appendGpuMetrics() {
+async function appendGpuMetrics(gpuMetrics) {
   if (!existsSync(TELEMETRY_DIR)) mkdirSync(TELEMETRY_DIR, { recursive: true });
   await maybeRotateGpuLog();
-  const gpu = await collectGpuMetrics();
+  // Use pre-collected metrics (passed from runChecks) or collect fresh if called standalone
+  const gpu = gpuMetrics || await collectGpuMetrics();
+  const totalMem = os.totalmem();
+  const freeMem  = os.freemem();
   const ollama_model_count = MODELS_TO_CHECK.filter(m => state[m]?.status === 'ok').length;
   const entry = {
     ts: new Date().toISOString(),
     ...gpu,
+    ram_used_mb:  Math.round((totalMem - freeMem) / 1024 / 1024),
+    ram_avail_mb: Math.round(freeMem / 1024 / 1024),
+    ram_total_mb: Math.round(totalMem / 1024 / 1024),
     ollama_model_count,
   };
   try {
@@ -176,8 +199,10 @@ async function runChecks() {
       state[model].status = 'restarting';
     }
   }
-  await pushStatus();
-  await appendGpuMetrics();
+  // Collect GPU metrics once and share between heartbeat + JSONL log
+  const gpuMetrics = await collectGpuMetrics();
+  await pushStatus(gpuMetrics);
+  await appendGpuMetrics(gpuMetrics);
 }
 
 const once = process.argv.includes('--once');
