@@ -9,8 +9,8 @@ metadata:
     category: infrastructure
 required_environment_variables:
   - name: CCC_URL
-    prompt: "RCC API base URL (e.g. http://146.190.134.110:8789)"
-    help: "Rocky's RCC server URL. Internal agents use http://146.190.134.110:8789 directly."
+    prompt: "RCC API base URL (e.g. http://100.89.199.14:8789 for Tailscale, http://146.190.134.110:8789 for Sweden direct)"
+    help: "puck/Bullwinkle + sparky/Natasha: use Tailscale IP http://100.89.199.14:8789. Sweden containers (no Tailscale): use direct IP http://146.190.134.110:8789."
     required_for: all CCC operations
   - name: CCC_AGENT_TOKEN
     prompt: "CCC agent bearer token (rcc-agent-<name>-<hex>)"
