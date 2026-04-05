@@ -28,13 +28,15 @@ import { resolve } from 'path';
 import { createReadStream } from 'fs';
 import { createInterface } from 'readline';
 
-const RCC_API     = process.env.RCC_API         || 'https://api.yourmom.photos';
-const RCC_AUTH    = process.env.CCC_AUTH_TOKEN   || 'rcc-agent-natasha-eeynvasslp8mna9bipx';
-const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN  || '';
-const JKH_USER    = process.env.JKH_SLACK_USER   || 'UDYR7H4SC';
-const DRY_RUN     = process.env.DRY_RUN === '1';
-const GPU_FILE    = process.env.GPU_METRICS_FILE  ||
-                    resolve(homedir(), '.openclaw/workspace/telemetry/gpu-metrics.jsonl');
+const RCC_API      = process.env.RCC_API         || 'https://api.yourmom.photos';
+const RCC_AUTH     = process.env.CCC_AUTH_TOKEN   || 'rcc-agent-natasha-eeynvasslp8mna9bipx';
+const SLACK_TOKEN  = process.env.SLACK_BOT_TOKEN  || '';
+const JKH_USER     = process.env.JKH_SLACK_USER   || 'UDYR7H4SC';
+const DRY_RUN      = process.env.DRY_RUN === '1';
+const GPU_FILE     = process.env.GPU_METRICS_FILE  ||
+                     resolve(homedir(), '.openclaw/workspace/telemetry/gpu-metrics.jsonl');
+const QDRANT_URL   = process.env.QDRANT_FLEET_URL  || 'http://146.190.134.110:6333';
+const QDRANT_KEY   = process.env.QDRANT_API_KEY    || process.env.QDRANT_FLEET_KEY || '';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -164,6 +166,46 @@ async function queueSection() {
   ].join('\n');
 }
 
+async function qdrantSection() {
+  const COLLECTION = 'agent_memories';
+  const headers = QDRANT_KEY ? { 'api-key': QDRANT_KEY } : {};
+
+  try {
+    const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION}`, { headers });
+    if (!res.ok) return `🧠 *Qdrant agent_memories* — unreachable (${res.status})`;
+    const data = await res.json();
+
+    const count = data.result?.points_count ?? data.result?.vectors_count ?? null;
+
+    // Find most recent ingest timestamp from payload (scroll first point)
+    const scrollRes = await fetch(`${QDRANT_URL}/collections/${COLLECTION}/points/scroll`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ limit: 1, with_payload: true, with_vector: false,
+                              order_by: { key: 'ingest_ts', direction: 'desc' } }),
+    });
+    let lastIngest = null;
+    if (scrollRes.ok) {
+      const scrollData = await scrollRes.json();
+      const pts = scrollData.result?.points || [];
+      if (pts.length) lastIngest = pts[0].payload?.ingest_ts || pts[0].payload?.ts || null;
+    }
+
+    const ageMs = lastIngest ? Date.now() - new Date(lastIngest).getTime() : null;
+    const ageHrs = ageMs ? Math.round(ageMs / 3600000) : null;
+    const stale = ageHrs != null && ageHrs > 48;
+    const sparse = count != null && count < 200;
+
+    const status = (stale || sparse) ? '⚠️ WARNING' : '✅ healthy';
+    const parts = [`🧠 *Qdrant agent_memories* — ${status}`];
+    parts.push(`• Chunks: ${count ?? 'N/A'}${sparse ? ' (< 200 — sparse!)' : ''}`);
+    parts.push(`• Last ingest: ${lastIngest ? timeSince(lastIngest) : 'unknown'}${stale ? ' (> 48h — stale!)' : ''}`);
+    return parts.join('\n');
+  } catch (e) {
+    return `🧠 *Qdrant agent_memories* — error: ${e.message}`;
+  }
+}
+
 async function swedenModelSection() {
   let agents;
   try {
@@ -191,14 +233,15 @@ async function swedenModelSection() {
 // ── main ──────────────────────────────────────────────────────────────────────
 
 async function buildDigest() {
-  const [sparky, agents, queue, sweden] = await Promise.allSettled([
+  const [sparky, agents, queue, sweden, qdrant] = await Promise.allSettled([
     sparkySection(),
     agentsSection(),
     queueSection(),
     swedenModelSection(),
+    qdrantSection(),
   ]);
 
-  const parts = [sparky, agents, queue, sweden].map(r =>
+  const parts = [sparky, agents, queue, sweden, qdrant].map(r =>
     r.status === 'fulfilled' ? r.value : `⚠️ Section failed: ${r.reason}`
   );
 
