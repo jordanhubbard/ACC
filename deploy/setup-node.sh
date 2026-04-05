@@ -193,23 +193,45 @@ elif command -v openclaw &>/dev/null; then
   success "OpenClaw present — Hermes not found, using OpenClaw"
 else
   info "No agent runtime found — installing Hermes..."
-  if command -v pip3 &>/dev/null || command -v pip &>/dev/null; then
+  HERMES_INSTALL_OK=false
+  if command -v pipx &>/dev/null; then
+    # pipx is the cleanest path everywhere (avoids PEP 668 on modern macOS/Linux)
+    pipx install hermes-agent --quiet 2>/dev/null && HERMES_INSTALL_OK=true || true
+  elif command -v pip3 &>/dev/null || command -v pip &>/dev/null; then
     PIP="$(command -v pip3 || command -v pip)"
-    "$PIP" install --quiet hermes-agent && \
-      HERMES_INSTALLED=true && \
-      success "Hermes agent installed ($(hermes --version 2>/dev/null | head -1))" || \
-      warn "Hermes install failed. Try manually: pip3 install hermes-agent"
+    if [[ "$PLATFORM" == "macos" ]]; then
+      # PEP 668: Homebrew Python refuses bare pip install on macOS 3.11+
+      # Try pipx first (above), then fall back to a venv install
+      HERMES_VENV="$HOME/.hermes-install-venv"
+      python3 -m venv "$HERMES_VENV" --quiet 2>/dev/null && \
+        "$HERMES_VENV/bin/pip" install --quiet hermes-agent 2>/dev/null && \
+        ln -sf "$HERMES_VENV/bin/hermes" "$HOME/.local/bin/hermes" 2>/dev/null && \
+        HERMES_INSTALL_OK=true || true
+    else
+      # Linux: bare pip3 is fine
+      "$PIP" install --quiet hermes-agent 2>/dev/null && HERMES_INSTALL_OK=true || true
+    fi
+  fi
+
+  if [ "$HERMES_INSTALL_OK" = true ] && command -v hermes &>/dev/null; then
+    HERMES_INSTALLED=true
+    success "Hermes agent installed ($(hermes --version 2>/dev/null | head -1))"
   else
-    warn "pip not found — cannot auto-install Hermes."
+    warn "Could not auto-install Hermes."
     echo ""
-    echo "  ┌──────────────────────────────────────────────────────────┐"
-    echo "  │  Install an agent runtime manually:                      │"
-    echo "  │                                                          │"
-    echo "  │  Hermes (recommended):  pip3 install hermes-agent        │"
-    echo "  │  OpenClaw:              npm install -g openclaw          │"
-    echo "  │                                                          │"
-    echo "  │  Then re-run this script to complete setup.              │"
-    echo "  └──────────────────────────────────────────────────────────┘"
+    echo "  ┌──────────────────────────────────────────────────────────────┐"
+    echo "  │  Install an agent runtime manually:                          │"
+    echo "  │                                                              │"
+    echo "  │  Hermes (recommended):                                       │"
+    echo "  │    macOS:  pipx install hermes-agent   (preferred)           │"
+    echo "  │            brew install pipx && pipx install hermes-agent    │"
+    echo "  │    Linux:  pip3 install hermes-agent                         │"
+    echo "  │                                                              │"
+    echo "  │  OpenClaw (Node.js alternative):                             │"
+    echo "  │    npm install -g openclaw                                   │"
+    echo "  │                                                              │"
+    echo "  │  Then re-run this script to complete setup.                  │"
+    echo "  └──────────────────────────────────────────────────────────────┘"
     echo ""
   fi
 fi
