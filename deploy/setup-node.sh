@@ -179,6 +179,77 @@ elif command -v openclaw &>/dev/null; then
   warn "clawhub not found. Install it to get the coding-agent skill: npm install -g clawhub"
 fi
 
+# ── Install agent runtime (Hermes preferred; OpenClaw fallback) ──────────
+info "Checking agent runtime..."
+
+HERMES_INSTALLED=false
+OPENCLAW_INSTALLED=false
+
+if command -v hermes &>/dev/null; then
+  HERMES_INSTALLED=true
+  success "Hermes agent present ($(hermes --version 2>/dev/null | head -1))"
+elif command -v openclaw &>/dev/null; then
+  OPENCLAW_INSTALLED=true
+  success "OpenClaw present — Hermes not found, using OpenClaw"
+else
+  info "No agent runtime found — installing Hermes..."
+  if command -v pip3 &>/dev/null || command -v pip &>/dev/null; then
+    PIP="$(command -v pip3 || command -v pip)"
+    "$PIP" install --quiet hermes-agent && \
+      HERMES_INSTALLED=true && \
+      success "Hermes agent installed ($(hermes --version 2>/dev/null | head -1))" || \
+      warn "Hermes install failed. Try manually: pip3 install hermes-agent"
+  else
+    warn "pip not found — cannot auto-install Hermes."
+    echo ""
+    echo "  ┌──────────────────────────────────────────────────────────┐"
+    echo "  │  Install an agent runtime manually:                      │"
+    echo "  │                                                          │"
+    echo "  │  Hermes (recommended):  pip3 install hermes-agent        │"
+    echo "  │  OpenClaw:              npm install -g openclaw          │"
+    echo "  │                                                          │"
+    echo "  │  Then re-run this script to complete setup.              │"
+    echo "  └──────────────────────────────────────────────────────────┘"
+    echo ""
+  fi
+fi
+
+# Migrate existing OpenClaw config into Hermes (if applicable)
+if [ "$HERMES_INSTALLED" = true ] && command -v hermes &>/dev/null; then
+  if [ -f "$HOME/.openclaw/config.json" ] || [ -d "$HOME/.openclaw" ]; then
+    if ! [ -f "$HOME/.hermes/config.json" ]; then
+      info "Found existing OpenClaw config — running hermes claw migrate..."
+      hermes claw migrate 2>/dev/null && \
+        success "OpenClaw config migrated to Hermes" || \
+        warn "Migration had warnings — check ~/.hermes/config.json"
+    else
+      success "Hermes config already exists — skipping migration"
+    fi
+  fi
+fi
+
+# Install ccc-node skill into whichever runtime is active
+CCC_SKILL_SRC="$WORKSPACE/skills/ccc-node"
+if [ -d "$CCC_SKILL_SRC" ]; then
+  if [ "$HERMES_INSTALLED" = true ] && command -v hermes &>/dev/null; then
+    SKILL_DEST="$HOME/.hermes/skills/ccc-node"
+    if [ ! -d "$SKILL_DEST" ]; then
+      cp -r "$CCC_SKILL_SRC" "$SKILL_DEST"
+      success "ccc-node skill installed into Hermes"
+    else
+      success "ccc-node skill already in Hermes"
+    fi
+  elif [ "$OPENCLAW_INSTALLED" = true ] && command -v openclaw &>/dev/null; then
+    SKILL_DEST="$HOME/.local/lib/node_modules/openclaw/skills/ccc-node"
+    if [ ! -d "$SKILL_DEST" ]; then
+      cp -r "$CCC_SKILL_SRC" "$SKILL_DEST"
+      success "ccc-node skill installed into OpenClaw"
+    else
+      success "ccc-node skill already in OpenClaw"
+    fi
+  fi
+fi
+
 # ── Set up systemd service (Linux only) ───────────────────────────────────
 if [[ "$PLATFORM" == "linux" ]] && command -v systemctl &>/dev/null; then
   SERVICE_SRC="$WORKSPACE/deploy/systemd/rcc-agent.service"
@@ -212,6 +283,7 @@ echo "  Next steps:"
 echo "  1. Edit $ENV_FILE with your agent's credentials"
 echo "  2. Run a manual pull: bash $PULL_SCRIPT"
 echo "  3. Check logs: tail -f $LOG_DIR/pull.log"
+echo "  4. Start agent runtime: hermes gateway   (or: openclaw start)"
 echo ""
 echo "  To register this agent with CCC:"
 echo "  bash $WORKSPACE/deploy/register-agent.sh"
