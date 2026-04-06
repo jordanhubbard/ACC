@@ -1,0 +1,25 @@
+version: "3.8"
+# Consul server — runs on do-host1 (100.89.199.14)
+# Binds to Tailscale interface for fleet-wide access.
+
+services:
+  consul-server:
+    image: hashicorp/consul:1.18
+    container_name: consul-server
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - consul-data:/consul/data
+      - ./consul-server.hcl:/consul/config/consul-server.hcl:ro
+      - ../service-defs:/consul/config/services:ro
+    command: agent -config-file=/consul/config/consul-server.hcl -config-dir=/consul/config/services
+    environment:
+      - CONSUL_BIND_INTERFACE=tailscale0
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  consul-data:
