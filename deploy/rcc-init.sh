@@ -258,6 +258,8 @@ echo -e "${BOLD}Step 6: Optional Infrastructure${NC} (press enter to skip)"
 echo ""
 
 prompt NVIDIA_API_KEY "NVIDIA API key (for LLM inference)" ""
+prompt TOKENHUB_API_KEY "TokenHub client API key (for LLM routing)" ""
+prompt TOKENHUB_ADMIN_TOKEN "TokenHub admin token (for vault secret access)" ""
 prompt MINIO_ENDPOINT "MinIO endpoint (e.g. http://10.0.0.5:9000)" ""
 prompt MINIO_ACCESS_KEY "MinIO access key" ""
 prompt MINIO_SECRET_KEY "MinIO secret key" ""
@@ -308,8 +310,9 @@ VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS:-}
 NVIDIA_API_BASE=https://inference-api.nvidia.com/v1
 NVIDIA_API_KEY=${NVIDIA_API_KEY}
 # TokenHub — preferred inference router (aggregates local vLLM + NVIDIA NIM)
-TOKENHUB_URL=http://146.190.134.110:8090
-TOKENHUB_AGENT_KEY=${TOKENHUB_AGENT_KEY:-}
+TOKENHUB_URL=http://100.89.199.14:8090
+TOKENHUB_AGENT_KEY=${TOKENHUB_API_KEY:-}
+TOKENHUB_ADMIN_TOKEN=${TOKENHUB_ADMIN_TOKEN:-}
 
 # ── Storage: MinIO ─────────────────────────────────────────────────────────
 MINIO_ENDPOINT=${MINIO_ENDPOINT}
