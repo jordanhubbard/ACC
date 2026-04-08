@@ -166,6 +166,36 @@ if [ "$AGENT_HAS_GPU" = "true" ]; then
   prompt AGENT_GPU_MODEL "GPU model string (e.g. RTX 4090, H100, L40)" ""
   prompt AGENT_GPU_COUNT "Number of GPUs" "1"
   prompt AGENT_GPU_VRAM_GB "Total GPU VRAM in GB" ""
+
+  echo ""
+  info "GPU detected — configuring vLLM model serving..."
+  ask "Enable vLLM local model serving? (true/false) [true]: "
+  read -r VLLM_ENABLED
+  VLLM_ENABLED="${VLLM_ENABLED:-true}"
+  if [ "$VLLM_ENABLED" = "true" ]; then
+    prompt VLLM_MODEL "vLLM model" "google/gemma-4-31B-it"
+    prompt VLLM_SERVED_NAME "vLLM served model name" "gemma"
+    prompt VLLM_PORT "vLLM port" "8000"
+    prompt VLLM_EXTRA_ARGS "Extra vLLM args (e.g. --tensor-parallel-size 4)" ""
+  fi
+else
+  VLLM_ENABLED="false"
+fi
+
+echo ""
+info "Configuring ClawFS (shared model/file cache via JuiceFS FUSE)..."
+echo "  ClawFS mounts a shared filesystem at ~/clawfs for models and artifacts."
+echo "  Linux: auto-mounted.  macOS: requires macFUSE (brew install --cask macfuse)."
+ask "Enable ClawFS? (true/false) [true]: "
+read -r CLAWFS_ENABLED
+CLAWFS_ENABLED="${CLAWFS_ENABLED:-true}"
+CLAWFS_MOUNT="$HOME/clawfs"
+CLAWFS_REDIS_URL="redis://100.89.199.14:6379/1"
+CLAWFS_CACHE_DIR="/tmp/jfscache"
+if [ "$CLAWFS_ENABLED" = "true" ]; then
+  prompt CLAWFS_MOUNT "ClawFS mount point" "$HOME/clawfs"
+  prompt CLAWFS_REDIS_URL "ClawFS Redis URL" "redis://100.89.199.14:6379/1"
+  prompt CLAWFS_CACHE_DIR "ClawFS cache directory" "/tmp/jfscache"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -259,6 +289,20 @@ AGENT_HAS_GPU=${AGENT_HAS_GPU}
 AGENT_GPU_MODEL=${AGENT_GPU_MODEL}
 AGENT_GPU_COUNT=${AGENT_GPU_COUNT}
 AGENT_GPU_VRAM_GB=${AGENT_GPU_VRAM_GB}
+
+# ── ClawFS (shared model/file cache via JuiceFS) ────────────────────────
+CLAWFS_ENABLED=${CLAWFS_ENABLED}
+CLAWFS_MOUNT=${CLAWFS_MOUNT}
+CLAWFS_REDIS_URL=${CLAWFS_REDIS_URL}
+CLAWFS_CACHE_DIR=${CLAWFS_CACHE_DIR}
+
+# ── vLLM (local GPU model serving) ──────────────────────────────────────
+VLLM_ENABLED=${VLLM_ENABLED}
+VLLM_MODEL=${VLLM_MODEL:-}
+VLLM_SERVED_NAME=${VLLM_SERVED_NAME:-}
+VLLM_PORT=${VLLM_PORT:-8000}
+VLLM_MODEL_PATH=
+VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS:-}
 
 # ── NVIDIA Inference ───────────────────────────────────────────────────────
 NVIDIA_API_BASE=https://inference-api.nvidia.com/v1

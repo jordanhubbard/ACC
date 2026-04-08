@@ -138,3 +138,112 @@ Boris gateway: outbound-capable, Sweden datacenter, dual L40
 Agent RTX gateway: outbound-only (horde-dgxc), `jordanh-rtx`, 4x L40
 
 Both should be able to POST to `https://rcc.yourmom.photos/api/heartbeat/<name>` directly.
+
+---
+
+## Step 8 — ClawFS (shared model/file cache)
+
+ClawFS is a JuiceFS FUSE mount backed by Redis (metadata) + MinIO (data) on Rocky.
+It provides a shared filesystem at `~/clawfs` for models, artifacts, and shared files.
+
+**Linux (automatic):**
+```bash
+# JuiceFS is installed and mounted by bootstrap.sh / setup-node.sh
+# Verify mount:
+ls ~/clawfs/.config  # sentinel file — if present, ClawFS is mounted
+df -h ~/clawfs       # should show juicefs
+```
+
+**macOS (optional — requires macFUSE):**
+1. Install macFUSE: `brew install --cask macfuse` (requires reboot + System Extension approval)
+2. Install JuiceFS: `brew install juicefs`
+3. Mount: `juicefs mount --background --cache-dir /tmp/jfscache redis://100.89.199.14:6379/1 ~/clawfs`
+
+**Env vars (in ~/.rcc/.env):**
+- `CLAWFS_ENABLED=true` — set to false to skip mounting
+- `CLAWFS_MOUNT=$HOME/clawfs`
+- `CLAWFS_REDIS_URL=redis://100.89.199.14:6379/1`
+
+**Key paths:**
+- `~/clawfs/models/` — shared model cache (used by vLLM, model-deploy.mjs)
+- `~/clawfs/.config` — sentinel file indicating successful mount
+
+---
+
+## Step 9 — vLLM (GPU model serving)
+
+**Only for GPU nodes.** vLLM serves LLMs locally. Default model: `google/gemma-4-31B-it`.
+
+```bash
+# Verify vLLM is running:
+curl -s http://localhost:8000/v1/models | jq .
+
+# Check served model name:
+curl -s http://localhost:8000/v1/models | jq '.data[0].id'
+# Expected: "gemma"
+```
+
+**Model name convention:** Always derived from model path, never hardcoded.
+`google/gemma-4-31B-it` → served as `gemma`. See `docs/model-deployment.md`.
+
+**Model path priority:**
+1. ClawFS: `~/clawfs/models/gemma-4-31B-it` (if mounted)
+2. Local: `~/models/gemma-4-31B-it` (fallback)
+3. HuggingFace download (automatic if neither exists)
+
+**Env vars (in ~/.rcc/.env):**
+- `VLLM_ENABLED=true`
+- `VLLM_MODEL=google/gemma-4-31B-it`
+- `VLLM_SERVED_NAME=gemma`
+- `VLLM_PORT=8000`
+- `VLLM_EXTRA_ARGS=` (e.g. `--tensor-parallel-size 4` for multi-GPU)
+
+**Register with LLM registry** so other agents can find your model:
+```bash
+curl -s -X POST "$CCC_URL/api/llm/register" \
+  -H "Authorization: Bearer $CCC_AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"agent\":\"$AGENT_NAME\",
+    \"baseUrl\":\"http://$(hostname):8000/v1\",
+    \"models\":[\"gemma\"],
+    \"backend\":\"vllm\",
+    \"gpu_vram_gb\":${AGENT_GPU_VRAM_GB:-0}
+  }"
+```
+
+---
+
+## Step 10 — Hermes Agent (standard runtime)
+
+Hermes is the standard agent runtime for the CCC fleet. It replaces OpenClaw.
+
+```bash
+# Verify hermes is installed:
+hermes --version
+
+# If not installed:
+pipx install hermes-agent    # preferred
+# OR: pip3 install hermes-agent
+
+# Migrate from OpenClaw (if applicable):
+hermes claw migrate
+```
+
+**Install CCC fleet skill:**
+```bash
+cp -r ~/.rcc/workspace/skills/ccc-node/ ~/.hermes/skills/ccc-node/
+```
+
+**Config (~/.hermes/config.yaml) — add fleet env vars:**
+```yaml
+env:
+  CCC_URL: "http://100.89.199.14:8789"
+  CCC_AGENT_TOKEN: "<your token>"
+  AGENT_NAME: "<your name>"
+```
+
+**Start the agent:**
+```bash
+hermes gateway
+```

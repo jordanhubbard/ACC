@@ -272,6 +272,58 @@ if [ -d "$CCC_SKILL_SRC" ]; then
   fi
 fi
 
+# ── ClawFS / JuiceFS (shared model/file cache) ───────────────────────────
+info "Checking ClawFS (JuiceFS FUSE mount)..."
+CLAWFS_MOUNT="${CLAWFS_MOUNT:-$HOME/clawfs}"
+CLAWFS_REDIS="redis://100.89.199.14:6379/1"
+CLAWFS_CACHE="/tmp/jfscache"
+
+_clawfs_mounted() { [[ -f "${CLAWFS_MOUNT}/.config" ]]; }
+
+if command -v juicefs &>/dev/null; then
+  success "JuiceFS installed ($(juicefs --version 2>/dev/null | head -1))"
+  if _clawfs_mounted; then
+    success "ClawFS already mounted at $CLAWFS_MOUNT"
+  else
+    warn "JuiceFS installed but ClawFS not mounted — bootstrap.sh will mount it"
+  fi
+elif [[ "$PLATFORM" == "linux" ]]; then
+  warn "JuiceFS not found — bootstrap.sh will install it automatically"
+  warn "  Or install manually: curl -sSL https://juicefs.com/static/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs"
+else
+  warn "JuiceFS not found — to enable ClawFS on macOS:"
+  warn "  1. brew install --cask macfuse   (reboot + approve system extension)"
+  warn "  2. brew install juicefs"
+  warn "  3. juicefs mount --background --cache-dir /tmp/jfscache redis://100.89.199.14:6379/1 ~/clawfs"
+fi
+
+# Check FUSE availability (Linux)
+if [[ "$PLATFORM" == "linux" ]]; then
+  if command -v fusermount &>/dev/null || command -v fusermount3 &>/dev/null; then
+    success "FUSE utils present"
+  else
+    warn "FUSE utils not found — install: sudo apt-get install -y fuse3"
+  fi
+fi
+
+# ── vLLM (local GPU model serving) ──────────────────────────────────────
+if command -v nvidia-smi &>/dev/null; then
+  GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
+  success "GPU detected: $GPU_INFO"
+  if python3 -c "import vllm" 2>/dev/null || command -v vllm &>/dev/null; then
+    success "vLLM installed"
+    if curl -sf "http://127.0.0.1:${VLLM_PORT:-8000}/v1/models" > /dev/null 2>&1; then
+      success "vLLM already running on port ${VLLM_PORT:-8000}"
+    else
+      info "vLLM installed but not running — bootstrap.sh or systemd will start it"
+    fi
+  else
+    warn "vLLM not installed — bootstrap.sh will install it, or run: pip3 install vllm"
+  fi
+else
+  info "No GPU detected — vLLM not applicable"
+fi
+
 # ── Set up systemd service (Linux only) ───────────────────────────────────
 if [[ "$PLATFORM" == "linux" ]] && command -v systemctl &>/dev/null; then
   SERVICE_SRC="$WORKSPACE/deploy/systemd/rcc-agent.service"

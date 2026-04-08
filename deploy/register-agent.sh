@@ -37,7 +37,13 @@ RESPONSE=$(curl -s -X POST "$CCC_URL/api/agents/register" \
       \"gpu\":${AGENT_HAS_GPU:-false},
       \"gpu_model\":\"${AGENT_GPU_MODEL:-}\",
       \"gpu_count\":${AGENT_GPU_COUNT:-0},
-      \"gpu_vram_gb\":${AGENT_GPU_VRAM_GB:-0}
+      \"gpu_vram_gb\":${AGENT_GPU_VRAM_GB:-0},
+      \\\"vllm\\\":${VLLM_ENABLED:-false},
+      \\\"vllm_model\\\":\\\"${VLLM_MODEL:-}\\\",
+      \\\"vllm_served_name\\\":\\\"${VLLM_SERVED_NAME:-}\\\",
+      \\\"vllm_port\\\":${VLLM_PORT:-8000},
+      \\\"clawfs\\\":${CLAWFS_ENABLED:-false},
+      \\\"clawfs_mount\\\":\\\"${CLAWFS_MOUNT:-}\\\"
     },
     \"billing\":{
       \"claude_cli\":\"fixed\",

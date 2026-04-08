@@ -107,6 +107,25 @@ else
   success "OpenClaw installed"
 fi
 
+# ── 2b. Install Hermes Agent (standard runtime) ──────────────────────────
+if command -v hermes &>/dev/null; then
+  success "Hermes agent already installed ($(hermes --version 2>/dev/null || echo 'version unknown'))"
+else
+  info "Installing Hermes agent..."
+  if command -v pipx &>/dev/null; then
+    pipx install hermes-agent 2>/dev/null && success "Hermes installed (pipx)" || true
+  fi
+  if ! command -v hermes &>/dev/null; then
+    pip3 install hermes-agent 2>/dev/null && success "Hermes installed (pip3)" || true
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+  if command -v hermes &>/dev/null; then
+    success "Hermes agent installed"
+  else
+    warn "Hermes agent install failed — install manually: pipx install hermes-agent"
+  fi
+fi
+
 # ── 3. Clone / update CCC workspace ──────────────────────────────────────
 CCC_WORKSPACE="$HOME/.rcc/workspace"
 info "Setting up CCC workspace at $CCC_WORKSPACE..."
@@ -592,6 +611,202 @@ if [[ -f "$REGISTER_SVC_SRC" ]]; then
   success "openclaw-register service enabled and started"
 else
   warn "openclaw-register.service not found in workspace — skipping (run after pulling latest)"
+fi
+
+# ── 9g. ClawFS / JuiceFS mount ────────────────────────────────────────────
+CLAWFS_MOUNT="${HOME}/clawfs"
+CLAWFS_REDIS="redis://100.89.199.14:6379/1"
+CLAWFS_CACHE="/tmp/jfscache"
+
+_clawfs_mounted() { [[ -f "${CLAWFS_MOUNT}/.config" ]]; }
+
+if [[ "$(uname)" == "Linux" ]]; then
+  info "Setting up ClawFS (JuiceFS FUSE mount)..."
+  # Install JuiceFS if not present
+  if ! command -v juicefs &>/dev/null; then
+    JFS_VER="1.2.2"
+    JFS_URL="https://github.com/juicedata/juicefs/releases/download/v${JFS_VER}/juicefs-${JFS_VER}-linux-amd64.tar.gz"
+    if curl -sfL "$JFS_URL" | tar xz -C /tmp juicefs 2>/dev/null; then
+      sudo install -m 755 /tmp/juicefs /usr/local/bin/juicefs
+      rm -f /tmp/juicefs
+      success "JuiceFS ${JFS_VER} installed"
+    else
+      warn "JuiceFS download failed — ClawFS will not be available"
+    fi
+  fi
+  # Install FUSE utils if missing
+  if ! command -v fusermount &>/dev/null && ! command -v fusermount3 &>/dev/null; then
+    sudo apt-get install -y -q fuse3 2>/dev/null || sudo yum install -y -q fuse3 2>/dev/null || true
+  fi
+  # Mount ClawFS
+  if command -v juicefs &>/dev/null; then
+    mkdir -p "$CLAWFS_MOUNT" "$CLAWFS_CACHE"
+    if ! _clawfs_mounted; then
+      juicefs mount --background --cache-dir "$CLAWFS_CACHE" "$CLAWFS_REDIS" "$CLAWFS_MOUNT" 2>/dev/null && \
+        success "ClawFS mounted at $CLAWFS_MOUNT" || \
+        warn "ClawFS mount failed — models will be downloaded locally"
+    else
+      success "ClawFS already mounted at $CLAWFS_MOUNT"
+    fi
+    # Install systemd unit for persistence
+    CLAWFS_SVC="/etc/systemd/system/clawfs-${AGENT}.service"
+    if [[ ! -f "$CLAWFS_SVC" ]] && command -v systemctl &>/dev/null; then
+      cat > /tmp/clawfs.service <<CFSEOF
+[Unit]
+Description=ClawFS JuiceFS mount for ${AGENT}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=$(whoami)
+ExecStart=/usr/local/bin/juicefs mount --background --cache-dir ${CLAWFS_CACHE} ${CLAWFS_REDIS} ${CLAWFS_MOUNT}
+ExecStop=/usr/local/bin/juicefs umount ${CLAWFS_MOUNT}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+CFSEOF
+      sudo mv /tmp/clawfs.service "$CLAWFS_SVC"
+      sudo systemctl daemon-reload
+      sudo systemctl enable "clawfs-${AGENT}" 2>/dev/null || true
+      success "ClawFS systemd service installed"
+    fi
+  fi
+elif [[ "$(uname)" == "Darwin" ]]; then
+  if command -v juicefs &>/dev/null; then
+    mkdir -p "$CLAWFS_MOUNT" "$CLAWFS_CACHE"
+    if ! _clawfs_mounted; then
+      juicefs mount --background --cache-dir "$CLAWFS_CACHE" "$CLAWFS_REDIS" "$CLAWFS_MOUNT" 2>/dev/null && \
+        success "ClawFS mounted at $CLAWFS_MOUNT" || \
+        warn "ClawFS mount failed — install macFUSE first: brew install --cask macfuse (requires reboot)"
+    else
+      success "ClawFS already mounted at $CLAWFS_MOUNT"
+    fi
+  else
+    warn "JuiceFS not found — to enable ClawFS on macOS:"
+    warn "  1. brew install --cask macfuse   (reboot + approve system extension)"
+    warn "  2. brew install juicefs"
+    warn "  3. juicefs mount --background --cache-dir /tmp/jfscache redis://100.89.199.14:6379/1 ~/clawfs"
+  fi
+fi
+
+# Write ClawFS vars to .env
+for key in CLAWFS_ENABLED CLAWFS_MOUNT CLAWFS_REDIS_URL CLAWFS_CACHE_DIR; do
+  sed -i "/^${key}=/d" "$ENV_FILE" 2>/dev/null || true
+done
+cat >> "$ENV_FILE" <<CLAWFSENV
+CLAWFS_ENABLED=$(_clawfs_mounted && echo true || echo false)
+CLAWFS_MOUNT=${CLAWFS_MOUNT}
+CLAWFS_REDIS_URL=${CLAWFS_REDIS}
+CLAWFS_CACHE_DIR=${CLAWFS_CACHE}
+CLAWFSENV
+
+# ── 9h. vLLM setup (GPU nodes only) ──────────────────────────────────────
+if [[ ${GPU_COUNT:-0} -gt 0 ]]; then
+  info "GPU detected — setting up vLLM model serving..."
+  VLLM_MODEL="${VLLM_MODEL:-google/gemma-4-31B-it}"
+  VLLM_SERVED_NAME="${VLLM_SERVED_NAME:-gemma}"
+  VLLM_PORT="${VLLM_PORT:-8000}"
+
+  # Determine model path: ClawFS > local > will download
+  if _clawfs_mounted && [[ -d "${CLAWFS_MOUNT}/models/$(basename $VLLM_MODEL)" ]]; then
+    VLLM_MODEL_PATH="${CLAWFS_MOUNT}/models/$(basename $VLLM_MODEL)"
+    success "Model found in ClawFS: $VLLM_MODEL_PATH"
+  elif [[ -d "$HOME/models/$(basename $VLLM_MODEL)" ]]; then
+    VLLM_MODEL_PATH="$HOME/models/$(basename $VLLM_MODEL)"
+    success "Model found locally: $VLLM_MODEL_PATH"
+  else
+    VLLM_MODEL_PATH="$VLLM_MODEL"
+    info "Model not cached — vLLM will download from HuggingFace on first start"
+  fi
+
+  # Install vLLM if not present
+  if ! command -v vllm &>/dev/null && ! python3 -c "import vllm" 2>/dev/null; then
+    info "Installing vLLM..."
+    pip3 install vllm 2>/dev/null && success "vLLM installed" || warn "vLLM install failed — install manually: pip3 install vllm"
+  fi
+
+  # Determine extra args (tensor parallel for multi-GPU)
+  VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
+  if [[ ${GPU_COUNT} -gt 1 && -z "$VLLM_EXTRA_ARGS" ]]; then
+    VLLM_EXTRA_ARGS="--tensor-parallel-size ${GPU_COUNT}"
+    info "Multi-GPU detected: adding $VLLM_EXTRA_ARGS"
+  fi
+
+  # Write vLLM vars to .env
+  for key in VLLM_ENABLED VLLM_MODEL VLLM_SERVED_NAME VLLM_PORT VLLM_MODEL_PATH VLLM_EXTRA_ARGS; do
+    sed -i "/^${key}=/d" "$ENV_FILE" 2>/dev/null || true
+  done
+  cat >> "$ENV_FILE" <<VLLMENV
+VLLM_ENABLED=true
+VLLM_MODEL=${VLLM_MODEL}
+VLLM_SERVED_NAME=${VLLM_SERVED_NAME}
+VLLM_PORT=${VLLM_PORT}
+VLLM_MODEL_PATH=${VLLM_MODEL_PATH}
+VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS}
+VLLMENV
+
+  # Start vLLM
+  if python3 -c "import vllm" 2>/dev/null; then
+    _vllm_running() { curl -sf "http://127.0.0.1:${VLLM_PORT}/v1/models" > /dev/null 2>&1; }
+
+    if _vllm_running; then
+      success "vLLM already running on port ${VLLM_PORT}"
+    elif command -v systemctl &>/dev/null && [[ "$(uname)" == "Linux" ]]; then
+      # Install systemd unit
+      VLLM_SVC="/etc/systemd/system/vllm-${AGENT}.service"
+      cat > /tmp/vllm.service <<VLLMSVC
+[Unit]
+Description=vLLM model server for ${AGENT}
+After=network-online.target clawfs-${AGENT}.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$(whoami)
+Environment="HOME=${HOME}"
+ExecStart=/usr/bin/python3 -m vllm.entrypoints.openai.api_server --model ${VLLM_MODEL_PATH} --served-model-name ${VLLM_SERVED_NAME} --port ${VLLM_PORT} ${VLLM_EXTRA_ARGS}
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+VLLMSVC
+      sudo mv /tmp/vllm.service "$VLLM_SVC"
+      sudo systemctl daemon-reload
+      sudo systemctl enable "vllm-${AGENT}" 2>/dev/null || true
+      sudo systemctl start "vllm-${AGENT}" 2>/dev/null || true
+      success "vLLM systemd service installed and started"
+    else
+      # tmux fallback
+      tmux kill-session -t vllm 2>/dev/null || true
+      tmux new-session -d -s vllm "python3 -m vllm.entrypoints.openai.api_server --model ${VLLM_MODEL_PATH} --served-model-name ${VLLM_SERVED_NAME} --port ${VLLM_PORT} ${VLLM_EXTRA_ARGS}"
+      success "vLLM started (tmux session 'vllm')"
+    fi
+  fi
+else
+  info "No GPU detected — skipping vLLM setup"
+  for key in VLLM_ENABLED VLLM_MODEL VLLM_SERVED_NAME VLLM_PORT VLLM_MODEL_PATH VLLM_EXTRA_ARGS; do
+    sed -i "/^${key}=/d" "$ENV_FILE" 2>/dev/null || true
+  done
+  echo "VLLM_ENABLED=false" >> "$ENV_FILE"
+fi
+
+# ── 9i. Install Hermes skills + migrate OpenClaw ─────────────────────────
+if command -v hermes &>/dev/null; then
+  info "Configuring Hermes agent..."
+  mkdir -p "$HOME/.hermes/skills"
+  # Install ccc-node skill
+  if [[ -d "$CCC_WORKSPACE/skills/ccc-node" ]]; then
+    cp -r "$CCC_WORKSPACE/skills/ccc-node/" "$HOME/.hermes/skills/ccc-node/"
+    success "CCC-node skill installed into Hermes"
+  fi
+  # Migrate OpenClaw config if present
+  if [[ -d "$HOME/.openclaw" ]]; then
+    hermes claw migrate 2>/dev/null && success "OpenClaw config migrated to Hermes" || true
+  fi
 fi
 
 # ── 10. Hardware fingerprint + heartbeat ─────────────────────────────────
