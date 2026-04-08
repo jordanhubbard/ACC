@@ -1,2 +1,7 @@
 target/
 dist/
+# Runtime data — contains secrets (exec logs, bus messages, queue state)
+data/*.jsonl
+data/*.json
+# Keep the directory itself tracked for initial structure
+!data/.gitkeep
