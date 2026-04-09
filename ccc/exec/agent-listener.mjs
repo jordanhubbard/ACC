@@ -165,6 +165,145 @@ async function executeShell(command) {
   }
 }
 
+// ── Update command executor (privileged, HMAC-gated) ──────────────────────
+/**
+ * Execute a single command for ccc.update. Unlike executeShell(), this does NOT
+ * check the SHELL_ALLOWLIST — the entire update envelope is HMAC-verified before
+ * we get here, so the trust boundary is the signature, not per-command allowlists.
+ *
+ * Still applies basic injection guards and a 120s timeout (updates can be slow).
+ */
+const UPDATE_CMD_ALLOWLIST = [
+  'cd ', 'git ', 'pip ', 'hermes ', 'systemctl ', 'supervisorctl ',
+  'mc ', 'rsync ', 'cp ', 'mv ', 'mkdir ', 'chmod ', 'chown ',
+];
+
+async function executeUpdateCommand(command) {
+  const normalized = command.trim();
+
+  // Must start with a known-safe command prefix (first token before && or ;)
+  const firstToken = normalized.split(/\s*(?:&&|;)\s*/)[0].trim();
+  const allowed = UPDATE_CMD_ALLOWLIST.some(prefix => firstToken.startsWith(prefix));
+  if (!allowed) {
+    return {
+      ok: false,
+      error: `Update command rejected: first token "${firstToken}" not in update allowlist`,
+    };
+  }
+
+  // Block the most dangerous patterns even in update context
+  const dangerous = /(\|.*sh\b|`|eval\s|exec\s|\$\(|>\s*\/etc|rm\s+-rf\s+\/[^.])/;
+  if (dangerous.test(normalized)) {
+    return { ok: false, error: 'Update command rejected: contains dangerous pattern' };
+  }
+
+  try {
+    const { stdout, stderr } = await execFileAsync('/bin/sh', ['-c', normalized], {
+      timeout: 120_000,  // 2 minutes for git/pip operations
+      maxBuffer: 2 * 1024 * 1024, // 2MB
+    });
+    return {
+      ok:     true,
+      output: (stdout + (stderr ? '\n[stderr]\n' + stderr : '')).trim(),
+      result: stdout.trim().slice(0, 500) || undefined,
+    };
+  } catch (err) {
+    return {
+      ok:     false,
+      error:  err.message,
+      output: err.stdout || '',
+    };
+  }
+}
+
+// ── Handle rcc.update — fleet software update directive ───────────────────
+/**
+ * rcc.update messages carry a structured update plan:
+ *   { component, repo, branch, commands[], target, sig }
+ *
+ * The entire envelope is HMAC-verified before any execution.
+ * Commands are executed via executeUpdateCommand() which has a broader
+ * allowlist than regular shell exec (cd, git, pip, hermes, systemctl, etc.)
+ *
+ * Example body:
+ *   { "component": "hermes-agent", "repo": "git@github.com:jordanhubbard/hermes-agent.git",
+ *     "branch": "main", "commands": ["cd ~/.hermes/hermes-agent && git fetch origin",
+ *     "cd ~/.hermes/hermes-agent && git pull --ff-only origin main"],
+ *     "target": "all" }
+ */
+async function handleUpdateMessage(message) {
+  let envelope;
+  try {
+    envelope = typeof message.body === 'string' ? JSON.parse(message.body) : message.body;
+  } catch (err) {
+    console.warn('[update-listener] Failed to parse update envelope:', err.message);
+    return;
+  }
+
+  const target    = envelope.target    || 'all';
+  const component = envelope.component || 'unknown';
+  const commands  = envelope.commands  || [];
+  const updateId  = envelope.updateId  || message.id || randomUUID();
+
+  // Target filter
+  if (target !== 'all' && target !== AGENT_NAME) return;
+
+  const ts = new Date().toISOString();
+
+  // Verify HMAC
+  if (!BUS_TOKEN) {
+    console.error('[update-listener] CLAWBUS_TOKEN not set — cannot verify update payload');
+    await logExecution({ ts, updateId, agent: AGENT_NAME, target, status: 'rejected', reason: 'no_secret', component });
+    return;
+  }
+
+  const valid = verifyPayload(envelope, BUS_TOKEN);
+  if (!valid) {
+    console.warn(`[update-listener] Bad signature on update ${updateId} — dropping`);
+    await logExecution({ ts, updateId, agent: AGENT_NAME, target, status: 'rejected', reason: 'bad_signature', component });
+    return;
+  }
+
+  if (!commands.length) {
+    console.warn(`[update-listener] Update ${updateId} has no commands — skipping`);
+    return;
+  }
+
+  console.log(`[update-listener] Processing update ${updateId}: component=${component}, ${commands.length} commands`);
+
+  const results = [];
+  for (const cmd of commands) {
+    console.log(`[update-listener] Running: ${cmd}`);
+    const result = await executeUpdateCommand(cmd);
+    results.push({ cmd, ...result });
+    if (!result.ok) {
+      console.warn(`[update-listener] Command failed: ${cmd} — ${result.error}`);
+      break; // stop on first failure
+    }
+  }
+
+  const allOk = results.every(r => r.ok);
+  await logExecution({
+    ts, updateId, agent: AGENT_NAME, target, component,
+    status: allOk ? 'ok' : 'error',
+    results,
+  });
+
+  // POST result back to CCC API
+  try {
+    const resp = await fetch(`${CCC_URL}/api/exec/${updateId}/result`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${CCC_AUTH_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: AGENT_NAME, execId: updateId, ts, ok: allOk, results }),
+    });
+    if (!resp.ok) console.warn(`[update-listener] Result POST failed: ${resp.status}`);
+  } catch (err) {
+    console.warn(`[update-listener] Could not POST result: ${err.message}`);
+  }
+
+  console.log(`[update-listener] Update ${updateId} ${allOk ? 'succeeded' : 'FAILED'}`);
+}
+
 // ── Handle a single ccc.exec message ──────────────────────────────────────
 async function handleExecMessage(message) {
   // Parse body
@@ -307,6 +446,10 @@ async function subscribe() {
             if (message.type === 'ccc.exec') {
               handleExecMessage(message).catch(err =>
                 console.error('[exec-listener] Handler error:', err.message)
+              );
+            } else if (message.type === 'ccc.update') {
+              handleUpdateMessage(message).catch(err =>
+                console.error('[update-listener] Handler error:', err.message)
               );
             } else if (message.type === 'ccc.quench') {
               handleQuenchMessage(message).catch(err =>

@@ -73,6 +73,9 @@ Every message is a single JSON object. One per line in the durable log.
 | `ping`       | Connectivity check | Can be empty |
 | `pong`       | Reply to ping | Should reference original ping via `ref` |
 | `event`      | System or external event notification | JSON event payload |
+| `rcc.exec`   | Remote code execution (admin, HMAC-signed) | JSON `{execId, code, target, mode, sig}` |
+| `rcc.quench` | Pause agent work for N minutes | JSON `{minutes, reason}` |
+| `rcc.update`  | Fleet software update directive | JSON `{component, repo, branch, commands[], sig}` |
 
 ## Endpoints (Rocky's Bus Server)
 

@@ -2,6 +2,9 @@
 node_modules/
 **/node_modules/
 
+# hermes-agent fork (separate repo, not a submodule)
+hermes-agent/
+
 # Sensitive / personal
 memory/
 !rcc/memory/
