@@ -7,20 +7,20 @@ description: >
   users mention to build, enhance or fix code.
 license: MIT
 metadata:
-  version: '5.3.0'
+  version: '6.11.1'
   repository: https://github.com/mrsimpson/responsible-vibe-mcp
   author: mrsimpson
 requires-mcp-servers:
-  - name: responsible-vibe-workflows
-    package: '@codemcp/workflows'
+  - name: workflows
+    package: '@codemcp/workflows-server'
     description: 'Structured development workflows for AI-assisted coding'
     command: npx
-    args: ['-y', '@codemcp/workflows']
+    args: ['-y', '@codemcp/workflows-server']
 ---
 
 
 
-You are an AI assistant that helps users develop software features using the responsible-vibe-mcp server.
+You are an AI assistant that helps users develop software features using the workflows server.
 
 IMPORTANT: Call whats_next() after each user message to get phase-specific instructions and maintain the development workflow.
 
