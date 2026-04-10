@@ -1,17 +1,14 @@
-/// Auth gate — front-door authentication wrapper for the RCC Dashboard.
+/// Auth gate — front-door authentication wrapper for the CCC Dashboard.
 ///
 /// Wraps the entire app. If no valid token is stored in localStorage,
-/// shows a login form (username + token). Validates against the RCC API.
+/// shows a login form (username + token). Validates against the CCC API.
 /// On success, stores credentials and renders children.
-///
-/// Per wq-JKH-002: unauthenticated users see a login screen, not the app.
 use leptos::*;
 use wasm_bindgen_futures::spawn_local;
 
-const LS_KEY_USERNAME: &str = "rcc_username";
-const LS_KEY_TOKEN: &str = "rcc_token";
+const KEY_USER: &str = "ccc_username";
+const KEY_TOKEN: &str = "ccc_token";
 
-/// Read a value from localStorage
 fn ls_get(key: &str) -> Option<String> {
     web_sys::window()
         .and_then(|w| w.local_storage().ok().flatten())
@@ -19,31 +16,21 @@ fn ls_get(key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// Write a value to localStorage
 fn ls_set(key: &str, val: &str) {
-    if let Some(storage) = web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-    {
-        let _ = storage.set_item(key, val);
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.set_item(key, val);
     }
 }
 
-/// Remove a value from localStorage
 fn ls_remove(key: &str) {
-    if let Some(storage) = web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-    {
-        let _ = storage.remove_item(key);
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.remove_item(key);
     }
 }
 
-const KEY_USER: &str = "ccc_username";
-const KEY_TOKEN: &str = "ccc_token";
+// ── Token validation ───────────────────────────────────────────────────────
 
-// ── Token validation ───────────────────────────────────────────────────
-
-/// Validate a token by hitting `/api/health` with Bearer auth.
-/// Returns true if the server responds 200.
+/// Validate a token by hitting `/api/heartbeats` with Bearer auth.
 async fn validate_token(token: &str) -> bool {
     let Ok(req) = gloo_net::http::Request::get("/api/heartbeats")
         .header("Authorization", &format!("Bearer {}", token))
@@ -51,11 +38,13 @@ async fn validate_token(token: &str) -> bool {
     else {
         return false;
     };
-    match gloo_net::http::RequestBuilder::from(req).send().await {
+    match req.send().await {
         Ok(resp) => resp.ok(),
         Err(_) => false,
     }
 }
+
+// ── Auth context ───────────────────────────────────────────────────────────
 
 /// Shared auth context — available to all components via use_context::<AuthState>()
 #[derive(Clone)]
@@ -67,23 +56,26 @@ pub struct AuthState {
 }
 
 impl AuthState {
-    /// Get the stored token for use in API requests
+    /// Get the stored token for use in API requests.
     pub fn token() -> Option<String> {
-        ls_get(LS_KEY_TOKEN)
+        ls_get(KEY_TOKEN)
     }
 
-    /// Log out: clear storage and reset signals
+    /// Log out: clear storage and reset signals.
     pub fn logout(&self) {
-        ls_remove(LS_KEY_USERNAME);
-        ls_remove(LS_KEY_TOKEN);
+        ls_remove(KEY_USER);
+        ls_remove(KEY_TOKEN);
         self.set_authenticated.set(false);
         self.set_username.set(String::new());
     }
 }
 
+// ── AuthGate component ─────────────────────────────────────────────────────
+
 /// AuthGate wraps the entire app. Children only render when authenticated.
+/// Uses ChildrenFn (not Children) so the reactive closure can call it repeatedly.
 #[component]
-pub fn AuthGate(children: Children) -> impl IntoView {
+pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
     let (authenticated, set_authenticated) = create_signal(false);
     let (username, set_username) = create_signal(String::new());
     let (checking, set_checking) = create_signal(true);
@@ -96,39 +88,38 @@ pub fn AuthGate(children: Children) -> impl IntoView {
     };
     provide_context(auth_state.clone());
 
-    // On mount: check localStorage for existing token and validate it
+    // On mount: check localStorage for existing token and validate it.
     {
         let set_auth = set_authenticated;
         let set_user = set_username;
         let set_chk = set_checking;
         spawn_local(async move {
-            if let (Some(token), Some(user)) = (ls_get(LS_KEY_TOKEN), ls_get(LS_KEY_USERNAME)) {
+            if let (Some(token), Some(user)) = (ls_get(KEY_TOKEN), ls_get(KEY_USER)) {
                 if validate_token(&token).await {
                     set_user.set(user);
                     set_auth.set(true);
                 } else {
-                    // Stale or invalid token — clear it
-                    ls_remove(LS_KEY_TOKEN);
-                    ls_remove(LS_KEY_USERNAME);
+                    ls_remove(KEY_TOKEN);
+                    ls_remove(KEY_USER);
                 }
             }
             set_chk.set(false);
         });
     }
 
-    let stored_children = store_value(children);
+    let children = store_value(children);
 
     view! {
         {move || {
             if checking.get() {
                 view! {
                     <div class="auth-loading">
-                        <div class="auth-spinner">"🐿️"</div>
+                        <div class="auth-spinner">"🦞"</div>
                         <p>"Checking credentials..."</p>
                     </div>
                 }.into_view()
             } else if authenticated.get() {
-                stored_children.with_value(|children| children()).into_view()
+                children.with_value(|c| c()).into_view()
             } else {
                 view! { <LoginForm /> }.into_view()
             }
@@ -136,7 +127,8 @@ pub fn AuthGate(children: Children) -> impl IntoView {
     }
 }
 
-/// Login form — shown when user is not authenticated.
+// ── Login form ─────────────────────────────────────────────────────────────
+
 #[component]
 fn LoginForm() -> impl IntoView {
     let (login_username, set_login_username) = create_signal(String::new());
@@ -146,7 +138,7 @@ fn LoginForm() -> impl IntoView {
 
     let auth_state = use_context::<AuthState>().expect("AuthState must be provided by AuthGate");
 
-    let on_submit = move |ev: web_sys::Event| {
+    let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
         let user = login_username.get().trim().to_string();
         let token = login_token.get().trim().to_string();
@@ -162,12 +154,12 @@ fn LoginForm() -> impl IntoView {
         let auth = auth_state.clone();
         spawn_local(async move {
             if validate_token(&token).await {
-                ls_set(LS_KEY_USERNAME, &user);
-                ls_set(LS_KEY_TOKEN, &token);
+                ls_set(KEY_USER, &user);
+                ls_set(KEY_TOKEN, &token);
                 auth.set_username.set(user);
                 auth.set_authenticated.set(true);
             } else {
-                set_error.set(Some("Invalid token — check your credentials and try again".into()));
+                set_error.set(Some("Invalid token — check your credentials".into()));
             }
             set_loading.set(false);
         });
@@ -177,8 +169,8 @@ fn LoginForm() -> impl IntoView {
         <div class="auth-backdrop">
             <div class="auth-card">
                 <div class="auth-header">
-                    <span class="auth-logo">"🐿️"</span>
-                    <h1>"Rocky Command Center"</h1>
+                    <span class="auth-logo">"🦞"</span>
+                    <h1>"Claw Command Center"</h1>
                     <p class="auth-subtitle">"Sign in to continue"</p>
                 </div>
                 <form class="auth-form" on:submit=on_submit>
@@ -200,28 +192,27 @@ fn LoginForm() -> impl IntoView {
                             id="ccc-token"
                             type="password"
                             autocomplete="current-password"
-                            placeholder="Your RCC token"
+                            placeholder="Your CCC auth token"
                             prop:value=login_token
                             on:input=move |ev| set_login_token.set(event_target_value(&ev))
                             prop:disabled=loading
                         />
                     </div>
-                    {move || error.get().map(|e| view! {
-                        <div class="auth-error">{e}</div>
-                    })}
+                    {move || error.get().map(|e| view! { <div class="auth-error">{e}</div> })}
                     <button type="submit" class="auth-submit" prop:disabled=loading>
                         {move || if loading.get() { "Signing in…" } else { "Sign In" }}
                     </button>
                 </form>
                 <p class="auth-hint">
-                    "Your token is your RCC auth token. Save it in a password manager for easy access."
+                    "Your token is in ~/.ccc/.env as CCC_AGENT_TOKEN."
                 </p>
             </div>
         </div>
     }
 }
 
-/// Logout button component — place in the dashboard header.
+// ── Logout button ──────────────────────────────────────────────────────────
+
 #[component]
 pub fn LogoutButton() -> impl IntoView {
     let auth_state = use_context::<AuthState>();

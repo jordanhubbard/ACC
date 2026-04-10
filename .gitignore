@@ -44,6 +44,7 @@ memory/channel-state.json
 # Logs and temp
 *.log
 *.bak
+workqueue/*.bak*
 squirrelbus/bus.jsonl
 crash-reports/
 

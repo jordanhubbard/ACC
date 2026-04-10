@@ -98,12 +98,37 @@ async fn main() {
     routes::issues::load_issues().await;
     routes::conversations::load_conversations().await;
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    // CORS — configurable via CCC_CORS_ORIGINS env var.
+    // This server runs on Tailscale (internal network), so Any is the safe default.
+    // For public-facing deployments, set CCC_CORS_ORIGINS=https://yourdomain.com
+    let cors = match std::env::var("CCC_CORS_ORIGINS").ok().as_deref() {
+        Some(origins) if !origins.is_empty() && origins != "*" => {
+            let parsed: Vec<axum::http::HeaderValue> = origins
+                .split(',')
+                .filter_map(|o| o.trim().parse().ok())
+                .collect();
+            CorsLayer::new()
+                .allow_origin(parsed)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::PATCH,
+                    axum::http::Method::DELETE,
+                ])
+                .allow_headers([
+                    axum::http::header::AUTHORIZATION,
+                    axum::http::header::CONTENT_TYPE,
+                ])
+        }
+        _ => CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any),
+    };
 
-    let app = Router::new()
+    // Build router — API routes first, then static SPA fallback
+    let mut app = Router::new()
         .merge(routes::health::router())
         .merge(routes::queue::router())
         .merge(routes::agents::router())
@@ -124,9 +149,22 @@ async fn main() {
         .merge(routes::setup::router())
         .merge(routes::providers::router())
         .merge(routes::acp::router())
-        .merge(routes::models::router())
-        .layer(cors)
-        .with_state(app_state.clone());
+        .merge(routes::models::router());
+
+    // Serve WASM SPA as fallback if DASHBOARD_DIST is set.
+    // This allows ccc-server to serve the dashboard directly (no dashboard-server needed).
+    if let Ok(dist) = std::env::var("DASHBOARD_DIST") {
+        if !dist.is_empty() && std::path::Path::new(&dist).exists() {
+            use tower_http::services::{ServeDir, ServeFile};
+            let index = format!("{}/index.html", dist);
+            tracing::info!("Serving dashboard SPA from {}", dist);
+            app = app.fallback_service(
+                ServeDir::new(&dist).not_found_service(ServeFile::new(index)),
+            );
+        }
+    }
+
+    let app = app.layer(cors).with_state(app_state.clone());
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
         .await
@@ -136,13 +174,13 @@ async fn main() {
     tracing::info!(
         "Auth: {} token(s) configured",
         if app_state.auth_tokens.is_empty() {
-            "OPEN".to_string()
+            "OPEN (no tokens — all requests allowed)".to_string()
         } else {
             format!("{}", app_state.auth_tokens.len())
         }
     );
 
-    // Spawn periodic flush
+    // Spawn periodic flush (every 30s)
     let flush_state = app_state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -161,12 +199,17 @@ async fn main() {
     tokio::spawn(brain::run_brain_worker(brain_arc, brain_client));
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(app_state.clone()))
         .await
         .unwrap();
+
+    // Final flush on clean exit
+    tracing::info!("Flushing state before exit...");
+    state::flush_queue(&app_state).await;
+    tracing::info!("Shutdown complete.");
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(state: Arc<AppState>) {
     use tokio::signal;
     let ctrl_c = async {
         signal::ctrl_c()
@@ -182,8 +225,12 @@ async fn shutdown_signal() {
     };
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
+
     tokio::select! {
-        _ = ctrl_c => { tracing::info!("Received Ctrl+C, shutting down"); },
+        _ = ctrl_c  => { tracing::info!("Received Ctrl+C, shutting down"); },
         _ = terminate => { tracing::info!("Received SIGTERM, shutting down"); },
     }
+
+    // Flush state immediately on signal before axum drains connections
+    state::flush_queue(&state).await;
 }

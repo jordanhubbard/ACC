@@ -1,6 +1,5 @@
 pub mod auth_gate;
 pub mod activity_feed;
-pub mod auth_gate;
 pub mod clawfs;
 pub mod health_banner;
 pub mod agent_cards;
@@ -15,7 +14,6 @@ pub mod idea_incubator;
 pub mod kanban;
 pub mod metrics;
 pub mod providers;
-pub mod sc_voice;
 pub mod services;
 pub mod clawbus;
 pub mod work_queue;
