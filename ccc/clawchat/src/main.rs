@@ -1,11 +1,20 @@
 mod types;
 mod components;
+mod markdown;
 
 use leptos::*;
 use types::*;
-use components::{login::LoginScreen, sidebar::Sidebar, message_pane::MessagePane, input_bar::InputBar};
+use components::{
+    login::LoginScreen,
+    sidebar::Sidebar,
+    message_pane::MessagePane,
+    thread_pane::ThreadPane,
+    input_bar::InputBar,
+    command_palette::CommandPalette,
+};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
+use std::collections::HashMap;
 
 fn ls_get(key: &str) -> Option<String> {
     web_sys::window()
@@ -21,13 +30,15 @@ fn ls_set(key: &str, val: &str) {
 }
 
 const LS_KEY_TOKEN: &str = "ccc_token";
-const LS_KEY_USER: &str = "ccc_username";
+const LS_KEY_USER:  &str = "ccc_username";
+
+// ── Root app — handles auth gate ──────────────────────────────────────────────
 
 #[component]
 fn App() -> impl IntoView {
     let (token, set_token) = create_signal(ls_get(LS_KEY_TOKEN));
     let (username, set_username) = create_signal(
-        ls_get(LS_KEY_USER).unwrap_or_else(|| "jkh".to_string()),
+        ls_get(LS_KEY_USER).unwrap_or_default(),
     );
 
     let on_login = move |(tok, user): (String, String)| {
@@ -38,18 +49,16 @@ fn App() -> impl IntoView {
     };
 
     view! {
-        {move || {
-            match token.get() {
-                None => view! {
-                    <LoginScreen on_login=on_login.clone() />
-                }.into_view(),
-                Some(_) => view! {
-                    <ChatApp token=token set_token=set_token username=username />
-                }.into_view(),
-            }
+        {move || match token.get() {
+            None => view! { <LoginScreen on_login=on_login.clone() /> }.into_view(),
+            Some(_) => view! {
+                <ChatApp token=token set_token=set_token username=username />
+            }.into_view(),
         }}
     }
 }
+
+// ── Main chat app — sets up context and global handlers ───────────────────────
 
 #[component]
 fn ChatApp(
@@ -57,21 +66,26 @@ fn ChatApp(
     set_token: WriteSignal<Option<String>>,
     username: ReadSignal<String>,
 ) -> impl IntoView {
-    let (active_channel, set_active_channel) = create_signal("#general".to_string());
-    let (messages, set_messages) = create_signal(Vec::<BusMessage>::new());
-    let (presence, set_presence) = create_signal(Vec::<PresenceEntry>::new());
+    let (messages, set_messages)  = create_signal(Vec::<BusMessage>::new());
+    let (presence, set_presence)  = create_signal(Vec::<PresenceEntry>::new());
     let (connected, set_connected) = create_signal(false);
 
-    // Load message history on mount
+    let active_channel = create_rw_signal("#general".to_string());
+    let open_thread    = create_rw_signal(Option::<String>::None);
+    let palette_open   = create_rw_signal(false);
+    let emoji_target   = create_rw_signal(Option::<String>::None);
+    let read_counts    = create_rw_signal(HashMap::<String, usize>::new());
+
+    // ── Load history ──────────────────────────────────────────────────────────
     {
-        let tok = token.get_untracked().unwrap_or_default();
+        let tok      = token.get_untracked().unwrap_or_default();
         let set_msgs = set_messages;
         spawn_local(async move {
-            let r = gloo_net::http::Request::get("/bus/messages?type=text&limit=500")
+            if let Ok(resp) = gloo_net::http::Request::get("/bus/messages?limit=500")
                 .header("Authorization", &format!("Bearer {tok}"))
                 .send()
-                .await;
-            if let Ok(resp) = r {
+                .await
+            {
                 if let Ok(msgs) = resp.json::<Vec<BusMessage>>().await {
                     set_msgs.set(msgs);
                 }
@@ -79,32 +93,24 @@ fn ChatApp(
         });
     }
 
-    // Load presence on mount
+    // ── Load presence ─────────────────────────────────────────────────────────
     {
-        let tok = token.get_untracked().unwrap_or_default();
+        let tok   = token.get_untracked().unwrap_or_default();
         let set_p = set_presence;
         spawn_local(async move {
-            let r = gloo_net::http::Request::get("/bus/presence")
+            if let Ok(resp) = gloo_net::http::Request::get("/bus/presence")
                 .header("Authorization", &format!("Bearer {tok}"))
                 .send()
-                .await;
-            if let Ok(resp) = r {
+                .await
+            {
                 if let Ok(val) = resp.json::<serde_json::Value>().await {
                     if let Some(obj) = val.as_object() {
-                        let entries: Vec<PresenceEntry> = obj
-                            .iter()
-                            .map(|(name, info)| {
-                                // online if status == "online" and last_seen < 10min
-                                let status = info
-                                    .get("status")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("offline");
-                                PresenceEntry {
-                                    agent: name.clone(),
-                                    online: status == "online",
-                                }
-                            })
-                            .collect();
+                        let entries = obj.iter().map(|(name, info)| {
+                            let status = info.get("status")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("offline");
+                            PresenceEntry { agent: name.clone(), online: status == "online" }
+                        }).collect();
                         set_p.set(entries);
                     }
                 }
@@ -112,12 +118,19 @@ fn ChatApp(
         });
     }
 
-    // SSE stream for real-time messages
+    // ── SSE stream ────────────────────────────────────────────────────────────
     {
+        let tok      = token.get_untracked().unwrap_or_default();
         let set_msgs = set_messages;
         let set_conn = set_connected;
 
-        if let Ok(es) = web_sys::EventSource::new("/bus/stream") {
+        let stream_url = if tok.is_empty() {
+            "/bus/stream".to_string()
+        } else {
+            format!("/bus/stream?token={tok}")
+        };
+
+        if let Ok(es) = web_sys::EventSource::new(&stream_url) {
             let es_cleanup = es.clone();
 
             let open_cb = Closure::<dyn FnMut()>::new(move || {
@@ -128,12 +141,18 @@ fn ChatApp(
 
             let msg_cb = Closure::<dyn FnMut(_)>::new(move |e: web_sys::MessageEvent| {
                 let data = e.data().as_string().unwrap_or_default();
-                if data.starts_with(':') || data.is_empty() {
-                    return;
-                }
+                if data.starts_with(':') || data.is_empty() { return; }
                 if let Ok(msg) = serde_json::from_str::<BusMessage>(&data) {
-                    if msg.msg_type.as_deref() == Some("text") {
-                        set_msgs.update(|v| v.push(msg));
+                    // Accept text messages (including replies) and reactions
+                    if msg.is_text() || msg.is_reaction() {
+                        set_msgs.update(|v| {
+                            // Dedup by stable_id
+                            let id = msg.stable_id();
+                            if !id.is_empty() && v.iter().any(|m| m.stable_id() == id) {
+                                return;
+                            }
+                            v.push(msg);
+                        });
                     }
                 }
             });
@@ -150,18 +169,30 @@ fn ChatApp(
         }
     }
 
-    let read_counts = create_rw_signal(std::collections::HashMap::<String, usize>::new());
+    // ── Global Cmd+K keyboard handler ────────────────────────────────────────
+    {
+        let kb_cb = Closure::<dyn FnMut(_)>::new(move |e: web_sys::KeyboardEvent| {
+            if (e.meta_key() || e.ctrl_key()) && e.key() == "k" {
+                e.prevent_default();
+                palette_open.update(|v| *v = !*v);
+            }
+            if e.key() == "Escape" {
+                palette_open.set(false);
+                emoji_target.set(None);
+            }
+        });
+        if let Some(win) = web_sys::window() {
+            win.add_event_listener_with_callback("keydown", kb_cb.as_ref().unchecked_ref()).ok();
+        }
+        kb_cb.forget();
+    }
 
     let ctx = ChatContext {
-        token,
-        set_token,
-        username,
-        messages,
-        set_messages,
-        active_channel,
-        set_active_channel,
-        presence,
-        connected,
+        token, set_token, username,
+        messages, set_messages,
+        active_channel, open_thread,
+        palette_open, emoji_target,
+        presence, connected,
         read_counts,
     };
     provide_context(ctx);
@@ -170,9 +201,13 @@ fn ChatApp(
         <div class="clawchat-app">
             <Sidebar />
             <div class="chat-main">
-                <MessagePane />
-                <InputBar />
+                <div class="chat-body">
+                    <MessagePane />
+                    <InputBar />
+                </div>
+                <ThreadPane />
             </div>
+            <CommandPalette />
         </div>
     }
 }
