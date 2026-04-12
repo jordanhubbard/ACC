@@ -70,6 +70,9 @@ pub struct ResolvedConfig {
     /// When set, ccc-server uses SQLite for persistent state instead of JSON files.
     /// On first start, existing JSON data is migrated automatically.
     pub db_path: Option<String>,
+    /// Path to the auth SQLite database (always-on, regardless of db_path).
+    /// Default: ~/.ccc/auth.db
+    pub auth_db_path: String,
     pub minio_endpoint: String,
     pub minio_bucket: String,
     pub minio_access_key: Option<String>,
@@ -209,6 +212,10 @@ pub fn load() -> ResolvedConfig {
 
     let db_path = evar("CCC_DB_PATH");
 
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let auth_db_path = evar("AUTH_DB_PATH")
+        .unwrap_or_else(|| format!("{}/.ccc/auth.db", home));
+
     ResolvedConfig {
         port,
         data_dir,
@@ -219,6 +226,7 @@ pub fn load() -> ResolvedConfig {
         projects_path,
         auth_tokens,
         db_path,
+        auth_db_path,
         minio_endpoint,
         minio_bucket,
         minio_access_key,

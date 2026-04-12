@@ -1,16 +1,30 @@
 use leptos::*;
+use serde::Deserialize;
 use wasm_bindgen_futures::spawn_local;
 
-async fn validate_token(token: &str) -> bool {
-    let Ok(req) = gloo_net::http::Request::get("/api/heartbeats")
-        .header("Authorization", &format!("Bearer {}", token))
-        .build()
+#[derive(Deserialize)]
+struct LoginResponse {
+    ok: bool,
+    username: String,
+}
+
+async fn validate_credentials(username: &str, token: &str) -> Result<String, String> {
+    let body = serde_json::json!({"username": username, "token": token}).to_string();
+    let Ok(req) = gloo_net::http::Request::post("/api/auth/login")
+        .header("Content-Type", "application/json")
+        .body(body)
     else {
-        return false;
+        return Err("Failed to build request".into());
     };
     match req.send().await {
-        Ok(resp) => resp.ok(),
-        Err(_) => false,
+        Ok(resp) if resp.ok() => {
+            match resp.json::<LoginResponse>().await {
+                Ok(r) if r.ok => Ok(r.username),
+                _ => Err("Unexpected response from server".into()),
+            }
+        }
+        Ok(_) => Err("Invalid username or token.".into()),
+        Err(_) => Err("Could not reach server.".into()),
     }
 }
 
@@ -34,10 +48,9 @@ pub fn LoginScreen(on_login: impl Fn((String, String)) + 'static + Clone) -> imp
             set_error.set(None);
             let on_login = on_login.clone();
             spawn_local(async move {
-                if validate_token(&t).await {
-                    on_login((t, u));
-                } else {
-                    set_error.set(Some("Token rejected — check your CCC_AGENT_TOKEN.".into()));
+                match validate_credentials(&u, &t).await {
+                    Ok(verified_username) => on_login((t, verified_username)),
+                    Err(msg) => set_error.set(Some(msg)),
                 }
                 set_loading.set(false);
             });
@@ -60,7 +73,7 @@ pub fn LoginScreen(on_login: impl Fn((String, String)) + 'static + Clone) -> imp
                     <label>"Username"</label>
                     <input
                         type="text"
-                        placeholder="e.g. jkh, natasha, boris"
+                        placeholder="your username"
                         prop:value=user
                         attr:disabled=move || if loading.get() { Some("disabled") } else { None }
                         on:input=move |e| set_user.set(event_target_value(&e))
@@ -68,10 +81,10 @@ pub fn LoginScreen(on_login: impl Fn((String, String)) + 'static + Clone) -> imp
                 </div>
 
                 <div class="login-field">
-                    <label>"CCC Token"</label>
+                    <label>"Token"</label>
                     <input
                         type="password"
-                        placeholder="Bearer token (CCC_AGENT_TOKEN)"
+                        placeholder="ccc-…"
                         prop:value=tok
                         attr:disabled=move || if loading.get() { Some("disabled") } else { None }
                         on:input=move |e| set_tok.set(event_target_value(&e))
@@ -91,7 +104,7 @@ pub fn LoginScreen(on_login: impl Fn((String, String)) + 'static + Clone) -> imp
                     {move || if loading.get() { "Connecting…" } else { "Connect" }}
                 </button>
 
-                <p class="login-hint">"Token is in ~/.ccc/.env as CCC_AGENT_TOKEN"</p>
+                <p class="login-hint">"Token provided by your admin."</p>
             </div>
         </div>
     }

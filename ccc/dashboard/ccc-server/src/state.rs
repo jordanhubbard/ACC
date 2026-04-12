@@ -15,7 +15,12 @@ pub struct QueueData {
 }
 
 pub struct AppState {
+    /// Static agent tokens from config (plaintext, never change at runtime).
     pub auth_tokens: HashSet<String>,
+    /// In-memory cache of user token SHA-256 hashes (loaded from auth.db, updated on add/delete).
+    pub user_token_hashes: std::sync::RwLock<HashSet<String>>,
+    /// Auth SQLite database (always-on).
+    pub auth_db: Arc<tokio::sync::Mutex<rusqlite::Connection>>,
     pub queue_path: String,
     pub agents_path: String,
     pub secrets_path: String,
@@ -35,16 +40,22 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn is_authed(&self, headers: &axum::http::HeaderMap) -> bool {
-        if self.auth_tokens.is_empty() {
-            return true; // open / dev mode
-        }
-        let auth = headers
+    fn bearer_token<'a>(&self, headers: &'a axum::http::HeaderMap) -> &'a str {
+        headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        let token = auth.trim_start_matches("Bearer ").trim();
-        // Timing-safe compare using subtle
+            .unwrap_or("")
+            .trim_start_matches("Bearer ")
+            .trim()
+    }
+
+    /// Returns true if the request carries a valid agent token (from config).
+    /// Used to gate admin-only endpoints.
+    pub fn is_admin_authed(&self, headers: &axum::http::HeaderMap) -> bool {
+        if self.auth_tokens.is_empty() {
+            return true;
+        }
+        let token = self.bearer_token(headers);
         use subtle::ConstantTimeEq;
         for valid in &self.auth_tokens {
             let a: &[u8] = token.as_bytes();
@@ -53,6 +64,38 @@ impl AppState {
                 return true;
             }
         }
+        false
+    }
+
+    /// Returns true if the request is authenticated by either an agent token or a user token.
+    pub fn is_authed(&self, headers: &axum::http::HeaderMap) -> bool {
+        let user_hashes = self.user_token_hashes.read().unwrap();
+        if self.auth_tokens.is_empty() && user_hashes.is_empty() {
+            return true; // dev mode — no tokens configured at all
+        }
+
+        // Check agent tokens (plaintext)
+        if self.is_admin_authed(headers) {
+            return true;
+        }
+
+        // Check user tokens (SHA-256 hash of the bearer token)
+        let token = self.bearer_token(headers);
+        if !token.is_empty() {
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
+            hasher.update(token.as_bytes());
+            let hash = hex::encode(hasher.finalize());
+            use subtle::ConstantTimeEq;
+            for valid_hash in user_hashes.iter() {
+                let a: &[u8] = hash.as_bytes();
+                let b: &[u8] = valid_hash.as_bytes();
+                if a.len() == b.len() && bool::from(a.ct_eq(b)) {
+                    return true;
+                }
+            }
+        }
+
         false
     }
 }

@@ -29,3 +29,4 @@ aws-sdk-s3 = "1"
 aws-config = "1"
 aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
+rand = "0.8"

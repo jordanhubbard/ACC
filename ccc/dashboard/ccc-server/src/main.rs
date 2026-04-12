@@ -72,6 +72,19 @@ async fn main() {
         }
     };
 
+    // Open auth DB (always-on)
+    let auth_conn = match db::open_auth(&cfg.auth_db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to open auth DB at {}: {}", cfg.auth_db_path, e);
+            std::process::exit(1);
+        }
+    };
+    let initial_hashes: std::collections::HashSet<String> =
+        db::auth_all_token_hashes(&auth_conn).into_iter().collect();
+    tracing::info!("Auth DB: {} user(s) loaded", initial_hashes.len());
+    let auth_db = Arc::new(tokio::sync::Mutex::new(auth_conn));
+
     // Clone paths before they're moved into AppState (needed for SQLite migration below)
     let queue_path_c    = cfg.queue_path.clone();
     let agents_path_c   = cfg.agents_path.clone();
@@ -81,6 +94,8 @@ async fn main() {
 
     let app_state = Arc::new(AppState {
         auth_tokens: cfg.auth_tokens,
+        user_token_hashes: std::sync::RwLock::new(initial_hashes),
+        auth_db,
         queue_path: cfg.queue_path,
         agents_path: cfg.agents_path,
         secrets_path: cfg.secrets_path,
@@ -177,7 +192,8 @@ async fn main() {
         .merge(routes::setup::router())
         .merge(routes::providers::router())
         .merge(routes::acp::router())
-        .merge(routes::models::router());
+        .merge(routes::models::router())
+        .merge(routes::auth::router());
 
     // Serve WASM SPA as fallback if DASHBOARD_DIST is set.
     // This allows ccc-server to serve the dashboard directly (no dashboard-server needed).

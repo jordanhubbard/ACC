@@ -356,6 +356,42 @@ pub fn insert_bus_message(conn: &Connection, msg: &Value) -> Result<()> {
     Ok(())
 }
 
+// ── Auth DB (always-on, separate from the optional CCC_DB_PATH database) ─────
+
+/// Open (or create) the auth database at `path`.
+/// Schema: users(id, username, token_hash, created_at, last_seen).
+pub fn open_auth(path: &str) -> Result<Connection> {
+    if let Some(parent) = Path::new(path).parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let conn = Connection::open(path)?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS users (
+            id          TEXT PRIMARY KEY,
+            username    TEXT NOT NULL UNIQUE,
+            token_hash  TEXT NOT NULL,
+            created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            last_seen   TEXT
+        );
+    ")?;
+    tracing::info!("Auth database opened: {}", path);
+    Ok(conn)
+}
+
+/// Load all token hashes from the auth DB (used to seed the in-memory cache).
+pub fn auth_all_token_hashes(conn: &Connection) -> Vec<String> {
+    let mut stmt = match conn.prepare("SELECT token_hash FROM users") {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    let result: Vec<String> = match stmt.query_map([], |row| row.get::<_, String>(0)) {
+        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+        Err(_) => vec![],
+    };
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
