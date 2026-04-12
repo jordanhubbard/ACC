@@ -658,9 +658,16 @@ name = "ccc-agent"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "futures-util",
+ "hex",
+ "hmac",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2",
+ "subtle",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

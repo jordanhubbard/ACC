@@ -197,23 +197,24 @@ touch "$LOG_FILE" "$EXEC_LOG"
 chown "$USER:$USER" "$LOG_FILE" "$EXEC_LOG" 2>/dev/null || true
 success "Log files: $LOG_FILE, $EXEC_LOG"
 
-# ── Step 5a: Create exec-listener wrapper script ─────────────────────────────
-info "Creating exec-listener wrapper script..."
+# ── Step 5a: Point exec-listener at ccc-agent listen ─────────────────────────
+info "Setting up exec-listener (ccc-agent listen)..."
 
-cat > "$EXEC_LISTENER" << 'EOF'
+CCC_AGENT_BIN="$HOME/.ccc/bin/ccc-agent"
+if [ ! -x "$CCC_AGENT_BIN" ]; then
+  warn "ccc-agent not found at $CCC_AGENT_BIN — run migration 0011 to build it"
+  warn "exec-listener will not be registered until ccc-agent is available"
+  EXEC_LISTENER=""
+else
+  # Write a thin wrapper so supervisord has a stable path to exec
+  cat > "$EXEC_LISTENER" << EOF
 #!/usr/bin/env bash
-# ccc-exec-listener.sh — starts agent-listener.mjs with env from ~/.ccc/.env
-set -euo pipefail
-ENV_FILE="$HOME/.ccc/.env"
-if [ -f "$ENV_FILE" ]; then
-  set -a; source "$ENV_FILE"; set +a
-fi
-WORKSPACE="$HOME/.ccc/workspace"
-exec node "$WORKSPACE/ccc/exec/agent-listener.mjs"
+# ccc-exec-listener.sh — thin wrapper for ccc-agent listen
+exec $CCC_AGENT_BIN listen
 EOF
-
-chmod +x "$EXEC_LISTENER"
-success "Exec listener wrapper: $EXEC_LISTENER"
+  chmod +x "$EXEC_LISTENER"
+  success "Exec listener wrapper: $EXEC_LISTENER → ccc-agent listen"
+fi
 
 # ── Step 5b: Supervisord integration (or nohup fallback) ─────────────────────
 PULL_REGISTERED=false

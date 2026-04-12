@@ -1,0 +1,20 @@
+[Unit]
+Description=CCC Exec Listener (ClawBus remote exec agent)
+Documentation=https://github.com/jordanhubbard/CCC
+After=network-online.target ccc-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=AGENT_USER
+EnvironmentFile=-AGENT_HOME/.ccc/.env
+ExecStart=AGENT_HOME/.ccc/bin/ccc-agent listen
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ccc-exec-listen
+
+[Install]
+WantedBy=multi-user.target

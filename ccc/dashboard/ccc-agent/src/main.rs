@@ -1,5 +1,6 @@
 mod agent;
 mod json;
+mod listen;
 mod migrate;
 
 fn main() {
@@ -28,6 +29,9 @@ fn main() {
         eprintln!("  lines <path>                print array elements one per line");
         eprintln!("  pairs <path>                print object as key=value lines");
         eprintln!("  env-merge <path> <file>     merge flat strings into .env file");
+        eprintln!();
+        eprintln!("LISTEN (long-running daemon):");
+        eprintln!("  listen                      connect to CCC bus, execute ccc.exec messages");
         std::process::exit(1);
     }
 
@@ -36,6 +40,13 @@ fn main() {
         "migrate" => migrate::run(sub_args),
         "agent"   => agent::run(sub_args),
         "json"    => json::run(sub_args),
+        "listen"  => {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime")
+                .block_on(listen::run(sub_args));
+        }
         cmd => {
             eprintln!("Unknown command: {cmd}");
             std::process::exit(1);
