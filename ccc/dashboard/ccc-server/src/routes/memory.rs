@@ -15,13 +15,16 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
-const TOKENHUB_BASE: &str = "http://127.0.0.1:8090";
-const EMBED_MODEL: &str = "text-embedding-3-large";
 const CCC_MEMORY_COLLECTION: &str = "ccc_memory";
+const DEFAULT_EMBED_MODEL: &str = "azure/openai/text-embedding-3-large";
+const DEFAULT_EMBED_URL: &str = "https://inference-api.nvidia.com/v1";
 
 static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
 static QDRANT_BASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static QDRANT_API_KEY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+static EMBED_BASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static EMBED_MODEL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static EMBED_KEY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
@@ -48,24 +51,55 @@ fn qdrant_api_key() -> &'static Option<String> {
     })
 }
 
+fn embed_base() -> &'static str {
+    EMBED_BASE.get_or_init(|| {
+        std::env::var("NVIDIA_EMBED_URL")
+            .or_else(|_| std::env::var("EMBED_URL"))
+            .unwrap_or_else(|_| DEFAULT_EMBED_URL.to_string())
+    })
+}
+
+fn embed_model() -> &'static str {
+    EMBED_MODEL.get_or_init(|| {
+        std::env::var("NVIDIA_EMBED_MODEL")
+            .or_else(|_| std::env::var("EMBED_MODEL"))
+            .unwrap_or_else(|_| DEFAULT_EMBED_MODEL.to_string())
+    })
+}
+
+fn embed_key() -> &'static Option<String> {
+    EMBED_KEY.get_or_init(|| {
+        std::env::var("NVIDIA_EMBED_KEY")
+            .or_else(|_| std::env::var("EMBED_API_KEY"))
+            .ok()
+    })
+}
+
 // ── Embedding helper ──────────────────────────────────────────────────────────
 
 async fn embed(text: &str) -> Result<Vec<f32>, String> {
-    let resp = http_client()
-        .post(format!("{}/v1/embeddings", TOKENHUB_BASE))
-        .json(&json!({ "model": EMBED_MODEL, "input": text }))
+    let url = format!("{}/embeddings", embed_base());
+    let mut req = http_client()
+        .post(&url)
+        .json(&json!({ "model": embed_model(), "input": [text] }));
+
+    if let Some(key) = embed_key() {
+        req = req.bearer_auth(key);
+    }
+
+    let resp = req
         .send()
         .await
-        .map_err(|e| format!("tokenhub request failed: {}", e))?;
+        .map_err(|e| format!("embed request failed: {}", e))?;
 
     let body: Value = resp
         .json()
         .await
-        .map_err(|e| format!("tokenhub response parse failed: {}", e))?;
+        .map_err(|e| format!("embed response parse failed: {}", e))?;
 
     body["data"][0]["embedding"]
         .as_array()
-        .ok_or_else(|| format!("no embedding in tokenhub response: {:?}", body))?
+        .ok_or_else(|| format!("no embedding in response: {:?}", body))?
         .iter()
         .map(|v| {
             v.as_f64()
@@ -419,6 +453,7 @@ async fn memory_recall(
 
     let raw = match qdrant_search(CCC_MEMORY_COLLECTION, vector, k, filter).await {
         Ok(r) => r,
+        Err(e) if e.contains("doesn't exist") => vec![],
         Err(e) => {
             return (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -785,6 +820,7 @@ async fn memory_recent(
 
     let raw = match qdrant_scroll(CCC_MEMORY_COLLECTION, filter, limit).await {
         Ok(r) => r,
+        Err(e) if e.contains("doesn't exist") => vec![],
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -872,6 +908,7 @@ async fn memory_context(
 
     let raw = match qdrant_search(CCC_MEMORY_COLLECTION, vector, k, filter).await {
         Ok(r) => r,
+        Err(e) if e.contains("doesn't exist") => vec![],
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
