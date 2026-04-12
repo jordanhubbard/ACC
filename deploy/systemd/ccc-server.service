@@ -16,6 +16,10 @@ ExecStart=/usr/local/bin/ccc-server
 Environment=CCC_PORT=8789
 Environment=CCC_DATA_DIR=/home/jkh/.ccc/data
 Environment=RUST_LOG=ccc_server=info
+Environment=DASHBOARD_DIST=AGENT_HOME/.ccc/workspace/ccc/clawchat/dist
+
+# Load per-node secrets (QDRANT_FLEET_KEY, etc.)
+EnvironmentFile=-AGENT_HOME/.ccc/.env
 
 # Restart on crash, not clean exits
 Restart=on-failure
