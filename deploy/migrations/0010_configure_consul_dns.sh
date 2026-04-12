@@ -37,14 +37,17 @@ EOF
 fi
 
 if on_platform macos; then
-    sudo mkdir -p /etc/resolver
-    sudo tee /etc/resolver/consul > /dev/null << 'EOF'
-# CCC: resolve *.consul via Consul's DNS server
-nameserver 127.0.0.1
-port 8600
-EOF
-    m_success "/etc/resolver/consul configured for .consul DNS"
-    m_info "Verify with: scutil --dns | grep consul"
+    if sudo -n mkdir -p /etc/resolver 2>/dev/null && \
+       printf '# CCC: resolve *.consul via Consul DNS\nnameserver 127.0.0.1\nport 8600\n' \
+           | sudo -n tee /etc/resolver/consul > /dev/null 2>&1; then
+        m_success "/etc/resolver/consul configured for .consul DNS"
+        m_info "Verify with: scutil --dns | grep consul"
+    else
+        m_warn "sudo not available non-interactively — configure manually:"
+        m_warn "  sudo mkdir -p /etc/resolver"
+        m_warn "  echo 'nameserver 127.0.0.1\nport 8600' | sudo tee /etc/resolver/consul"
+        # Not a fatal error — Consul DNS works via port 8600 directly
+    fi
 fi
 
 m_info "Test after Consul is running: dig ccc-server.service.consul @127.0.0.1 -p 8600"
