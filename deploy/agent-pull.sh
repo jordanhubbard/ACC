@@ -170,55 +170,6 @@ if [ -n "$CCC_URL" ] && [ -n "$CCC_AGENT_TOKEN" ]; then
   fi
 fi
 
-# ── Sync secrets from CCC ─────────────────────────────────────────────────
-# Refreshes ~/.ccc/.env with latest secret values from the CCC secrets store.
-# Never clobbers CCC_AGENT_TOKEN (identity key) or AGENT_NAME/AGENT_HOST.
-# Runs on every pull to pick up rotated credentials automatically.
-if [ -n "$CCC_URL" ] && [ -n "$CCC_AGENT_TOKEN" ] && command -v node >/dev/null 2>&1; then
-  _env_file="$HOME/.ccc/.env"
-  _sync_count=0
-  # macOS vs Linux sed -i compatibility
-  if [ "$(uname)" = "Darwin" ]; then
-    _sed_i() { sed -i '' "$@"; }
-  else
-    _sed_i() { sed -i "$@"; }
-  fi
-  _set_env_key() {
-    local _key="$1" _val="$2"
-    case "$_key" in CCC_AGENT_TOKEN|CCC_URL|AGENT_NAME|AGENT_HOST) return ;; esac
-    if grep -q "^${_key}=" "$_env_file" 2>/dev/null; then
-      _sed_i "s|^${_key}=.*|${_key}=${_val}|" "$_env_file"
-    else
-      echo "${_key}=${_val}" >> "$_env_file"
-    fi
-    _sync_count=$((_sync_count + 1))
-  }
-  for _alias in slack minio qdrant nvidia github; do
-    _resp=$(curl -sf --max-time 5 \
-      -H "Authorization: Bearer ${CCC_AGENT_TOKEN}" \
-      "${CCC_URL}/api/secrets/${_alias}" 2>/dev/null || true)
-    [ -z "$_resp" ] && continue
-    if echo "$_resp" | grep -q '"secrets"'; then
-      while IFS='=' read -r _k _v; do
-        [ -z "$_k" ] && continue
-        _set_env_key "$_k" "$_v"
-      done < <(node -e "
-        try {
-          const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-          const s = d.secrets || {};
-          for (const [k,v] of Object.entries(s)) console.log(k+'='+v);
-        } catch(e) {}
-      " <<< "$_resp" 2>/dev/null)
-    fi
-  done
-  if [ "$_sync_count" -gt 0 ]; then
-    chmod 600 "$_env_file"
-    log "Secrets synced from CCC: ${_sync_count} var(s) updated"
-    # Reload env after sync
-    set -a; source "$_env_file"; set +a
-  fi
-fi
-
 # ── Post heartbeat to CCC ─────────────────────────────────────────────────
 if [ -n "$CCC_URL" ] && [ -n "$CCC_AGENT_TOKEN" ]; then
   HEARTBEAT_PAYLOAD="{\"agent\":\"$AGENT_NAME\",\"host\":\"${AGENT_HOST:-$(hostname)}\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"online\",\"pullRev\":\"$AFTER\",\"ccc_version\":\"$CCC_VERSION\"}"
@@ -234,15 +185,10 @@ if [ -n "$CCC_URL" ] && [ -n "$CCC_AGENT_TOKEN" ]; then
     log "WARNING: Heartbeat POST returned HTTP $HTTP_STATUS"
   fi
   # Update ~/.ccc/agent.json with latest ccc_version (non-fatal)
-  if [ -f "$CCC_DIR/agent.json" ] && command -v node >/dev/null 2>&1; then
-    node -e "
-      try {
-        const f='$CCC_DIR/agent.json';
-        const d=JSON.parse(require('fs').readFileSync(f,'utf8'));
-        d.ccc_version='$CCC_VERSION';
-        require('fs').writeFileSync(f,JSON.stringify(d,null,2)+'\n');
-      } catch(e){}
-    " 2>/dev/null || true
+  _AGENT_BIN="${CCC_AGENT:-$CCC_DIR/bin/ccc-agent}"
+  [ ! -x "$_AGENT_BIN" ] && _AGENT_BIN="$(command -v ccc-agent 2>/dev/null || echo "")"
+  if [ -f "$CCC_DIR/agent.json" ] && [ -x "$_AGENT_BIN" ]; then
+    "$_AGENT_BIN" agent upgrade "$CCC_DIR/agent.json" --version="$CCC_VERSION" 2>/dev/null || true
   fi
 fi
 

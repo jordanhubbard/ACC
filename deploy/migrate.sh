@@ -111,8 +111,10 @@ echo "      .env updated — CCC_AGENT_TOKEN, CCC_URL, AGENT_NAME, AGENT_HOST se
 
 # ── Step 4b: Fetch secrets from CCC ─────────────────────────────────────────
 echo "[4b/7] Fetching secrets from CCC..."
+_CCC_AGENT="${CCC_AGENT:-$HOME/.ccc/bin/ccc-agent}"
+[ ! -x "$_CCC_AGENT" ] && _CCC_AGENT="$(command -v ccc-agent 2>/dev/null || echo "")"
 _secrets_synced=0
-if command -v node &>/dev/null; then
+if [ -x "$_CCC_AGENT" ]; then
   for _alias in slack mattermost minio qdrant nvidia github; do
     _resp=$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
       "${CCC}/api/secrets/${_alias}" 2>/dev/null || true)
@@ -123,18 +125,12 @@ if command -v node &>/dev/null; then
         case "$_k" in CCC_AGENT_TOKEN|CCC_URL|AGENT_NAME|AGENT_HOST) continue ;; esac
         set_env_key "$_k" "$_v"
         _secrets_synced=$((_secrets_synced + 1))
-      done < <(node -e "
-        try {
-          const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-          const s = d.secrets || {};
-          for (const [k,v] of Object.entries(s)) console.log(k+'='+v);
-        } catch(e) {}
-      " <<< "$_resp" 2>/dev/null)
+      done < <(echo "$_resp" | "$_CCC_AGENT" json pairs .secrets 2>/dev/null)
     fi
   done
   echo "      Secrets synced: ${_secrets_synced} env vars fetched from CCC"
 else
-  echo "      node not available — skipping CCC secrets fetch (set keys manually)"
+  echo "      ccc-agent not available — skipping CCC secrets fetch (run migration 0011 first)"
 fi
 
 # ── Step 5: Post heartbeat ───────────────────────────────────────────────────

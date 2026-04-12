@@ -51,13 +51,10 @@ if [[ -z "$SECRETS_RESPONSE" ]]; then
   exit 0  # non-fatal; agent can still operate with cached .env
 fi
 
-KEYS=$(echo "$SECRETS_RESPONSE" | node -e "
-  let d='';
-  process.stdin.on('data', c => d+=c);
-  process.stdin.on('end', () => {
-    try { console.log(JSON.parse(d).keys.join('\n')); } catch { process.exit(1); }
-  });
-" 2>/dev/null || echo "")
+CCC_AGENT="${CCC_AGENT:-$HOME/.ccc/bin/ccc-agent}"
+[ ! -x "$CCC_AGENT" ] && CCC_AGENT="$(command -v ccc-agent 2>/dev/null || echo "")"
+
+KEYS=$(echo "$SECRETS_RESPONSE" | "$CCC_AGENT" json lines .keys 2>/dev/null || echo "")
 
 if [[ -z "$KEYS" ]]; then
   echo "No secrets in CCC store — nothing to sync"
@@ -133,7 +130,7 @@ while IFS= read -r secret_key; do
   # Fetch the value
   SECRET_VAL=$(curl -sf "${CCC_URL}/api/secrets/${secret_key}" \
     -H "Authorization: Bearer ${CCC_AGENT_TOKEN}" 2>/dev/null | \
-    node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{process.stdout.write(JSON.parse(d).value||'')}catch{}})" 2>/dev/null || echo "")
+    "$CCC_AGENT" json get .value 2>/dev/null || echo "")
 
   if [[ -z "$SECRET_VAL" ]]; then
     continue

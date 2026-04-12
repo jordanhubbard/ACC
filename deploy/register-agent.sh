@@ -52,7 +52,10 @@ RESPONSE=$(curl -s -X POST "$CCC_URL/api/agents/register" \
     }
   }")
 
-TOKEN=$(echo "$RESPONSE" | node -e "process.stdin.setEncoding('utf8');let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{ try { console.log(JSON.parse(d).token||''); } catch(e){} })")
+CCC_AGENT="${CCC_AGENT:-$HOME/.ccc/bin/ccc-agent}"
+[ ! -x "$CCC_AGENT" ] && CCC_AGENT="$(command -v ccc-agent 2>/dev/null || echo "")"
+
+TOKEN=$(echo "$RESPONSE" | "$CCC_AGENT" json get .token 2>/dev/null || echo "")
 
 if [ -n "$TOKEN" ]; then
   # Update .env with the issued token

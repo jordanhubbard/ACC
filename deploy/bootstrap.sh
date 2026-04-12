@@ -90,8 +90,31 @@ info "Checking dependencies..."
 for dep in git curl; do
   command -v "$dep" &>/dev/null || error "$dep is required but not installed."
 done
-command -v node &>/dev/null || warn "node not found — install Node 22+ for full agent features"
 success "Core dependencies present"
+
+# ── JSON helper — ccc-agent preferred, python3 fallback (bootstrap runs before migrations) ──
+_CCC_DIR="${HOME}/.ccc"
+CCC_AGENT="${CCC_AGENT:-$_CCC_DIR/bin/ccc-agent}"
+[ ! -x "$CCC_AGENT" ] && CCC_AGENT="$(command -v ccc-agent 2>/dev/null || echo "")"
+
+_json_get() {
+  # Usage: echo "$JSON" | _json_get .path [.fallback]
+  if [ -x "$CCC_AGENT" ]; then
+    "$CCC_AGENT" json get "$@" 2>/dev/null || true
+  else
+    python3 - "$@" << 'PYEOF' 2>/dev/null
+import json, sys
+data = json.loads(sys.stdin.read())
+for path in sys.argv[1:]:
+    v = data
+    for key in path.lstrip('.').split('.'):
+        v = v.get(key, {}) if isinstance(v, dict) else None
+        if not v and v != 0: break
+    if v and not isinstance(v, (dict, list)):
+        sys.stdout.write(str(v)); sys.exit(0)
+PYEOF
+  fi
+}
 
 # ── 2. Install OpenClaw ───────────────────────────────────────────────────
 if command -v openclaw &>/dev/null; then
@@ -197,13 +220,11 @@ else
       error "Bootstrap API call failed or returned invalid response.\nResponse: ${BOOTSTRAP_RESP:-<empty>}\nCheck that CCC is reachable at ${CCC} (port 8788) and the token is valid/unexpired.\nAlternatively, pass --agent-token=<known-token> to skip the API call."
     fi
   else
-    # Parse core fields using node (handles nested JSON safely)
-    _parse() { node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write(String(d${1}||''))}catch(e){}" <<< "$BOOTSTRAP_JSON" 2>/dev/null || true; }
-
-    REPO_URL=$(_parse   ".repoUrl")
-    AGENT_TOKEN=$(_parse ".agentToken")
-    CCC_URL=$(_parse    ".cccUrl")
-    DEPLOY_KEY=$(_parse  ".deployKey")
+    # Parse core fields from bootstrap JSON response
+    REPO_URL=$(echo    "$BOOTSTRAP_JSON" | _json_get .repoUrl)
+    AGENT_TOKEN=$(echo "$BOOTSTRAP_JSON" | _json_get .agentToken)
+    CCC_URL=$(echo     "$BOOTSTRAP_JSON" | _json_get .cccUrl)
+    DEPLOY_KEY=$(echo  "$BOOTSTRAP_JSON" | _json_get .deployKey)
 
     if [[ -z "$AGENT_TOKEN" ]]; then
       error "Bootstrap response missing agentToken. Response: ${BOOTSTRAP_JSON}"
@@ -217,20 +238,10 @@ fi
 # so openclaw.json can be written correctly in step 7. CLI args take precedence
 # if explicitly provided (for testing/overrides); otherwise use CCC secrets.
 info "Extracting secrets from bootstrap response..."
-_secret() { node -e "
-  try {
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    const s = d.secrets || {};
-    // Try both flat key and namespaced key
-    const v = s['$1'] || s['${2:-}'] || '';
-    process.stdout.write(v);
-  } catch(e) {}
-" <<< "$BOOTSTRAP_JSON" 2>/dev/null || true; }
-
-[[ -z "$NVIDIA_KEY"        ]] && NVIDIA_KEY=$(_secret        "NVIDIA_API_KEY"     "nvidia_api_key")
-[[ -z "$TOKENHUB_URL"      ]] && TOKENHUB_URL=$(_secret      "TOKENHUB_URL"       "tokenhub_url")
-[[ -z "$TOKENHUB_KEY"      ]] && TOKENHUB_KEY=$(_secret      "TOKENHUB_AGENT_KEY" "tokenhub_agent_key")
-[[ -z "$TELEGRAM_TOKEN"    ]] && TELEGRAM_TOKEN=$(_secret    "TELEGRAM_BOT_TOKEN" "telegram_token")
+[[ -z "$NVIDIA_KEY"     ]] && NVIDIA_KEY=$(echo    "$BOOTSTRAP_JSON" | _json_get .secrets.NVIDIA_API_KEY     .secrets.nvidia_api_key)
+[[ -z "$TOKENHUB_URL"   ]] && TOKENHUB_URL=$(echo  "$BOOTSTRAP_JSON" | _json_get .secrets.TOKENHUB_URL       .secrets.tokenhub_url)
+[[ -z "$TOKENHUB_KEY"   ]] && TOKENHUB_KEY=$(echo  "$BOOTSTRAP_JSON" | _json_get .secrets.TOKENHUB_AGENT_KEY .secrets.tokenhub_agent_key)
+[[ -z "$TELEGRAM_TOKEN" ]] && TELEGRAM_TOKEN=$(echo "$BOOTSTRAP_JSON" | _json_get .secrets.TELEGRAM_BOT_TOKEN .secrets.telegram_token)
 
 # Fetch per-agent Slack tokens from CCC (stored as <agent>_slack bundle)
 SLACK_BOT_TOKEN=""
@@ -239,8 +250,8 @@ if [[ -n "$AGENT" ]]; then
   SLACK_BUNDLE=$(curl -sf "${CCC_URL}/api/secrets/${AGENT}_slack" \
     -H "Authorization: Bearer ${AGENT_TOKEN}" 2>/dev/null || echo "")
   if [[ -n "$SLACK_BUNDLE" ]]; then
-    SLACK_BOT_TOKEN=$(echo "$SLACK_BUNDLE" | node -e "process.stdin.setEncoding('utf8');let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const p=JSON.parse(d);console.log(p.secrets?.SLACK_BOT_TOKEN||'')}catch(e){}}" 2>/dev/null || echo "")
-    SLACK_APP_TOKEN=$(echo "$SLACK_BUNDLE" | node -e "process.stdin.setEncoding('utf8');let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const p=JSON.parse(d);console.log(p.secrets?.SLACK_APP_TOKEN||'')}catch(e){}}" 2>/dev/null || echo "")
+    SLACK_BOT_TOKEN=$(echo "$SLACK_BUNDLE" | _json_get .secrets.SLACK_BOT_TOKEN)
+    SLACK_APP_TOKEN=$(echo "$SLACK_BUNDLE" | _json_get .secrets.SLACK_APP_TOKEN)
   fi
 fi
 if [[ -n "$SLACK_BOT_TOKEN" ]]; then
@@ -471,31 +482,34 @@ fi
 # Secrets were already fetched as part of the bootstrap response in step 4b.
 # Write all flat string secrets to .env now. Never overwrites identity keys.
 info "Writing secrets bundle to .env..."
-node -e "
-  try {
-    const fs = require('fs');
-    const d = JSON.parse(fs.readFileSync('/dev/stdin', 'utf8'));
-    const s = d.secrets || {};
-    const SKIP = new Set(['CCC_AGENT_TOKEN','CCC_URL','AGENT_NAME','AGENT_HOST']);
-    const env = fs.existsSync('$ENV_FILE') ? fs.readFileSync('$ENV_FILE', 'utf8') : '';
-    const lines = env.split('\n');
-    const written = [];
-    for (const [k, v] of Object.entries(s)) {
-      // Only write flat string values (skip nested objects/alias bundles)
-      if (typeof v !== 'string') continue;
-      if (SKIP.has(k)) continue;
-      // Skip keys with slashes or other chars invalid in shell env var names
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) continue;
-      // Remove existing line for this key
-      const filtered = lines.filter(l => !l.startsWith(k + '='));
-      lines.length = 0; lines.push(...filtered);
-      lines.push(k + '=' + v);
-      written.push(k);
-    }
-    fs.writeFileSync('$ENV_FILE', lines.join('\n') + '\n');
-    process.stdout.write('Wrote ' + written.length + ' secrets: ' + written.slice(0,8).join(', ') + (written.length > 8 ? '...' : '') + '\n');
-  } catch(e) { process.stderr.write('secrets write error: ' + e.message + '\n'); }
-" <<< "$BOOTSTRAP_JSON" 2>/dev/null && success "Secrets bundle written to .env" || warn "Could not write secrets to .env (non-fatal)"
+if [ -x "$CCC_AGENT" ]; then
+  echo "$BOOTSTRAP_JSON" | "$CCC_AGENT" json env-merge .secrets "$ENV_FILE" \
+    && success "Secrets bundle written to .env" \
+    || warn "Could not write secrets to .env (non-fatal)"
+else
+  python3 - "$ENV_FILE" << 'PYEOF' 2>/dev/null || warn "Could not write secrets to .env (non-fatal)"
+import json, sys, os, re
+env_file = sys.argv[1]
+data = json.loads(sys.stdin.read())
+secrets = data.get('secrets', {})
+SKIP = {'CCC_AGENT_TOKEN','CCC_URL','AGENT_NAME','AGENT_HOST'}
+existing = open(env_file).read() if os.path.exists(env_file) else ''
+lines = existing.splitlines()
+count = 0
+for k, v in secrets.items():
+    if not isinstance(v, str): continue
+    if k in SKIP: continue
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', k): continue
+    lines = [l for l in lines if not l.startswith(k + '=')]
+    lines.append(f'{k}={v}')
+    count += 1
+with open(env_file, 'w') as f:
+    f.write('\n'.join(lines) + '\n')
+os.chmod(env_file, 0o600)
+print(f'Wrote {count} secrets', file=sys.stderr)
+PYEOF
+  success "Secrets bundle written to .env"
+fi
 
 # ── 9. Start OpenClaw gateway ────────────────────────────────────────────
 info "Starting OpenClaw gateway..."
@@ -903,23 +917,31 @@ success "Heartbeat + hardware fingerprint posted"
 _AGENT_JSON="$HOME/.ccc/agent.json"
 if [ ! -f "$_AGENT_JSON" ]; then
   _CCC_VERSION=$(cd "${CCC_WORKSPACE:-$HOME/.ccc/workspace}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  _NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  if command -v node >/dev/null 2>&1; then
-    node -e "
-      require('fs').writeFileSync('$_AGENT_JSON', JSON.stringify({
-        schema_version: 1,
-        agent_name: '${AGENT:-unknown}',
-        host: '$(hostname)',
-        onboarded_at: '$_NOW',
-        onboarded_by: 'bootstrap.sh',
-        ccc_version: '$_CCC_VERSION',
-        last_upgraded_at: '$_NOW',
-        last_upgraded_version: '$_CCC_VERSION'
-      }, null, 2) + '\n');
-    " && chmod 600 "$_AGENT_JSON" && success "Onboarding signature written to $_AGENT_JSON" \
+  if [ -x "$CCC_AGENT" ]; then
+    "$CCC_AGENT" agent init "$_AGENT_JSON" \
+      --name="${AGENT:-unknown}" \
+      --host="$(hostname)" \
+      --version="$_CCC_VERSION" \
+      --by="bootstrap.sh" \
+      && success "Onboarding signature written to $_AGENT_JSON" \
       || warn "Failed to write agent.json (non-fatal)"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$_AGENT_JSON" "${AGENT:-unknown}" "$(hostname)" "$_CCC_VERSION" << 'PYEOF'
+import json, sys, os
+from datetime import datetime, timezone
+path, name, host, ver = sys.argv[1:5]
+now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, 'w') as f:
+    json.dump({'schema_version':1,'agent_name':name,'host':host,
+               'onboarded_at':now,'onboarded_by':'bootstrap.sh',
+               'ccc_version':ver,'last_upgraded_at':now,'last_upgraded_version':ver}, f, indent=2)
+    f.write('\n')
+os.chmod(path, 0o600)
+PYEOF
+    success "Onboarding signature written to $_AGENT_JSON"
   else
-    warn "node not found — skipping agent.json write"
+    warn "Neither ccc-agent nor python3 found — skipping agent.json write"
   fi
 else
   info "agent.json already exists at $_AGENT_JSON"

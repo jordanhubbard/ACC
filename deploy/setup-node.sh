@@ -373,23 +373,34 @@ fi
 # ── Write onboarding signature ────────────────────────────────────────────
 if [ ! -f "$CCC_DIR/agent.json" ]; then
   CCC_VERSION=$(cd "$WORKSPACE" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  if command -v node >/dev/null 2>&1; then
-    node -e "
-      require('fs').writeFileSync('$CCC_DIR/agent.json', JSON.stringify({
-        schema_version: 1,
-        agent_name: '${AGENT_NAME:-unknown}',
-        host: '$(hostname)',
-        onboarded_at: '$NOW',
-        onboarded_by: 'setup-node.sh',
-        ccc_version: '$CCC_VERSION',
-        last_upgraded_at: '$NOW',
-        last_upgraded_version: '$CCC_VERSION'
-      }, null, 2) + '\n');
-    " && chmod 600 "$CCC_DIR/agent.json" && success "Onboarding signature written to $CCC_DIR/agent.json" \
+  _AGENT_BIN="${CCC_AGENT:-$CCC_DIR/bin/ccc-agent}"
+  [ ! -x "$_AGENT_BIN" ] && _AGENT_BIN="$(command -v ccc-agent 2>/dev/null || echo "")"
+
+  if [ -x "$_AGENT_BIN" ]; then
+    "$_AGENT_BIN" agent init "$CCC_DIR/agent.json" \
+      --name="${AGENT_NAME:-unknown}" \
+      --host="$(hostname)" \
+      --version="$CCC_VERSION" \
+      --by="setup-node.sh" \
+      && success "Onboarding signature written to $CCC_DIR/agent.json" \
       || warn "Failed to write agent.json (non-fatal)"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$CCC_DIR/agent.json" "${AGENT_NAME:-unknown}" "$(hostname)" "$CCC_VERSION" << 'PYEOF'
+import json, sys, os
+from datetime import datetime, timezone
+path, name, host, ver = sys.argv[1:5]
+now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, 'w') as f:
+    json.dump({'schema_version':1,'agent_name':name,'host':host,
+               'onboarded_at':now,'onboarded_by':'setup-node.sh',
+               'ccc_version':ver,'last_upgraded_at':now,'last_upgraded_version':ver}, f, indent=2)
+    f.write('\n')
+os.chmod(path, 0o600)
+PYEOF
+    success "Onboarding signature written to $CCC_DIR/agent.json"
   else
-    warn "node not found — skipping agent.json write"
+    warn "Neither ccc-agent nor python3 found — skipping agent.json write"
   fi
 else
   info "agent.json already exists — skipping (run upgrade-node.sh to update)"
