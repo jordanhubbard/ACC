@@ -5,3 +5,392 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-04-13
+
+### Added
+- add listen subcommand — Rust ClawBus exec listener
+- add json subcommand, eliminate node -e from all deploy scripts
+- add Rust CLI to replace Node.js in deploy scripts
+- add Consul service mesh for IP-free internal networking
+- migration 0008 — rebuild + reinstall ccc-server with auth support
+- admin-provisioned user auth for ClawChat
+- add /add-migration skill for automatic deploy migration generation
+- replace whitelist/blacklist with django-style migrations
+- agent onboarding signature, version tracking, service whitelist/blacklist
+- complete CRUD on all mutable resources
+- ClawChat — full Slack-clone feature build (markdown, threads, reactions, DMs, Cmd+K)
+- finish ClawChat, purge Mattermost, migrate scripts to ClawBus
+- add ClawChat — Leptos WASM chat app replacing squirrelchat
+- gpu-anomaly-check.mjs — 7-day rolling baseline anomaly detector
+- rcc.update message type + fleet metadata + fork management
+- ClawFS shared repo support — single CCC copy for all agents
+- front-door auth gate — re-apply to canonical path (fixes PR #5 conflicts)
+- migrate memory.rs from Milvus to Qdrant (SOA-007)
+- add Python Qdrant scripts for Hermes integration
+- add TOKENHUB_ADMIN_TOKEN for agent vault self-service
+- add ClawFS/JuiceFS, vLLM, and Hermes agent support
+- add memory-ingest-watcher.service health check section
+- add Qdrant agent_memories health check section
+- port Milvus → Qdrant (wq-QDRANT-001-nodejs-port)
+- install agent runtime (Hermes/OpenClaw) in setup-node.sh
+- dual-write to fleet Qdrant on file change
+- wire Qdrant dual-ingest into memory-ingest-watcher
+- add ccc-node agentskills.io-compatible skill
+- add deploy-gemma4.sh for FP8_BLOCK rolling upgrade
+- use ClawFS ~/clawfs/models as fleet-shared model cache
+- migrate memory.rs from Milvus to Qdrant (SOA-007) (#10)
+- front-door auth gate — login required before dashboard access (wq-JKH-002)
+- rcc.json config file with env var fallback; remove dead AppState metrics field
+- ClawBus-based agent quench/pause mechanism
+- Published tab — RFC-001 Phase 1 UI (Natasha)
+- weekly fleet health digest for jkh — GPU/uptime/queue/vLLM summary
+- whisper-daemon.py — keep-warm Whisper HTTP daemon for SquirrelVoice
+- surface RAM/GPU telemetry in agent cards
+- add RAM usage to RCC heartbeat payload
+- vLLM fleet model hot-swap orchestration pipeline
+- ClawChat React Native Sprint 2 skeleton
+- add /api/metrics/:name time-series endpoint
+- gpu-plot.mjs — ASCII sparkline time-series for sparky GB10 gpu-metrics.jsonl
+- GPU utilization time-series JSONL log (wq-NAT-idea-1775216200-GPU-TSDB)
+- GPU utilization time-series JSONL log on sparky
+- weekly incubator digest — Monday 09:00 PT MM DM to jkh
+- ClawChat SSE → Milvus rcc_messages ingest watcher
+- GET /api/agents/:name/health — on-demand telemetry endpoint
+- vRAM pre-flight gate for sparky GB10 (unified memory)
+- GPU spike alerting + ClawChat message ingest scaffolding
+- Mattermost↔SquirrelChat bridge (mm-bridge)
+- memory→Milvus ingest watcher daemon
+- add unified RAM telemetry to sparky GPU health reporting
+- merge GPU/ollama telemetry from heartbeat payload into agent registry
+- GPU telemetry in heartbeat — ollama-watchdog emits nvidia-smi metrics
+- ACP session registry + tokenhub model proxy (SOA-015)
+- setup API + providers route + WASM settings/providers tabs (SOA-015 partial, wq-API-1775019456431)
+- AgentFS tab — per-agent sync status + file browser (COHERENCE-002)
+- agent self-registration + heartbeat API + openclaw-register script (COHERENCE-003)
+- agentos routes, exec broadcast API, remove legacy ui (SOA-010/011/012)
+- nightly memory compaction cron + fleet context hook (COHERENCE-001/VECMEM-004)
+- agentfs-sync daemon — watches local workspace dirs and syncs to/from MinIO S3 (wq-AGENTFS-002)
+- bulk ingest, context endpoint, conversations (wq-VECMEM-003/004)
+- optional process supervisor for tokenhub + squirrelchat (wq-SOA-013)
+- add /api/fs/* S3-backed AgentFS API (wq-AGENTFS-001)
+- port /api/issues/* to Rust (SOA-009)
+- port /api/memory/* and /api/vector/* to Rust (SOA-007)
+- add agentos stub + ui redirect routes, flip rcc-api.service to Rust binary
+- port routes SOA-003..011 to Rust — projects, brain, services, lessons, exec, geek
+- enable coding_agent module in components/mod.rs
+- ollama model health watchdog service
+- enable CodingAgent tab — crush-server is live on sparky
+- WASM slot profiler dashboard tab — live flame graph
+- ollama model health watchdog for sparky (wq-NAT-idea-20260401-01)
+- setup wizard SSE progress stream — GET /api/setup/progress live step events
+- ollama model health watchdog — auto-restart degraded models on sparky (15-min poll, RCC status push)
+- Phase 1 route split — extract agentOS + bus routes into modules
+- SquirrelChat proper email-based auth flow — /login landing page, email verification, token persistence
+- email-verified auth system (wq-SC-auth-001)
+- agentOS cap_audit_log live visualization — Audit tab on RCC dashboard
+- offline heartbeat SQLite fallback — buffer and replay when RCC unreachable
+- heartbeat-local — offline SQLite buffer for sparky when RCC unreachable
+- wire leptos_router for deep-link URL routing
+- wire leptos_router for URL deep links
+- deep-linkable channel URLs (/channel/<id>)
+- cap_audit_log live viz + offline heartbeat SQLite fallback
+- channel selection wizard + Docker path in GETTING_STARTED.md
+- template system for instance-specific configs
+- Docker support for RCC hub — Dockerfile, compose, nginx, CI publish
+- channel-scoped vector memory with two-phase recall
+- message replay — store-and-forward for agent restarts
+- /api/agentos/shell — Terminal tab for dev_shell REPL
+- SquirrelChat #worklog channel — agent task completion journal
+- #worklog channel — auto-post agent task completions
+- SquirrelChat @agent mention → workqueue item creation
+- agentOS live slot migration PD — checkpoint/restore across mesh peers
+- SquirrelChat agent activity feed sidebar panel + RCC activity-feed endpoint
+- @agent mentions create RCC workqueue items
+- vllm-watchdog — auto-restart deadlocked Sweden vLLM nodes
+- agentOS timeline view — /api/agentos/events endpoint + dashboard tab
+- agentOS timeline view — per-slot event markers on RCC dashboard (#agentos-timeline)
+- Agent SBOM system — schema, SBOMs, installer, API endpoints, dashboard
+- SquirrelChat auth enforcement + multi-platform release CI
+- agentOS debug bridge API — attach/detach/breakpoint/step/sessions
+- auto-fetch per-agent Slack tokens from RCC in bootstrap
+- hw fingerprint on bootstrap + SSH shell tunnel for containers
+- add identity/login system for human users
+- add Services Directory tab (🗺️)
+- Services Directory tab + fix squirrelchat/sc_voice compile errors
+- thread polish — active threads sidebar, new-reply badges, reply filtering
+- voice Sprint 2 — speaker labels, streaming TTS, per-agent config
+- STT mic button + TTS voice synthesis (Sprint 1 voice)
+- STT mic button — MediaRecorder → Whisper proxy → auto-fill composer
+- DM completion — load on mount, agent-picker modal, mark-read, peer name display
+- tokenhub as universal inference backend for all RCC consumers
+- DM load on mount, mark-read, other-person name display
+- single-page app at root
+- unread badges with server-side read cursors
+- typing indicators — transient WS broadcast, debounced send, animated display
+- route LLM and embedding calls through tokenhub instead of direct NVIDIA API
+- reverse SSH tunnel systemd unit (corrected key path)
+- systemd unit for reverse SSH tunnel to do-host1
+- add nanolang package registry UI (/packages)
+- agent presence protocol — live status badges
+- full revamp — GPU/tailscale auto-detect, role self-select, verified tunnel
+- make crush-server URL runtime-configurable from window.location.hostname
+- opencode fallback coding agent + fix HEARTBEAT.md identity
+- claude-code → crush failover integration
+- add DiffView component to Coding Agent tab
+- CodingAgent — crush web UI panel + crush-server
+- Phase 5 — mobile, PWA, edit/delete/pin, keyboard nav
+- Phase 5.3+5.4+5.5 — keyboard nav, message edit, pinned messages
+- Phase 5.1+5.2 — mobile-responsive layout + PWA manifest
+- Phase 4 — desktop notifications, markdown, keyboard shortcuts
+- server-side semantic dedup gate for POST /api/queue
+- Phase 3 — DMs, file sharing, full-text search
+- SquirrelChat mention highlights + agentOS telemetry endpoint
+- UI components — emoji picker, reactions bar, thread panel, channel modal
+- swap EventSource SSE → WebSocket, point REST fetchers at Axum server 8793
+- align frontend types with Rust/Axum server (c2c6e28)
+- Phase 1 Rust/Axum server — full WS + REST API
+- Phase 1 backend — users, channels, reactions, threads, search
+- add GET /api/channels + GET /api/me stubs; resolve app.rs merge conflict
+- pre-submission Milvus similarity dedup
+- adaptive batch embeddings for GB10 — real ollama batching, adaptive size 64→512, vectorUpsertBatch + ingestMessages
+- wire DecisionJournal into gpu-idle-routing decisions
+- wire DecisionJournal into AgentFS AOT/JIT routing decisions
+- RCC services map with live status probing
+- token-bus docs, projects API data, wasm-dashboard agent/provider components
+- auto-register vLLM workers with TokenHub on /api/agents/register
+- health banner + stale agent detection + priority queue sorting
+- richer agent cards + relative timestamps across dashboard
+- GPU-accelerated Milvus embedding pipeline
+- GitHub Issues integration + WASM dashboard v3
+- WASM capability-gate enforcement
+- IntentDriftDetector — behavioral drift detection for agents
+- role-aware bootstrap — vllm-worker role with full install
+- add /s3/* MinIO proxy routes + fix missing state init in main()
+- port bus routes + 5 missing API endpoints from Node dashboard
+- wire whisper-cli local STT into OpenClaw
+- projects as first-class objects — per-project Slack channel fan-out
+- PluginHost vibe-swap WASM hot-swap service
+- DecisionJournal stub — prerequisite for IntentDriftDetector
+- whisper.cpp large-v3 CUDA inference on sparky GB10
+- ollama keepalive systemd timer — keep nomic-embed-text warm between cron ticks
+- SquirrelChat, BusSend, ActivityFeed, Changelog components
+- WASM build gate for rcc/dashboard on sparky aarch64
+- 18-test suite for dashboard-server proxy routes
+- SquirrelChat WASM UI + Axum /sc proxy + /health endpoint
+- Axum server — /sc/* squirrelchat proxy + auth middleware + /health v2
+- systemd health checks + /bench latency endpoint
+- wasmtime AOT precompile on upload, ?aot=1 fetch
+- AgentFS content-addressed WASM module store
+- add GPU memory pressure test suite for sparky embedding pipeline
+- add sccache build cache on sparky + BUILD.md
+- LLMs as first-class objects in RCC
+- add GPU-local ollama embedding backend (nomic-embed-text, 768-dim)
+- Leptos 0.7 WASM v2 dashboard — Overview, Kanban, SquirrelBus, GeekView
+- add Kanban board tab with drag-and-drop
+- agent detail page with heartbeat sparkline, capabilities, queue & bus views
+- add 🧠 emoji to Geek View tab label
+- Geek View — SVG topology map with live traffic animation
+- CRUD endpoints — projects, conversations, users, agent-history events
+- Rust/WASM dashboard foundation
+- daily orphan detection + WORKQUEUE definition-of-done protocol
+- Slack DM to jkh on task completion
+- GET /api/onboard?token=<bt> — one-command agent bootstrap
+- add WORKQUEUE_AGENT_NATASHA.md — Natasha-specific routing and GPU task handling
+- add free-text-guard.sh + serendipity-capture.sh (instar-derived)
+- queue event callbacks — claim/complete/fail/keepalive endpoints
+- AdaptiveTrust — per-agent/service/operation trust model with streak tracking (wq-INSTAR-1774636271360-03)
+- EpisodicMemory + WorkingMemoryAssembler — structured session digests and token-budgeted context assembly (wq-INSTAR-04, wq-INSTAR-05)
+- dangerous-command-guard.sh — Level 1/2 PreToolUse hook (wq-INSTAR-1774636271360-06)
+- SquirrelBus remote code execution with HMAC signing
+- secrets registry, rotation sync, security model docs
+- bootstrap.sh now installs openclaw + seeds workspace + starts daemon
+- ONBOARD_NEW_AGENT.md — durable onboarding checklist for Boris/RTX
+- bootstrap API (deploy key store + one-time tokens) + deploy/bootstrap.sh
+- deploy/migrate.sh — baseline migration for existing agent workspaces
+- merge natasha/local-work contributions to main
+- autonomous ideation — generate, promote, vote on ideas
+- agent history endpoints + scout mode heartbeat response
+- DIRECTIVES.md + natasha/local-work merge + RCC token persistence fix
+- Milvus ingest pipeline + /api/vector/context endpoint
+- lightweight Slack replacement on :8790
+- agent history, disappearance detection, tombstoning, dashboard surface
+- implement request tracking — loop closure for human requests
+- wire up real RCC API endpoints, stub fallback, fix heartbeat dot color
+- wire client to RCC API topology + SSE stream (port 8789)
+- Dashboard v2 frontend — 6-tab nav with all new pages
+- /geek route — infrastructure topology SVG view
+- add calendar, cron-status, provider-health, heartbeat-history, geek SSE endpoints
+- remove HTTP event/command endpoints — Socket Mode only, no public URL
+- Socket Mode client — dual HTTP + WebSocket inbound support
+- add App manifest + SLACK_SIGNING_SECRET to env template
+- inbound event handler + slash commands — app_mention, DMs, /rcc commands
+- add container-aware deploy path (setup-container.sh)
+- Milvus vector search integration
+- claw-watchdog — OpenClaw watchdog for containerized agents
+- capability-based routing for assignee==all items
+- add idea promotion rules - must be grounded in empirical project data
+- idea incubator — status:incubating, /promote, /incubate endpoints + dashboard section
+- agent capability registry — dynamic routing based on published manifests
+- add GitHub Issues+PRs panel to project detail page
+- add GitHub Issues+PRs panel to project detail page
+- GET /api/projects/:id/github — live issues + PRs with 5-min cache
+- GET /api/projects/:id/github — live issues + PRs with 5-min cache
+- generic RCC onboarding — rcc-init.sh + env.template
+- generic RCC onboarding — rcc-init.sh + env.template
+- SquirrelBus delivery confirmation + retry queue (wq-TASK-1774285273006)
+- SquirrelBus delivery confirmation + retry queue (wq-TASK-1774285273006)
+- per-agent capability registry (wq-TASK-1774285273005)
+- per-agent capability registry (wq-TASK-1774285273005)
+- HTML UI pages for /projects and /projects/:id
+- HTML UI pages for /projects and /projects/:id
+- project channels — Slack channel = project context
+- project channels — Slack channel = project context
+- idea consolidation — consolidate-ideas.mjs + ideas-consolidated.md
+- archive completed items >7d — archive-completed.mjs
+- idea voting/promotion workflow — idea-promotion-check.mjs + VOTING_PROTOCOL.md
+- peer offline alerting — peer-status-check.mjs + MinIO write
+- SquirrelBus receive sidecar + .gitignore (exclude frames/model cache)
+- adopt shared workqueue system (wq-20260318-003)
+
+### Changed
+- complete rcc → ccc rename across entire codebase
+- rename RCC → CCC project-wide
+- replace deploy-gemma4.sh with generic deploy-model.sh
+- separate agentOS from CCC — option 3
+- reconcile guardrails/adaptive-trust.mjs — thin wrapper over trust/ canonical
+- Phase 2 route split — wire all route modules into index.mjs
+- split api/index.mjs into route modules (queue/agents/bus/agentos/memory/ui/services/projects)
+- split env templates, add Slack proxy, update README
+
+### Fixed
+- soft-fail migration 0010 when sudo requires a TTY (macOS)
+- replace mapfile with while-read for macOS bash 3.2 compat
+- correct DASHBOARD_DIST path — Src/CCC not .ccc/workspace
+- use NVIDIA embed API directly, graceful empty on missing collection
+- add DASHBOARD_DIST+EnvironmentFile to ccc-server, remove ccc-dashboard service
+- substitute AGENT_USER/AGENT_HOME at install time in ccc-agent.service
+- macOS-aware Hermes install (PEP 668)
+- derive served-model-name from model path, not hardcoded 'nemotron'
+- complete CLAWBUS env var fallbacks, cleanup agentOS stubs, rebrand squirrel→claw, add CI
+- resolve duplicate route panic crashing rcc-api
+- add pkill allowlist entries for gateway/listener restarts
+- expand shell allowlist — supervisorctl + git pull/log/fetch
+- pre-create telemetry dir at startup to ensure JSONL writes on first tick
+- wire /api/bus/send path in Rust exec route + agent-listener
+- rebrand package name, fix service WorkingDirectory, install deps
+- remove lowercase rcc/audit.md (case collision on HFS+)
+- add SPA routes for /agentfs /coding /nanolang
+- remove inline comments from EXPOSE lines (invalid Dockerfile syntax)
+- raise TIMEOUT_MS to 90s for cold-start, use API for restart instead of ollama run
+- gate UI on auth — no chat visible before login
+- SPA catch-all — use readFileSync instead of sendFile (Express 5 send compat)
+- docker-compose cleanup + final token scrub
+- address Dockerfile/compose issues flagged in review
+- exempt /api/playground/run from Bearer auth
+- remove broken Coding/Crush tab — crush-server not deployed
+- kill GPU-holding VLLM::Worker zombies before restart
+- clean restart — kill zombie EngineCore + purge shm/sem
+- handle Nemotron reasoning-trace responses (content null)
+- dynamic nodes from /api/agents, remove hardcoded topology
+- dynamic agent topology from live /api/agents/status
+- add model routing with fallback chain
+- use TOKENHUB_AGENT_KEY fallback + update hardcoded key
+- services panel uses RCC /api/services/status for real health probes
+- replace <<< herestring with printf pipe in onboard script (Phase 7/8 supervisord conf write)
+- correct URLs to match live service reality
+- remove duplicate sc_voice import in squirrelchat.rs
+- nanolang playground — correct tmpdir import (os not path), fix require('fs') in ESM
+- fix authorized_keys ownership causing SSH Permission denied
+- write tunnel restart-loop to script file instead of bash -c string
+- SPA catch-all wildcard syntax for path-to-regexp v8 compat + migrate users.role column
+- supervisord system conf dir support (Boris pattern)
+- target Qwen2.5-72B-Instruct-AWQ for single-GPU L40 containers
+- escape TUNNEL_CMD and VLLM_START_CMD in bashrc heredocs
+- fix duplicate /api/bootstrap handler also marking tokens used
+- multi-use tokens + mark-used-after-send
+- container-native vllm-worker bootstrap
+- default SC_URL to :8793 (Rust server), was :8790 (Node.js, retired)
+- zero warnings — suppress dead_code on API/wire types, unreachable_patterns on WS catch-all
+- service ExecStart → rockyandfriends/ canonical path
+- wire vector/brain through tokenhub; squirrelchat env fix
+- unify on /sc proxy — drop localhost:8793 fallbacks, fix Trunk.toml
+- strip all non-schema mattermost properties (dmPolicy/allowFrom/chatmode/groupPolicy) during onboard
+- directly strip invalid mattermost properties from openclaw.json before gateway start
+- run openclaw doctor --fix before gateway start to clear stale config schema errors
+- quote GPU_MODEL in .env heredoc (spaces in model name cause shell exec error)
+- TUNNEL_USER default 'jkh' → 'tunnel'
+- agents now get name/host on bootstrap; add register call in script
+- shared DashboardContext eliminates FOUC/layout-shift
+- reactions wire format → Vec<ScReaction> {emoji, count, agents}
+- clone emoji before async move in reaction callbacks
+- align Axum server wire format with sc_types.rs
+- lock wire format — HashMap reactions, thread_id, type
+- correct Milvus URL to port 9091/healthz; fix sparky services to Tailscale IPs
+- use Tailscale IPs for sparky services in Services Map (sparky.local not resolvable from do-host1)
+- unescape backticks in TokenHub registration console.log lines (caused SyntaxError)
+- onboard tunnel setup — auto-register key via API, mkdir before service file, correct auth_keys path
+- onboard — normalize secret keys to valid bash var names (slashes/dashes → underscores)
+- onboard — skip non-scalar secret values in .env block to prevent [object Object]
+- onboard — source ~/.rcc/.env after writing it so RCC_AGENT_TOKEN is available
+- vLLM onboard — fix HuggingFace cache permission denied
+- vLLM onboard — remove npm from apt deps (conflicts with NodeSource nodejs), fix VLLM_MODEL_DIR env in python3 -c
+- onboard — always install Node.js 22 via NodeSource + sudo npm install -g
+- onboard — install openclaw to user prefix to avoid EACCES on global npm install
+- onboard — install npm explicitly if missing (node present but npm absent on some Ubuntu distros)
+- bootstrap tokens — correct absolute path + import in same commit to prevent regression
+- add readFileSync/writeFileSync to fs import — was missing, causing load failure
+- fs.readFileSync/fs.writeFileSync → readFileSync/writeFileSync in bootstrap load+save
+- ensure Node.js is installed before openclaw/hot-patch in base onboard script
+- burst dedup + startup grace period
+- metrics count incubating/claimed statuses, add created_at alias + result field
+- handle mixed priority types (str/int), fix status filtering, wire idea incubator to incubating status
+- bus send/heartbeat/ack body parsing; stale claim auto-expiry
+- persist bootstrap tokens to disk so RCC restarts don't invalidate them
+- onboard script — install Node.js 22 (LTS) from NodeSource if missing or too old
+- add mutex to claim endpoint to prevent concurrent claim races
+- squirrelbus receive-server token (rotated 2026-03-23)
+- add heartbeat POST step to crons + fix RCC URL (8788→8789)
+- agent detail borrow checker errors — 3 fixes
+- bind to 0.0.0.0 instead of 127.0.0.1
+- correct two stale test assertions for aarch64/sparky validation
+- correct SquirrelBus /bus/* endpoint to port 8788
+- auto-create queue.json symlink on every pull
+- suppress unused variable warning in kanban.rs; update SOUL.md
+- add 'openclaw config set gateway.mode local' to all setup paths
+- bootstrap.sh safety + auth multi-token support
+- skip slash-keyed secrets from .env write
+- add gateway.mode=local to openclaw.json + --allow-unconfigured flag
+- use 'openclaw gateway run' not 'start --foreground'
+- move GET /api/bootstrap before auth gate
+- add searchAll() to vector/index.mjs — fixes RCC crash loop
+- replace bash-style ${OPENCLAW_WORKSPACE:-...} with JS process.env in dashboard/server.mjs
+- handle container/HORDE env — tmux fallback, XDG_RUNTIME_DIR, clean slate on re-run
+- agents.workspace belongs under agents.defaults not agents root
+- add MILVUS_ADDRESS + EMBED vars to .env.template (required for remote agents)
+- ingest.mjs vectorUpsert export mismatch + portable memory paths
+- restore rcc/vector/ingest.mjs + squirrelchat/server.mjs with RAG wiring
+- add @zilliz/milvus2-sdk-node to rcc/package.json (required by vector/index.mjs)
+- restore rcc/scripts/ingest-memory.mjs (lost in PR #4 merge conflict resolution)
+- deploy/migrate.sh macOS sed -i compatibility (Darwin needs sed -i '')
+- auto-detect workspace path (.openclaw vs .rcc layout)
+- use RCC API instead of local queue.json; add daily cron
+- rcc-api.service path + squirrelchat recovery
+- branch-aware git pull — track current branch instead of hardcoded master/main
+- populate .env.template with real RCC/MinIO defaults
+- add agent capability files to rcc/agents/
+- cross-array integrity checks + schema fixes
+- guard catch block against double-response crash
+- routing fallback to capability registry when agents store is empty
+- polish UI - loading states, no prompt(), inline priority select
+- add missing esc() helper, store project field on queue items, expand PATCH allowlist
+- epoch date bug — use completedAt|createdAt|created chain for item timestamps
+- epoch date bug — use completedAt|createdAt|created chain for item timestamps
+- add missing esc() sanitizer, fix epoch-0 date display in project detail page
+- add missing esc() sanitizer, fix epoch-0 date display in project detail page
+- public GET /api/projects + /projects redirect (no auth required)
+- public GET /api/projects + /projects redirect (no auth required)
+- unignore deploy/.env.template (negation rule)
+- unignore deploy/.env.template (negation rule)
+- .env.template should be tracked (no real secrets, just vars)
+- .env.template should be tracked (no real secrets, just vars)
+
