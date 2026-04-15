@@ -263,7 +263,7 @@ def read_sentinel():
 # ── Remote Node ClawFS Access ─────────────────────────────────────
 FLEET_NODES = {
     "sparky": {"ip": "100.87.229.125", "user": "jkh", "mc_path": "~/bin/mc"},
-    "puck": {"ip": "100.87.68.11", "user": "jkh", "mc_path": "mc"},
+    "puck": {"ip": "100.87.68.11", "user": "jkh", "mc_path": "~/bin/mc"},
 }
 
 def check_remote_clawfs():
@@ -271,17 +271,23 @@ def check_remote_clawfs():
     results = []
     for node, cfg in FLEET_NODES.items():
         try:
+            # Use a command that outputs a known marker on success
+            cmd = f"{cfg['mc_path']} ls clawfs/clawfs/ >/dev/null 2>&1 && echo CLAWFS_OK || echo CLAWFS_FAIL"
             r = subprocess.run(
                 ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                 f"{cfg['user']}@{cfg['ip']}",
-                 f"{cfg['mc_path']} ls clawfs/clawfs/ 2>&1 | head -3"],
+                 f"{cfg['user']}@{cfg['ip']}", cmd],
                 capture_output=True, text=True, timeout=15,
             )
-            ok = r.returncode == 0 and len(r.stdout.strip()) > 0
+            output = r.stdout.strip()
+            ok = "CLAWFS_OK" in output
+            error = None
+            if not ok:
+                # Grab stderr for diagnostics
+                error = r.stderr.strip()[:200] or output[:200] or "mc ls failed (no output)"
             results.append({
                 "name": f"clawfs-access:{node}",
                 "ok": ok,
-                "error": None if ok else r.stdout.strip()[:200] or r.stderr.strip()[:200],
+                "error": error,
             })
         except subprocess.TimeoutExpired:
             results.append({

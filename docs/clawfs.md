@@ -21,9 +21,8 @@ Redis for metadata, both running on rocky (do-host1).
          Tailscale IP   Tailscale IP    Public IP
         100.89.199.14  100.89.199.14  146.190.134.110
               │              │              │
-           sparky         puck       Sweden containers
-         (Natasha)    (Bullwinkle)   (boris, peabody,
-                                      sherman)
+           sparky         puck         Sweden
+         (Natasha)    (Bullwinkle)     (boris)
 ```
 
 ### Access Methods
@@ -34,9 +33,10 @@ Redis for metadata, both running on rocky (do-host1).
 | **Tailscale hosts** (sparky, puck) | mc (MinIO client) → S3 gateway | `http://100.89.199.14:9100` |
 | **K8s containers** (Sweden fleet) | mc → S3 gateway | `http://146.190.134.110:9100` |
 
-**Important:** Only rocky uses FUSE. All remote nodes use `mc` (MinIO client)
-to access ClawFS via the S3 gateway on port 9100. Remote nodes do NOT connect
-to Redis directly — Redis only listens on 127.0.0.1.
+**Key rule:** Only rocky uses FUSE (`/mnt/clawfs`). ALL other nodes — sparky,
+puck, boris, anything in Sweden — use `mc` (MinIO client) via the S3 gateway
+on port 9100. No remote node should ever connect to Redis directly (it only
+listens on 127.0.0.1). No remote node needs JuiceFS installed.
 
 ### Why Not FUSE Everywhere?
 
