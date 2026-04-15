@@ -116,33 +116,21 @@ info "Checking workspace symlink..."
 
 mkdir -p "$CCC_DIR"
 
-# Prefer ClawFS shared repo if available
-CLAWFS_CCC_REPO="${CLAWFS_CCC_REPO:-$HOME/clawfs/repos/CCC}"
-PREFERRED_TARGET="$REPO_DIR"
-if [ -d "$CLAWFS_CCC_REPO/.git" ]; then
-  info "ClawFS shared repo found at $CLAWFS_CCC_REPO — using it"
-  PREFERRED_TARGET="$CLAWFS_CCC_REPO"
-fi
-
 if [ -L "$WORKSPACE" ]; then
   CURRENT_TARGET="$(readlink -f "$WORKSPACE")"
-  PREFERRED_RESOLVED="$(readlink -f "$PREFERRED_TARGET")"
-  if [ "$CURRENT_TARGET" = "$PREFERRED_RESOLVED" ]; then
-    success "Workspace already symlinked: $WORKSPACE -> $PREFERRED_TARGET"
+  REPO_RESOLVED="$(readlink -f "$REPO_DIR")"
+  if [ "$CURRENT_TARGET" = "$REPO_RESOLVED" ]; then
+    success "Workspace already symlinked: $WORKSPACE -> $REPO_DIR"
   else
-    warn "Workspace symlink points to $CURRENT_TARGET, updating to $PREFERRED_TARGET"
-    ln -sfn "$PREFERRED_TARGET" "$WORKSPACE"
-    success "Workspace re-symlinked: $WORKSPACE -> $PREFERRED_TARGET"
+    warn "Workspace symlink points to $CURRENT_TARGET, updating to $REPO_DIR"
+    ln -sfn "$REPO_DIR" "$WORKSPACE"
+    success "Workspace re-symlinked: $WORKSPACE -> $REPO_DIR"
   fi
 elif [ -d "$WORKSPACE" ]; then
-  warn "$WORKSPACE exists as a real directory, not a symlink"
-  if [ "$PREFERRED_TARGET" = "$CLAWFS_CCC_REPO" ]; then
-    warn "ClawFS available — consider: rm -rf $WORKSPACE && rerun this script"
-  fi
-  warn "Skipping symlink creation. If this is wrong, remove it and re-run."
+  warn "$WORKSPACE exists as a real directory, not a symlink — skipping"
 else
-  ln -s "$PREFERRED_TARGET" "$WORKSPACE"
-  success "Workspace symlinked: $WORKSPACE -> $PREFERRED_TARGET"
+  ln -s "$REPO_DIR" "$WORKSPACE"
+  success "Workspace symlinked: $WORKSPACE -> $REPO_DIR"
 fi
 
 # ── Step 2b: Install npm dependencies ────────────────────────────────────────

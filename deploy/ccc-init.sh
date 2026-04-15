@@ -183,22 +183,9 @@ else
 fi
 
 echo ""
-info "Configuring ClawFS (shared model/file cache via JuiceFS)..."
-echo "  ClawFS provides shared storage for models and artifacts."
-echo "  Linux: auto-mounted via FUSE at ~/clawfs."
-echo "  macOS: memory sync uses S3 gateway (no FUSE needed). POSIX mount optional"
-echo "         (only needed for vLLM model-serving nodes: brew install --cask macfuse)."
-ask "Enable ClawFS? (true/false) [true]: "
-read -r CLAWFS_ENABLED
-CLAWFS_ENABLED="${CLAWFS_ENABLED:-true}"
-CLAWFS_MOUNT="$HOME/clawfs"
-CLAWFS_REDIS_URL="redis://ccc-server.service.consul:6379/1"
-CLAWFS_CACHE_DIR="/tmp/jfscache"
-if [ "$CLAWFS_ENABLED" = "true" ]; then
-  prompt CLAWFS_MOUNT "ClawFS mount point" "$HOME/clawfs"
-  prompt CLAWFS_REDIS_URL "ClawFS Redis URL" "redis://ccc-server.service.consul:6379/1"
-  prompt CLAWFS_CACHE_DIR "ClawFS cache directory" "/tmp/jfscache"
-fi
+info "ClawFS shared storage — no configuration needed."
+echo "  Memory sync uses the S3 gateway on the hub (port 9100) via clawfs-sync."
+echo "  No FUSE mount, no local JuiceFS installation required."
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STEP 5 — Communication Channels
@@ -283,12 +270,6 @@ AGENT_HAS_GPU=${AGENT_HAS_GPU}
 AGENT_GPU_MODEL=${AGENT_GPU_MODEL}
 AGENT_GPU_COUNT=${AGENT_GPU_COUNT}
 AGENT_GPU_VRAM_GB=${AGENT_GPU_VRAM_GB}
-
-# ── ClawFS (shared model/file cache via JuiceFS) ────────────────────────
-CLAWFS_ENABLED=${CLAWFS_ENABLED}
-CLAWFS_MOUNT=${CLAWFS_MOUNT}
-CLAWFS_REDIS_URL=${CLAWFS_REDIS_URL}
-CLAWFS_CACHE_DIR=${CLAWFS_CACHE_DIR}
 
 # ── vLLM (local GPU model serving) ──────────────────────────────────────
 VLLM_ENABLED=${VLLM_ENABLED}

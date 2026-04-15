@@ -149,39 +149,10 @@ fi
 
 # ── 3. Clone / update CCC workspace ──────────────────────────────────────
 CCC_WORKSPACE="$HOME/.ccc/workspace"
-CLAWFS_CCC_REPO="${CLAWFS_CCC_REPO:-$HOME/clawfs/repos/CCC}"
 info "Setting up CCC workspace at $CCC_WORKSPACE..."
-
-# Prefer ClawFS shared repo if available — single copy shared by all agents
-if [[ -d "$CLAWFS_CCC_REPO/.git" ]]; then
-  info "ClawFS shared repo found at $CLAWFS_CCC_REPO"
-  if [[ -L "$CCC_WORKSPACE" ]]; then
-    CURRENT_TARGET="$(readlink -f "$CCC_WORKSPACE")"
-    CLAWFS_RESOLVED="$(readlink -f "$CLAWFS_CCC_REPO")"
-    if [[ "$CURRENT_TARGET" = "$CLAWFS_RESOLVED" ]]; then
-      success "Workspace already symlinked to ClawFS repo"
-    else
-      warn "Workspace symlink points to $CURRENT_TARGET, updating to ClawFS"
-      ln -sfn "$CLAWFS_CCC_REPO" "$CCC_WORKSPACE"
-      success "Workspace re-symlinked to ClawFS repo"
-    fi
-  elif [[ -d "$CCC_WORKSPACE" ]]; then
-    warn "Workspace is a real directory at $CCC_WORKSPACE"
-    warn "ClawFS repo available — consider: rm -rf $CCC_WORKSPACE && ln -s $CLAWFS_CCC_REPO $CCC_WORKSPACE"
-    info "Keeping existing directory for now, pulling latest"
-    git -C "$CCC_WORKSPACE" pull --ff-only || warn "git pull failed"
-  else
-    mkdir -p "$(dirname "$CCC_WORKSPACE")"
-    ln -s "$CLAWFS_CCC_REPO" "$CCC_WORKSPACE"
-    success "Workspace symlinked to ClawFS: $CCC_WORKSPACE -> $CLAWFS_CCC_REPO"
-  fi
-elif [[ -d "$CCC_WORKSPACE/.git" ]]; then
-  # Fallback: no ClawFS, but local clone exists
-  warn "ClawFS not available — using local clone, pulling latest"
+if [[ -d "$CCC_WORKSPACE/.git" ]]; then
   git -C "$CCC_WORKSPACE" pull --ff-only || warn "git pull failed"
 else
-  # Fallback: no ClawFS, no local clone — fresh git clone
-  info "ClawFS not available — cloning repo locally"
   git clone "${CCC_REPO:-https://github.com/jordanhubbard/rockyandfriends.git}" "$CCC_WORKSPACE"
 fi
 success "CCC workspace ready"
@@ -640,109 +611,15 @@ else
   warn "openclaw-register.service not found in workspace — skipping (run after pulling latest)"
 fi
 
-# ── 9g. ClawFS / JuiceFS mount ────────────────────────────────────────────
-CLAWFS_MOUNT="${CLAWFS_MOUNT:-${HOME}/clawfs}"
-CLAWFS_REDIS="${CLAWFS_REDIS_URL:-redis://ccc-server.service.consul:6379/1}"
-CLAWFS_CACHE="${CLAWFS_CACHE_DIR:-/tmp/jfscache}"
-
-_clawfs_mounted() { [[ -f "${CLAWFS_MOUNT}/.config" ]]; }
-
-if [[ "$(uname)" == "Linux" ]]; then
-  info "Setting up ClawFS (JuiceFS FUSE mount)..."
-  # Install JuiceFS if not present
-  if ! command -v juicefs &>/dev/null; then
-    JFS_VER="1.2.2"
-    JFS_URL="https://github.com/juicedata/juicefs/releases/download/v${JFS_VER}/juicefs-${JFS_VER}-linux-amd64.tar.gz"
-    if curl -sfL "$JFS_URL" | tar xz -C /tmp juicefs 2>/dev/null; then
-      sudo install -m 755 /tmp/juicefs /usr/local/bin/juicefs
-      rm -f /tmp/juicefs
-      success "JuiceFS ${JFS_VER} installed"
-    else
-      warn "JuiceFS download failed — ClawFS will not be available"
-    fi
-  fi
-  # Install FUSE utils if missing
-  if ! command -v fusermount &>/dev/null && ! command -v fusermount3 &>/dev/null; then
-    sudo apt-get install -y -q fuse3 2>/dev/null || sudo yum install -y -q fuse3 2>/dev/null || true
-  fi
-  # Mount ClawFS
-  if command -v juicefs &>/dev/null; then
-    mkdir -p "$CLAWFS_MOUNT" "$CLAWFS_CACHE"
-    if ! _clawfs_mounted; then
-      juicefs mount --background --cache-dir "$CLAWFS_CACHE" "$CLAWFS_REDIS" "$CLAWFS_MOUNT" 2>/dev/null && \
-        success "ClawFS mounted at $CLAWFS_MOUNT" || \
-        warn "ClawFS mount failed — models will be downloaded locally"
-    else
-      success "ClawFS already mounted at $CLAWFS_MOUNT"
-    fi
-    # Install systemd unit for persistence
-    CLAWFS_SVC="/etc/systemd/system/clawfs-${AGENT}.service"
-    if [[ ! -f "$CLAWFS_SVC" ]] && command -v systemctl &>/dev/null; then
-      cat > /tmp/clawfs.service <<CFSEOF
-[Unit]
-Description=ClawFS JuiceFS mount for ${AGENT}
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=forking
-User=$(whoami)
-ExecStart=/usr/local/bin/juicefs mount --background --cache-dir ${CLAWFS_CACHE} ${CLAWFS_REDIS} ${CLAWFS_MOUNT}
-ExecStop=/usr/local/bin/juicefs umount ${CLAWFS_MOUNT}
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-CFSEOF
-      sudo mv /tmp/clawfs.service "$CLAWFS_SVC"
-      sudo systemctl daemon-reload
-      sudo systemctl enable "clawfs-${AGENT}" 2>/dev/null || true
-      success "ClawFS systemd service installed"
-    fi
-  fi
-elif [[ "$(uname)" == "Darwin" ]]; then
-  if command -v juicefs &>/dev/null; then
-    mkdir -p "$CLAWFS_MOUNT" "$CLAWFS_CACHE"
-    if ! _clawfs_mounted; then
-      juicefs mount --background --cache-dir "$CLAWFS_CACHE" "$CLAWFS_REDIS" "$CLAWFS_MOUNT" 2>/dev/null && \
-        success "ClawFS mounted at $CLAWFS_MOUNT" || \
-        info "ClawFS POSIX mount unavailable (macFUSE not installed) — S3 gateway sync still works. Install macFUSE only if this node will serve vLLM models from ClawFS paths."
-    else
-      success "ClawFS already mounted at $CLAWFS_MOUNT"
-    fi
-  else
-    # macOS: FUSE mount is optional. Memory sync uses the S3 gateway (port 9100 on hub)
-    # via clawfs-sync — no macFUSE needed for normal agent operation.
-    # Only needed if this node will serve vLLM models from ClawFS paths.
-    info "ClawFS POSIX mount skipped on macOS (no JuiceFS) — S3 gateway sync still works."
-    info "  Optional (GPU/model-serving nodes only): brew install --cask macfuse && brew install juicefs"
-  fi
-fi
-
-# Write ClawFS vars to .env
-for key in CLAWFS_ENABLED CLAWFS_MOUNT CLAWFS_REDIS_URL CLAWFS_CACHE_DIR; do
-  sed -i "/^${key}=/d" "$ENV_FILE" 2>/dev/null || true
-done
-cat >> "$ENV_FILE" <<CLAWFSENV
-CLAWFS_ENABLED=$(_clawfs_mounted && echo true || echo false)
-CLAWFS_MOUNT=${CLAWFS_MOUNT}
-CLAWFS_REDIS_URL=${CLAWFS_REDIS}
-CLAWFS_CACHE_DIR=${CLAWFS_CACHE}
-CLAWFSENV
-
-# ── 9h. vLLM setup (GPU nodes only) ──────────────────────────────────────
+# ── 9g. vLLM setup (GPU nodes only) ──────────────────────────────────────
 if [[ ${GPU_COUNT:-0} -gt 0 ]]; then
   info "GPU detected — setting up vLLM model serving..."
   VLLM_MODEL="${VLLM_MODEL:-google/gemma-4-31B-it}"
   VLLM_SERVED_NAME="${VLLM_SERVED_NAME:-gemma}"
   VLLM_PORT="${VLLM_PORT:-8000}"
 
-  # Determine model path: ClawFS > local > will download
-  if _clawfs_mounted && [[ -d "${CLAWFS_MOUNT}/models/$(basename $VLLM_MODEL)" ]]; then
-    VLLM_MODEL_PATH="${CLAWFS_MOUNT}/models/$(basename $VLLM_MODEL)"
-    success "Model found in ClawFS: $VLLM_MODEL_PATH"
-  elif [[ -d "$HOME/models/$(basename $VLLM_MODEL)" ]]; then
+  # Determine model path: local cache > HuggingFace download
+  if [[ -d "$HOME/models/$(basename $VLLM_MODEL)" ]]; then
     VLLM_MODEL_PATH="$HOME/models/$(basename $VLLM_MODEL)"
     success "Model found locally: $VLLM_MODEL_PATH"
   else

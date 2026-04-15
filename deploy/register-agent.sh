@@ -41,9 +41,7 @@ RESPONSE=$(curl -s -X POST "$CCC_URL/api/agents/register" \
       \\\"vllm\\\":${VLLM_ENABLED:-false},
       \\\"vllm_model\\\":\\\"${VLLM_MODEL:-}\\\",
       \\\"vllm_served_name\\\":\\\"${VLLM_SERVED_NAME:-}\\\",
-      \\\"vllm_port\\\":${VLLM_PORT:-8000},
-      \\\"clawfs\\\":${CLAWFS_ENABLED:-false},
-      \\\"clawfs_mount\\\":\\\"${CLAWFS_MOUNT:-}\\\"
+      \\\"vllm_port\\\":${VLLM_PORT:-8000}
     },
     \"billing\":{
       \"claude_cli\":\"fixed\",

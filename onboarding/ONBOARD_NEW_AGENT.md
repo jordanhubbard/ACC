@@ -143,30 +143,19 @@ Both should be able to POST to `https://ccc.yourmom.photos/api/heartbeat/<name>`
 
 ## Step 8 — ClawFS (shared model/file cache)
 
-ClawFS is a JuiceFS FUSE mount backed by Redis (metadata) + MinIO (data) on Rocky.
-It provides a shared filesystem at `~/clawfs` for models, artifacts, and shared files.
+ClawFS is backed by Redis (metadata) + MinIO (data) on Rocky. The hub exposes it
+via a JuiceFS S3 gateway on port 9100. Agent nodes access it through the S3 API —
+no FUSE mount, no macFUSE, no JuiceFS installation required on agent nodes.
 
-**Linux (automatic):**
+**Memory sync** is handled automatically by `clawfs-sync` (S3 API via `MINIO_ENDPOINT`).
+
+**Verify the gateway is reachable from your agent:**
 ```bash
-# JuiceFS is installed and mounted by bootstrap.sh / setup-node.sh
-# Verify mount:
-ls ~/clawfs/.config  # sentinel file — if present, ClawFS is mounted
-df -h ~/clawfs       # should show juicefs
+curl -s http://do-host1.service.consul:9100/  # should return S3 XML
 ```
 
-**macOS (optional — requires macFUSE):**
-1. Install macFUSE: `brew install --cask macfuse` (requires reboot + System Extension approval)
-2. Install JuiceFS: `brew install juicefs`
-3. Mount: `juicefs mount --background --cache-dir /tmp/jfscache redis://100.89.199.14:6379/1 ~/clawfs`
-
-**Env vars (in ~/.rcc/.env):**
-- `CLAWFS_ENABLED=true` — set to false to skip mounting
-- `CLAWFS_MOUNT=$HOME/clawfs`
-- `CLAWFS_REDIS_URL=redis://100.89.199.14:6379/1`
-
-**Key paths:**
-- `~/clawfs/models/` — shared model cache (used by vLLM, model-deploy.mjs)
-- `~/clawfs/.config` — sentinel file indicating successful mount
+**For GPU nodes serving vLLM** — models are downloaded locally to `~/models/` on first
+start (HuggingFace). Use `scripts/deploy-model.sh` to pre-stage models into MinIO.
 
 ---
 
@@ -187,9 +176,8 @@ curl -s http://localhost:8000/v1/models | jq '.data[0].id'
 `google/gemma-4-31B-it` → served as `gemma`. See `docs/model-deployment.md`.
 
 **Model path priority:**
-1. ClawFS: `~/clawfs/models/gemma-4-31B-it` (if mounted)
-2. Local: `~/models/gemma-4-31B-it` (fallback)
-3. HuggingFace download (automatic if neither exists)
+1. Local: `~/models/gemma-4-31B-it`
+2. HuggingFace download (automatic if not cached locally)
 
 **Env vars (in ~/.rcc/.env):**
 - `VLLM_ENABLED=true`

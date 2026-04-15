@@ -30,19 +30,13 @@ fi
 AGENT_NAME="${AGENT_NAME:-unknown}"
 DRY_RUN="${CCC_REPO_SYNC_DRY_RUN:-0}"
 
-# Resolve the repo path
-CLAWFS_CCC_REPO="${CLAWFS_CCC_REPO:-$HOME/clawfs/repos/CCC}"
 WORKSPACE="$CCC_DIR/workspace"
 
-# Use ClawFS repo if available, fall back to workspace
-if [ -d "$CLAWFS_CCC_REPO/.git" ]; then
-  REPO="$CLAWFS_CCC_REPO"
-elif [ -d "$WORKSPACE/.git" ]; then
-  REPO="$WORKSPACE"
-else
-  echo "ERROR: No repo found at $CLAWFS_CCC_REPO or $WORKSPACE" >&2
+if [ ! -d "$WORKSPACE/.git" ]; then
+  echo "ERROR: No repo found at $WORKSPACE — run setup-node.sh first" >&2
   exit 1
 fi
+REPO="$WORKSPACE"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 

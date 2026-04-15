@@ -36,37 +36,10 @@ fi
 mkdir -p "$CCC_DIR/logs"
 log "Pull starting"
 
-# ── ClawFS shared repo detection ──────────────────────────────────────────
-# If workspace is a symlink to a ClawFS path and this node is NOT the
-# designated pusher, skip git operations entirely — the pusher keeps the
-# shared repo up to date and all other agents read it via the filesystem.
-CLAWFS_CCC_REPO="${CLAWFS_CCC_REPO:-$HOME/clawfs/repos/CCC}"
-CCC_REPO_PUSHER="${CCC_REPO_PUSHER:-false}"
-IS_CLAWFS_MODE=false
-
-if [ -L "$WORKSPACE" ]; then
-  WS_TARGET="$(readlink -f "$WORKSPACE" 2>/dev/null || true)"
-  CLAWFS_TARGET="$(readlink -f "$CLAWFS_CCC_REPO" 2>/dev/null || true)"
-  if [ -n "$WS_TARGET" ] && [ -n "$CLAWFS_TARGET" ] && [ "$WS_TARGET" = "$CLAWFS_TARGET" ]; then
-    IS_CLAWFS_MODE=true
-  fi
-fi
-
-if [ "$IS_CLAWFS_MODE" = true ] && [ "$CCC_REPO_PUSHER" != "true" ]; then
-  log "ClawFS mode — workspace is shared repo, skipping git pull (pusher handles this)"
-  # Still do runtime symlinks and secrets sync below, just skip git
-  BEFORE="clawfs"
-  AFTER="clawfs"
-else
-  if [ "$IS_CLAWFS_MODE" = true ]; then
-    log "ClawFS mode — this node is the designated repo pusher"
-  fi
-
-  # ── Check repo exists ──────────────────────────────────────────────────────
-  if [ ! -d "$WORKSPACE/.git" ]; then
-    log "ERROR: Workspace not found at $WORKSPACE — run setup-node.sh first"
-    exit 1
-  fi
+# ── Check repo exists ─────────────────────────────────────────────────────
+if [ ! -d "$WORKSPACE/.git" ]; then
+  log "ERROR: Workspace not found at $WORKSPACE — run setup-node.sh first"
+  exit 1
 fi
 
 cd "$WORKSPACE"
@@ -78,29 +51,22 @@ if [ -f "$CCC_QUEUE" ] && [ ! -L "$WQ_QUEUE" ]; then
   ln -sf "$CCC_QUEUE" "$WQ_QUEUE" 2>/dev/null || true
 fi
 
-# ── Git pull (skipped in ClawFS non-pusher mode) ──────────────────────────
-if [ "$IS_CLAWFS_MODE" = true ] && [ "$CCC_REPO_PUSHER" != "true" ]; then
-  # No-op: shared repo is updated by the pusher node
-  BEFORE="clawfs"
-  AFTER="clawfs"
-else
-  BEFORE=$(git rev-parse HEAD)
-  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  git fetch origin --quiet 2>/dev/null || { log "ERROR: git fetch failed (network?)"; exit 1; }
+# ── Git pull ──────────────────────────────────────────────────────────────
+BEFORE=$(git rev-parse HEAD)
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+git fetch origin --quiet 2>/dev/null || { log "ERROR: git fetch failed (network?)"; exit 1; }
 
-  # Check if remote tracking branch exists for current branch
-  if git rev-parse --verify "origin/$CURRENT_BRANCH" --quiet > /dev/null 2>&1; then
-    git merge --ff-only "origin/$CURRENT_BRANCH" --quiet 2>/dev/null || {
-      log "WARNING: Fast-forward merge failed on branch $CURRENT_BRANCH — local changes? Skipping."
-      exit 0
-    }
-    log "Tracking branch: $CURRENT_BRANCH"
-  else
-    log "No remote tracking branch for $CURRENT_BRANCH — skipping pull"
+if git rev-parse --verify "origin/$CURRENT_BRANCH" --quiet > /dev/null 2>&1; then
+  git merge --ff-only "origin/$CURRENT_BRANCH" --quiet 2>/dev/null || {
+    log "WARNING: Fast-forward merge failed on branch $CURRENT_BRANCH — local changes? Skipping."
     exit 0
-  fi
-  AFTER=$(git rev-parse HEAD)
+  }
+  log "Tracking branch: $CURRENT_BRANCH"
+else
+  log "No remote tracking branch for $CURRENT_BRANCH — skipping pull"
+  exit 0
 fi
+AFTER=$(git rev-parse HEAD)
 
 CCC_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 

@@ -342,41 +342,6 @@ HERMESMEM
 info "Seeding hermes fleet context..."
 seed_hermes_memory
 
-# ── ClawFS / JuiceFS (shared model/file cache) ───────────────────────────
-info "Checking ClawFS (JuiceFS FUSE mount)..."
-CLAWFS_MOUNT="${CLAWFS_MOUNT:-$HOME/clawfs}"
-CLAWFS_REDIS="${CLAWFS_REDIS_URL:-redis://ccc-server.service.consul:6379/1}"
-CLAWFS_CACHE="${CLAWFS_CACHE_DIR:-/tmp/jfscache}"
-
-_clawfs_mounted() { [[ -f "${CLAWFS_MOUNT}/.config" ]]; }
-
-if command -v juicefs &>/dev/null; then
-  success "JuiceFS installed ($(juicefs --version 2>/dev/null | head -1))"
-  if _clawfs_mounted; then
-    success "ClawFS already mounted at $CLAWFS_MOUNT"
-  else
-    warn "JuiceFS installed but ClawFS not mounted — bootstrap.sh will mount it"
-  fi
-elif [[ "$PLATFORM" == "linux" ]]; then
-  warn "JuiceFS not found — bootstrap.sh will install it automatically"
-  warn "  Or install manually: curl -sSL https://juicefs.com/static/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs"
-else
-  # macOS: FUSE mount is optional. Memory sync uses the S3 gateway (port 9100 on hub)
-  # via clawfs-sync — no macFUSE needed for normal agent operation.
-  # Only install macFUSE if you need POSIX path access (e.g. vLLM model serving).
-  info "ClawFS POSIX mount not available on macOS without macFUSE — memory sync via S3 gateway still works."
-  info "  Optional (GPU/model-serving nodes only): brew install --cask macfuse && brew install juicefs"
-fi
-
-# Check FUSE availability (Linux)
-if [[ "$PLATFORM" == "linux" ]]; then
-  if command -v fusermount &>/dev/null || command -v fusermount3 &>/dev/null; then
-    success "FUSE utils present"
-  else
-    warn "FUSE utils not found — install: sudo apt-get install -y fuse3"
-  fi
-fi
-
 # ── vLLM (local GPU model serving) ──────────────────────────────────────
 if command -v nvidia-smi &>/dev/null; then
   GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
