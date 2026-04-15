@@ -4,7 +4,7 @@
 #
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/jordanhubbard/rockyandfriends/main/deploy/bootstrap.sh | \
-#     bash -s -- --ccc=http://146.190.134.110:8789 --token=<bootstrap-token> --agent=boris
+#     bash -s -- --ccc=http://<your-ccc-hub-url>:8789 --token=<bootstrap-token> --agent=boris
 #
 # NOTE: Port 8789 is the OpenClaw gateway (CCC API). Port 8788 is the workqueue dashboard.
 # Use 8789 for --ccc. If you have a pre-known agent token, pass --agent-token=<token> to skip
@@ -456,7 +456,7 @@ AGENT_HOST=$(hostname)
 NVIDIA_API_BASE=https://inference-api.nvidia.com/v1
 NVIDIA_API_KEY=${NVIDIA_KEY}
 # TokenHub — preferred inference router (aggregates local vLLM + NVIDIA NIM)
-TOKENHUB_URL=${TOKENHUB_URL:-http://146.190.134.110:8090}
+TOKENHUB_URL=${TOKENHUB_URL:-http://tokenhub.service.consul:8090}
 TOKENHUB_AGENT_KEY=${TOKENHUB_KEY}
 ENVEOF
 chmod 600 "$ENV_FILE"
@@ -599,8 +599,8 @@ AGENTFS_SVC_SRC="$CCC_WORKSPACE.ccc/agentfs-sync/agentfs-sync.service"
 
 if [[ ! -f "$AGENTFS_BIN" ]]; then
   info "Downloading agentfs-sync from MinIO..."
-  # Use public endpoint so agents without LAN access can reach it
-  _AGENTFS_URL="http://146.190.134.110:9000/agents/shared/bin/agentfs-sync"
+  # Use public MinIO endpoint — override CCC_MINIO_URL in .env for non-default fleets
+  _AGENTFS_URL="${CCC_MINIO_URL:-http://do-host1.service.consul:9000}/agents/shared/bin/agentfs-sync"
   if curl -sf --max-time 30 -o /tmp/agentfs-sync "$_AGENTFS_URL" 2>/dev/null; then
     sudo install -m 755 /tmp/agentfs-sync "$AGENTFS_BIN"
     rm -f /tmp/agentfs-sync
@@ -641,9 +641,9 @@ else
 fi
 
 # ── 9g. ClawFS / JuiceFS mount ────────────────────────────────────────────
-CLAWFS_MOUNT="${HOME}/clawfs"
-CLAWFS_REDIS="redis://ccc-server.service.consul:6379/1"
-CLAWFS_CACHE="/tmp/jfscache"
+CLAWFS_MOUNT="${CLAWFS_MOUNT:-${HOME}/clawfs}"
+CLAWFS_REDIS="${CLAWFS_REDIS_URL:-redis://ccc-server.service.consul:6379/1}"
+CLAWFS_CACHE="${CLAWFS_CACHE_DIR:-/tmp/jfscache}"
 
 _clawfs_mounted() { [[ -f "${CLAWFS_MOUNT}/.config" ]]; }
 
@@ -715,7 +715,7 @@ elif [[ "$(uname)" == "Darwin" ]]; then
     warn "JuiceFS not found — to enable ClawFS on macOS:"
     warn "  1. brew install --cask macfuse   (reboot + approve system extension)"
     warn "  2. brew install juicefs"
-    warn "  3. juicefs mount --background --cache-dir /tmp/jfscache redis://ccc-server.service.consul:6379/1 ~/clawfs"
+    warn "  3. juicefs mount --background --cache-dir /tmp/jfscache \${CLAWFS_REDIS_URL:-redis://ccc-server.service.consul:6379/1} ~/clawfs"
   fi
 fi
 

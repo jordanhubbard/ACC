@@ -298,11 +298,55 @@ if [ -d "$CCC_SKILL_SRC" ]; then
   fi
 fi
 
+# ── Seed hermes MEMORY.md with CCC fleet context ────────────────────────
+# So a fresh hermes agent knows about companion repos and fleet conventions
+# without having to stumble across AGENTS.md on its own.
+seed_hermes_memory() {
+  local HERMES_DIR="$HOME/.hermes"
+  local MEMORY_FILE="$HERMES_DIR/MEMORY.md"
+  local SENTINEL="## CCC Fleet Context"
+
+  # Only write if hermes is installed and this block isn't already present
+  if ! command -v hermes &>/dev/null; then return; fi
+  if grep -q "$SENTINEL" "$MEMORY_FILE" 2>/dev/null; then
+    success "CCC fleet context already in hermes MEMORY.md — skipping"
+    return
+  fi
+
+  mkdir -p "$HERMES_DIR"
+  cat >> "$MEMORY_FILE" <<HERMESMEM
+
+## CCC Fleet Context
+# Written by setup-node.sh — DO NOT remove this block (re-runs are idempotent)
+
+This agent is part of the CCC fleet (rockyandfriends repo).
+Full workspace docs: ~/Src/CCC/AGENTS.md — read it on first boot.
+
+### Companion repos — clone on any new command node without waiting to be asked:
+  git clone https://github.com/jordanhubbard/rockyandfriends ~/Src/rockyandfriends  # core (already here)
+  git clone https://github.com/jordanhubbard/tokenhub        ~/Src/tokenhub         # required: LLM router
+  git clone https://github.com/jordanhubbard/nanolang        ~/Src/nanolang         # dev nodes only
+  git clone https://github.com/jordanhubbard/agentos         ~/Src/agentos          # dev nodes only
+
+Minimum for a command node (no GPU, no dev): rockyandfriends + tokenhub.
+
+### Fleet conventions:
+- Secrets: register in TokenHub BEFORE starting any service. Never hardcode.
+- Workqueue: check ~/Src/CCC/workqueue/queue.json at each heartbeat cycle.
+- Session startup: read SOUL.md, USER.md, memory/YYYY-MM-DD.md, MEMORY.md (main session only).
+- Config: ~/.ccc/.env — edit before running the agent. CCC_URL and CCC_AGENT_TOKEN are required.
+HERMESMEM
+  success "CCC fleet context seeded into $MEMORY_FILE"
+}
+
+info "Seeding hermes fleet context..."
+seed_hermes_memory
+
 # ── ClawFS / JuiceFS (shared model/file cache) ───────────────────────────
 info "Checking ClawFS (JuiceFS FUSE mount)..."
 CLAWFS_MOUNT="${CLAWFS_MOUNT:-$HOME/clawfs}"
-CLAWFS_REDIS="redis://ccc-server.service.consul:6379/1"
-CLAWFS_CACHE="/tmp/jfscache"
+CLAWFS_REDIS="${CLAWFS_REDIS_URL:-redis://ccc-server.service.consul:6379/1}"
+CLAWFS_CACHE="${CLAWFS_CACHE_DIR:-/tmp/jfscache}"
 
 _clawfs_mounted() { [[ -f "${CLAWFS_MOUNT}/.config" ]]; }
 
@@ -320,7 +364,7 @@ else
   warn "JuiceFS not found — to enable ClawFS on macOS:"
   warn "  1. brew install --cask macfuse   (reboot + approve system extension)"
   warn "  2. brew install juicefs"
-  warn "  3. juicefs mount --background --cache-dir /tmp/jfscache redis://ccc-server.service.consul:6379/1 ~/clawfs"
+  warn "  3. juicefs mount --background --cache-dir /tmp/jfscache \${CLAWFS_REDIS_URL:-redis://ccc-server.service.consul:6379/1} ~/clawfs"
 fi
 
 # Check FUSE availability (Linux)
