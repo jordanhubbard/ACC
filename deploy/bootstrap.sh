@@ -144,8 +144,11 @@ CCC_WORKSPACE="$HOME/.ccc/workspace"
 info "Setting up CCC workspace at $CCC_WORKSPACE..."
 if [[ -d "$CCC_WORKSPACE/.git" ]]; then
   git -C "$CCC_WORKSPACE" pull --ff-only || warn "git pull failed"
+  git -C "$CCC_WORKSPACE" submodule update --init --recursive 2>/dev/null || \
+    warn "submodule update failed (non-fatal)"
 else
-  git clone "${CCC_REPO:-https://github.com/jordanhubbard/rockyandfriends.git}" "$CCC_WORKSPACE"
+  git clone --recurse-submodules \
+    "${CCC_REPO:-https://github.com/jordanhubbard/rockyandfriends.git}" "$CCC_WORKSPACE"
 fi
 success "CCC workspace ready"
 
@@ -444,9 +447,32 @@ fi
 if command -v hermes &>/dev/null; then
   info "Configuring Hermes agent..."
   mkdir -p "$HOME/.hermes/skills"
+
+  # CCC fleet skill
   if [[ -d "$CCC_WORKSPACE/skills/ccc-node" ]]; then
     cp -r "$CCC_WORKSPACE/skills/ccc-node/" "$HOME/.hermes/skills/ccc-node/"
     success "CCC-node skill installed into Hermes"
+  fi
+
+  # agent-skills engineering workflows (submodule)
+  # Ensure the submodule is initialized — harmless if already up to date.
+  if [[ -d "$CCC_WORKSPACE/.git" ]]; then
+    git -C "$CCC_WORKSPACE" submodule update --init --recursive -- skills/agent-skills 2>/dev/null || \
+      warn "agent-skills submodule init failed — skills may be missing"
+  fi
+  AGENT_SKILLS_DIR="$CCC_WORKSPACE/skills/agent-skills/skills"
+  if [[ -d "$AGENT_SKILLS_DIR" ]]; then
+    _count=0
+    for _skill_dir in "$AGENT_SKILLS_DIR"/*/; do
+      _skill_name="$(basename "$_skill_dir")"
+      # Only copy if the destination doesn't exist or is older
+      cp -rn "$_skill_dir" "$HOME/.hermes/skills/${_skill_name}/" 2>/dev/null || \
+        cp -r  "$_skill_dir" "$HOME/.hermes/skills/${_skill_name}/"
+      _count=$((_count + 1))
+    done
+    success "agent-skills: ${_count} engineering workflow skills installed into Hermes"
+  else
+    warn "agent-skills submodule not populated — run: git submodule update --init"
   fi
 
   # Write ~/.hermes/config.yaml with CCC env vars and channel tokens.
