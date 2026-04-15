@@ -7,7 +7,7 @@
 # by bootstrap.sh) and clawfs-sparky.service are no longer deployed.
 # Condition: Linux nodes that ran bootstrap.sh before this migration.
 
-on_platform linux
+on_platform linux || { m_skip "Linux only — nothing to do on macOS"; exit 0; }
 
 # ── 1. Tear down any running clawfs-*.service units ───────────────────────
 # The unit was named clawfs-${AGENT_NAME}.service — enumerate all matches.
