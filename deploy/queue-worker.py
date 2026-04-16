@@ -36,16 +36,15 @@ HTTP_TIMEOUT = 15             # seconds for API calls
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────
+# Log to stdout only — let systemd/supervisord/launchd capture to file.
+# This avoids double-logging when the service manager also writes stdout to the log.
 
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%SZ",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(sys.stdout),
-    ],
+    stream=sys.stdout,
 )
 log = logging.getLogger("queue-worker")
 
