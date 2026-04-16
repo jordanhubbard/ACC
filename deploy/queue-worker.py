@@ -10,6 +10,8 @@ Supervisord:      command=python3 /home/.../queue-worker.py
 Systemd:          ExecStart=/usr/bin/python3 AGENT_HOME/.ccc/workspace/deploy/queue-worker.py
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
