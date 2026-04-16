@@ -71,14 +71,19 @@ else
 fi
 
 # ── 3. Clean up /mnt/clawfs if it exists ─────────────────────────────────
+# Skip on the hub — the hub intentionally keeps /mnt/clawfs mounted via FUSE.
 CONTAINER_MOUNT="/mnt/clawfs"
-if mountpoint -q "$CONTAINER_MOUNT" 2>/dev/null; then
+if ss -tlnp 2>/dev/null | grep -q ':9100.*juicefs'; then
+  m_skip "Hub node — leaving $CONTAINER_MOUNT mounted (hub's own FUSE mount)"
+elif mountpoint -q "$CONTAINER_MOUNT" 2>/dev/null; then
   m_info "Unmounting $CONTAINER_MOUNT..."
-  fusermount3 -u "$CONTAINER_MOUNT" 2>/dev/null || \
-  fusermount -u "$CONTAINER_MOUNT" 2>/dev/null || \
-  umount "$CONTAINER_MOUNT" 2>/dev/null || \
-  m_warn "Could not unmount $CONTAINER_MOUNT — may need manual cleanup"
-  m_success "$CONTAINER_MOUNT unmounted"
+  if fusermount3 -u "$CONTAINER_MOUNT" 2>/dev/null || \
+     fusermount -u "$CONTAINER_MOUNT" 2>/dev/null || \
+     umount "$CONTAINER_MOUNT" 2>/dev/null; then
+    m_success "$CONTAINER_MOUNT unmounted"
+  else
+    m_warn "Could not unmount $CONTAINER_MOUNT — may need manual cleanup or reboot"
+  fi
 elif [[ -d "$CONTAINER_MOUNT" ]]; then
   m_skip "$CONTAINER_MOUNT directory exists but is not mounted — leaving in place"
 else
