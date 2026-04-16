@@ -125,12 +125,12 @@ Stale thresholds vary by executor type: `claude_cli` = 45 min, `gpu` = 120 min, 
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/bus/stream` | SSE stream — real-time message delivery |
-| POST | `/api/bus/send` | Send message to bus |
+| GET | `/api/bus/stream` | SSE stream — real-time message delivery; agents subscribe via `bus-listener.sh` |
+| POST | `/api/bus/send` | Send message to bus; used by `fleet-sync.sh` to broadcast `rcc.update` |
 | GET | `/api/bus/messages` | Query messages (params: `limit`, `subject`, `type`, `thread_id`, `to`, `from`) |
 | GET | `/api/bus/presence` | Agent presence (online/offline status) |
 
-All four routes are duplicated under `/bus/*` for reverse-proxy compatibility (e.g., nginx forwarding `/bus/` → port 8789).
+All four routes are duplicated under `/bus/*` for reverse-proxy compatibility. ClawBus is **not a separate process** — it runs inside `ccc-server` on port 8789. The viewer at port 8790 is the dashboard-server proxy.
 
 **Secrets** (`secrets.rs`): GET/POST/PUT/DELETE on `/api/secrets` and `/api/secrets/:key`
 
@@ -376,7 +376,8 @@ env:
 
 **Skills installed by bootstrap.sh:**
 - `ccc-node` — fleet connectivity (heartbeat, workqueue, ClawBus)
-- 20+ engineering workflow skills from `addyosmani/agent-skills` (cloned to `~/.ccc/agent-skills`, pulled fresh on each bootstrap run)
+- 20+ engineering workflow skills from `addyosmani/agent-skills` (cloned to `~/.ccc/agent-skills`, pulled fresh on each bootstrap run) — domain implementation: spec, planning, TDD, frontend, API, security, CI/CD, shipping
+- 13 orchestration skills from `obra/superpowers` (cloned to `~/.ccc/superpowers`) — coordination discipline: parallel agent dispatch, git worktrees, systematic debugging, two-stage review, verification gates
 
 ---
 
@@ -414,6 +415,38 @@ It proxies requests to `ccc-server` (8789) and optionally to SquirrelChat (8793,
 
 ## 13. Deploy and Maintenance
 
+### Operator Control (any machine)
+
+Any machine with internet access and `~/.ccc/.env` credentials can control and deploy changes to the fleet — macOS, Linux, or WSL2. No special access beyond the hub token is required.
+
+**One-time setup:**
+```bash
+make deps    # installs mc (MinIO client), gh, jq for your platform
+make env     # creates ~/.ccc/.env from template; fill in CCC_URL + CCC_AGENT_TOKEN
+```
+
+**Deploying changes:**
+```bash
+git push && bash deploy/fleet-sync.sh
+# or equivalently:
+make sync
+```
+
+`fleet-sync.sh` / `make sync`:
+1. Mirrors `~/.ccc/workspace/` → MinIO (`agents/shared/workspace/`) via `mc mirror` — workspace is in agentfs and accessible to agents via `mc` without git
+2. Checks `/bus/presence` to show which agents are currently online
+3. Broadcasts `rcc.update` to ClawBus — agents running `bus-listener.sh` run `agent-pull.sh` within seconds
+
+Agents without `bus-listener.sh` running fall back to the 10-minute pull timer.
+
+**`make deps` platform support:**
+
+| Platform | mc install method | gh/jq install |
+|---|---|---|
+| macOS | `brew install minio/stable/mc` | `brew install gh jq` |
+| Ubuntu/Debian/WSL2 | Binary from `dl.min.io` | apt + GitHub CLI repo |
+| RHEL/Rocky/Fedora | Binary from `dl.min.io` | dnf + GitHub CLI repo |
+
 ### Continuous Pull (agent-pull.sh)
 
 Runs every 10 minutes via cron on all nodes. Steps:
@@ -422,6 +455,10 @@ Runs every 10 minutes via cron on all nodes. Steps:
 3. `npm install` if `package.json` changed
 4. Sync secrets from hub via `secrets-sync.sh`
 5. Post heartbeat to hub with current git revision and hardware info
+
+### ClawBus Listener (bus-listener.sh)
+
+Long-lived daemon registered by `bootstrap.sh` as `ccc-bus-listener` under supervisord. Subscribes to `GET /bus/stream` (SSE). On `rcc.update` runs `agent-pull.sh` immediately — eliminates the 10-minute polling gap for triggered deploys. Log: `~/.ccc/logs/bus-listener.log`.
 
 ### Memory Commit (memory-git-commit.sh)
 
@@ -461,10 +498,12 @@ One-command onboarding for new agent nodes:
 6. Configure vLLM if a GPU is detected (`nvidia-smi`)
 7. Write `~/.hermes/config.yaml` with `CCC_URL`, `CCC_AGENT_TOKEN`, `AGENT_NAME`, and channel tokens
 8. Register `hermes-gateway` with supervisord (conf.d preferred; falls back to monolithic conf or warns)
-9. Clone `addyosmani/agent-skills` to `~/.ccc/agent-skills` (or pull to update); install all 20+ skills into `~/.hermes/skills/`
-10. Install `ccc-node` skill into `~/.hermes/skills/`
-11. Collect hardware fingerprint, post heartbeat and capabilities to hub
-12. Write `~/.ccc/agent.json` (onboarding signature with version and timestamp)
+9. Register `ccc-bus-listener` with supervisord (runs `bus-listener.sh`; nohup fallback if no supervisord)
+10. Clone `addyosmani/agent-skills` to `~/.ccc/agent-skills` (or pull to update); install all 20+ skills into `~/.hermes/skills/`
+11. Clone `obra/superpowers` to `~/.ccc/superpowers` (or pull to update); install 13 orchestration skills into `~/.hermes/skills/`
+12. Install `ccc-node` skill into `~/.hermes/skills/`
+13. Collect hardware fingerprint, post heartbeat and capabilities to hub
+14. Write `~/.ccc/agent.json` (onboarding signature with version and timestamp)
 
 ### setup-node.sh
 

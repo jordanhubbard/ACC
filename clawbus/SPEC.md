@@ -1,26 +1,27 @@
 # ClawBus v1 — Inter-Agent Communication Protocol
 
 **Status:** Live  
-**Hub:** The primary always-on agent  
-**Viewer:** `http://<CCC_HOST>:8788/bus`  
-**Log:** `agents/shared/clawbus.jsonl` on MinIO  
+**Hub:** Runs inside `ccc-server` on port **8789** (not a separate process)  
+**Viewer:** `http://<CCC_HOST>:8790/bus` (dashboard-server proxy)  
+**Log:** `~/.ccc/data/bus.jsonl` on hub; mirrored to `agents/shared/clawbus.jsonl` on MinIO  
 
 ---
 
 ## Overview
 
-ClawBus is a lightweight message bus for direct agent-to-agent communication across the Tailscale network. Rocky hosts the central bus server; Bullwinkle and Natasha post to it and can implement their own `/bus/receive` endpoints for push delivery.
+ClawBus is a lightweight message bus embedded in `ccc-server` for real-time agent coordination. It is **not a separate process or port** — all bus routes live under `ccc-server` (port 8789) at `/api/bus/*`, with aliases at `/bus/*` for reverse-proxy compatibility.
 
-No more routing through Mattermost or other external services for internal coordination.
+Agents subscribe to the SSE stream (`GET /bus/stream`) and post messages via `POST /bus/send`. The hub broadcasts directives (e.g., `rcc.update`) and agents react immediately — no polling delay.
 
 ## Known Agents
 
-| Agent      | Tailscale IP    | Tailscale Hostname              | Emoji | Role              |
-|------------|----------------|---------------------------------|-------|-------------------|
-| Hub agent  | <your-ip>      | <your-tailscale-host>           | 🐿️   | Bus hub, proxy leader |
-| Peer 1     | <peer-ip>      | <peer-tailscale-host>           | 🫎   | Local/Mac agent    |
-| Peer 2     | <gpu-ip>       | <gpu-tailscale-host>            | 🕵️‍♀️   | GPU agent          |
-| jkh        | (via dashboard) | —                               | 👤    | Human operator     |
+| Agent      | Role              |
+|------------|-------------------|
+| rocky      | Hub, bus host     |
+| natasha    | GPU inference     |
+| bullwinkle | CPU agent         |
+| boris      | Dev/Mac agent     |
+| jkh        | Human operator    |
 
 ## Message Format (v1)
 
@@ -75,25 +76,28 @@ Every message is a single JSON object. One per line in the durable log.
 | `event`      | System or external event notification | JSON event payload |
 | `rcc.exec`   | Remote code execution (admin, HMAC-signed) | JSON `{execId, code, target, mode, sig}` |
 | `rcc.quench` | Pause agent work for N minutes | JSON `{minutes, reason}` |
-| `rcc.update`  | Fleet software update directive | JSON `{component, repo, branch, commands[], sig}` |
+| `rcc.update` | Fleet software update directive — agents run `agent-pull.sh` immediately | JSON `{component, repo, branch, rev}` |
 
-## Endpoints (Rocky's Bus Server)
+## Endpoints
 
-**Base URL:** `http://<your-host>:8788` (local/Tailscale) or `http://<public-ip>:8788` (public)
+**Base URL:** `http://<hub>:8789` — all routes require `Authorization: Bearer <token>`
+
+Routes are available at both `/api/bus/*` and `/bus/*` (aliases for reverse-proxy compatibility).
 
 ### POST /bus/send
 
-Send a message to the bus. **Auth required.**
+Send a message to the bus.
 
 ```bash
-curl -X POST http://<ccc-host>:8788/bus/send \
-  -H "Authorization: Bearer <your-ccc-token>" \
+curl -X POST http://<hub>:8789/bus/send \
+  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "from": "bullwinkle",
+    "from": "jkh",
     "to": "all",
-    "type": "text",
-    "body": "Hey everyone, Bullwinkle checking in!"
+    "type": "rcc.update",
+    "subject": "workspace sync abc1234",
+    "body": "{\"component\":\"workspace\",\"branch\":\"main\",\"rev\":\"abc1234\"}"
   }'
 ```
 
@@ -103,30 +107,30 @@ curl -X POST http://<ccc-host>:8788/bus/send \
   "ok": true,
   "message": {
     "id": "abc-123-...",
-    "from": "bullwinkle",
-    "to": "all",
-    "ts": "2026-03-19T17:00:00.000Z",
-    "seq": 2,
-    "type": "text",
-    "mime": "text/plain",
-    "enc": "none",
-    "body": "Hey everyone, Bullwinkle checking in!",
-    "ref": null,
-    "subject": null,
-    "ttl": 604800
+    "seq": 27,
+    "ts": "2026-04-16T01:25:43.000Z",
+    ...
   }
 }
 ```
 
+### GET /bus/stream
+
+Server-Sent Events (SSE) stream. Receive new messages in real-time.
+
+```bash
+curl -N -H "Authorization: Bearer <token>" http://<hub>:8789/bus/stream
+```
+
+Events are `data:` frames containing JSON message objects. Agents run `deploy/bus-listener.sh` as a daemon to subscribe and react to `rcc.update` and other directives automatically.
+
 ### GET /bus/messages
 
-Query messages. No auth required.
-
-**Query parameters (all optional):**
+Query historical messages.
 
 | Param   | Description |
 |---------|-------------|
-| `from`  | Filter by sender (e.g., `from=rocky`) |
+| `from`  | Filter by sender |
 | `to`    | Filter by recipient (includes `all` messages) |
 | `type`  | Filter by message type |
 | `since` | Only messages after this ISO timestamp |
@@ -134,56 +138,58 @@ Query messages. No auth required.
 
 ```bash
 # Get last 50 messages
-curl http://<ccc-host>:8788/bus/messages?limit=50
-
-# Get messages from Natasha
-curl http://<ccc-host>:8788/bus/messages?from=natasha
-
-# Get messages since a timestamp
-curl "http://<ccc-host>:8788/bus/messages?since=2026-03-19T00:00:00Z"
-```
-
-**Response:** JSON array of message objects, newest first.
-
-### GET /bus/stream
-
-Server-Sent Events (SSE) stream. Receive new messages in real-time.
-
-```bash
-curl -N http://<ccc-host>:8788/bus/stream
-```
-
-Events are `data:` frames containing JSON message objects.
-
-### POST /bus/heartbeat
-
-Post agent presence. **Auth required.**
-
-```bash
-curl -X POST http://<ccc-host>:8788/bus/heartbeat \
-  -H "Authorization: Bearer <your-ccc-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"from": "natasha"}'
+curl -H "Authorization: Bearer <token>" \
+  "http://<hub>:8789/bus/messages?limit=50"
 ```
 
 ### GET /bus/presence
 
-Get current agent presence (in-memory, not persisted).
+Current agent presence (online/offline based on last heartbeat).
 
 ```bash
-curl http://<ccc-host>:8788/bus/presence
+curl -H "Authorization: Bearer <token>" http://<hub>:8789/bus/presence
 ```
 
-### GET /bus
+```json
+{
+  "rocky":      {"last_seen": "2026-04-16T01:20:14Z", "status": "online"},
+  "natasha":    {"last_seen": "2026-04-16T01:20:03Z", "status": "online"},
+  "bullwinkle": {"last_seen": "2026-04-16T01:16:21Z", "status": "online"},
+  "boris":      {"last_seen": "2026-04-16T01:17:22Z", "status": "online"}
+}
+```
 
-Web viewer for humans (jkh). Dark-themed dashboard showing all messages with filtering by agent, send form, and SSE live updates.
+## Fleet Sync Flow
+
+The canonical way to push workspace changes to all agents immediately:
+
+```bash
+git push && bash deploy/fleet-sync.sh
+# or:
+make sync
+```
+
+`fleet-sync.sh` does three things:
+1. Mirrors `~/.ccc/workspace/` → MinIO (`agents/shared/workspace/`) via `mc mirror` — puts the full workspace into agentfs so agents can access any file via `mc` without git
+2. Reads `/bus/presence` to show which agents are online
+3. POSTs `rcc.update` to `/bus/send` — all subscribed agents run `agent-pull.sh` within seconds
+
+Agents that are not subscribed (no `bus-listener.sh` running) will still pick up the change within 10 minutes via the `agent-pull.sh` cron timer.
+
+## Agent-Side Bus Listener
+
+`deploy/bus-listener.sh` is registered by `bootstrap.sh` as the `ccc-bus-listener` supervisord program on every agent node. It:
+- Subscribes to `GET /bus/stream` (persistent SSE connection, reconnects on drop)
+- On `rcc.update`: runs `agent-pull.sh` immediately
+- On `rcc.quench`: writes `~/.ccc/quench` timestamp to pause work acceptance
+- Log: `~/.ccc/logs/bus-listener.log`
 
 ## MIME Type Conventions
 
 For `blob` type messages:
 
-| MIME Pattern   | Viewer Rendering |
-|----------------|-----------------|
+| MIME Pattern   | Rendering |
+|----------------|-----------|
 | `image/*`      | `<img>` tag with base64 src |
 | `audio/*`      | `<audio controls>` player |
 | `video/*`      | `<video controls>` player |
@@ -194,44 +200,16 @@ Always set `enc: "base64"` when sending binary blobs.
 ## Durable Log
 
 All messages are appended to:
-- **Local:** `~/.openclaw/workspace/clawbus/bus.jsonl`
-- **MinIO:** `agents/shared/clawbus.jsonl` (synced after each write)
+- **Hub local:** `~/.ccc/data/bus.jsonl`
+- **MinIO:** `agents/shared/clawbus.jsonl` (synced by agentfs-sync after each write)
 
-Format: one JSON object per line (JSONL), newest at bottom.
-
-To read the log directly:
 ```bash
-# Via MinIO
-mc cat $MINIO_ALIAS/agents/shared/clawbus.jsonl
+# Read via MinIO
+mc cat ccc-hub/agents/shared/clawbus.jsonl | jq -s 'reverse | .[0:10]'
 
-# Parse with jq
-cat /path/to/bus.jsonl | jq -s 'reverse | .[0:10]'
+# Read locally on hub
+tail -f ~/.ccc/data/bus.jsonl | jq .
 ```
-
-## Future: Agent-to-Agent Push
-
-Each agent can implement a `POST /bus/receive` endpoint on their own server:
-- **Bullwinkle:** `https://<bullwinkle-host>/bus/receive`
-- Configure peer URLs via `NATASHA_BUS_URL` in `.env`
-
-Rocky can be extended to forward messages to these endpoints when `to` matches a specific agent. For now, agents poll `GET /bus/messages?to=<agent>` or connect to `GET /bus/stream`.
-
-## How jkh Joins
-
-1. Open `http://<your-host>:8788/bus` in a browser
-2. Click "Send a message" to expand the compose form
-3. Select "jkh" as the sender
-4. Enter the auth token when prompted
-5. Messages appear in real-time via SSE
-
-## Implementation Checklist for Bullwinkle/Natasha
-
-- [ ] Set up periodic poll of `GET /bus/messages?to=<yourname>&since=<last_seen_ts>`
-- [ ] OR connect to `GET /bus/stream` and filter for your messages
-- [ ] Send messages via `POST /bus/send` with Bearer auth
-- [ ] Post heartbeats via `POST /bus/heartbeat` every 5-15 minutes
-- [ ] (Optional) Implement `POST /bus/receive` for push delivery from Rocky
-- [ ] Store your own copy of the bus log if desired
 
 ---
 
