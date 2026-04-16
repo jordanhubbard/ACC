@@ -133,6 +133,7 @@ process_stream() {
     fi
   done < <(curl -sSN --max-time 3600 \
     -H "Accept: text/event-stream" \
+    -H "Authorization: Bearer ${CCC_AGENT_TOKEN:-}" \
     "${stream_url}" 2>>"$LOG_FILE")
 }
 

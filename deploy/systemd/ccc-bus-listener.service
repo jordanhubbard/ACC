@@ -1,0 +1,18 @@
+[Unit]
+Description=CCC Bus Listener (ClawBus SSE daemon)
+Documentation=https://github.com/jordanhubbard/CCC
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=AGENT_USER
+EnvironmentFile=-AGENT_HOME/.ccc/.env
+ExecStart=/bin/bash AGENT_HOME/.ccc/workspace/deploy/bus-listener.sh
+Restart=always
+RestartSec=5s
+StandardOutput=append:AGENT_HOME/.ccc/logs/bus-listener.log
+StandardError=append:AGENT_HOME/.ccc/logs/bus-listener.log
+
+[Install]
+WantedBy=multi-user.target
