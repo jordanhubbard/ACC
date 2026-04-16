@@ -59,6 +59,10 @@ CCC_URL="${CCC_URL:-}"
 CCC_AGENT_TOKEN="${CCC_AGENT_TOKEN:-}"
 AGENT_NAME="${AGENT_NAME:-jkh}"
 MINIO_ALIAS="${MINIO_ALIAS:-ccc-hub}"
+# ClawFS S3 gateway (port 9100) — externally accessible from any agent or operator machine.
+# MinIO (port 9000) is localhost-only on the hub.
+CLAWFS_BUCKET="${CLAWFS_BUCKET:-clawfs}"
+CLAWFS_REPO_PATH="${CLAWFS_REPO_PATH:-repos/CCC}"
 
 # CLI flags override .env
 [[ -n "$CCC_URL_ARG"   ]] && CCC_URL="$CCC_URL_ARG"
@@ -102,32 +106,58 @@ echo ""
 
 # ── Step 1: MinIO mirror ───────────────────────────────────────────────────────
 if [[ "$SKIP_MIRROR" == false ]]; then
-  info "Mirroring workspace → MinIO (agentfs)..."
-  MIRROR_SRC="${WORKSPACE}/"
-  MIRROR_DST="${MINIO_ALIAS}/agents/shared/workspace/"
+  info "Mirroring workspace → ClawFS (agentfs)..."
+  MIRROR_SRC="${GIT_REPO}/"
+  # ClawFS S3 gateway (port 9100) — externally accessible. Path mirrors the on-disk layout
+  # at /home/jkh/clawfs/repos/CCC on the hub. No --remove: ClawFS may contain built
+  # artifacts and compiled binaries not tracked in git.
+  MIRROR_DST="${MINIO_ALIAS}/${CLAWFS_BUCKET}/${CLAWFS_REPO_PATH}/"
 
   if command -v mc &>/dev/null; then
-    # Verify alias is reachable
+    # Auto-configure alias from hub secrets if not yet set
+    if ! mc ls "${MINIO_ALIAS}" > /dev/null 2>&1; then
+      info "mc alias '${MINIO_ALIAS}' not set — fetching credentials from hub..."
+      _hub_base="${CCC_URL%:*}"  # strip port, keep scheme+host
+      _clawfs_url="${_hub_base}:9100"
+      _ak=$(curl -sf -H "Authorization: Bearer ${CCC_AGENT_TOKEN}" \
+        "${CCC_URL}/api/secrets/agentfs%2Faccess_key" 2>/dev/null | \
+        python3 -c "import json,sys; print(json.load(sys.stdin).get('value',''))" 2>/dev/null || echo "")
+      _sk=$(curl -sf -H "Authorization: Bearer ${CCC_AGENT_TOKEN}" \
+        "${CCC_URL}/api/secrets/agentfs%2Fsecret_key" 2>/dev/null | \
+        python3 -c "import json,sys; print(json.load(sys.stdin).get('value',''))" 2>/dev/null || echo "")
+      if [[ -n "$_ak" && -n "$_sk" ]]; then
+        mc alias set "${MINIO_ALIAS}" "${_clawfs_url}" "${_ak}" "${_sk}" > /dev/null 2>&1
+        success "mc alias '${MINIO_ALIAS}' configured (${_clawfs_url})"
+        # Persist to .env for next run
+        _env_file="${CCC_DIR}/.env"
+        if [[ -f "$_env_file" ]]; then
+          sed -i.bak "/^MINIO_ALIAS=/d; /^CLAWFS_URL=/d" "$_env_file" 2>/dev/null || true
+          printf 'MINIO_ALIAS=%s\nCLAWFS_URL=%s\n' "${MINIO_ALIAS}" "${_clawfs_url}" >> "$_env_file"
+          rm -f "${_env_file}.bak"
+        fi
+      else
+        warn "Could not fetch agentfs credentials from hub — skipping mirror"
+        warn "  Set mc alias manually: mc alias set ${MINIO_ALIAS} http://<hub>:9100 <ak> <sk>"
+      fi
+    fi
+
     if mc ls "${MINIO_ALIAS}" > /dev/null 2>&1; then
       if [[ "$DRY_RUN" == true ]]; then
         dry "Would run: mc mirror --overwrite \"${MIRROR_SRC}\" \"${MIRROR_DST}\""
       else
-        mc mirror --overwrite --remove \
+        mc mirror --overwrite \
           --exclude ".git/*" \
           --exclude "node_modules/*" \
           --exclude "*.log" \
           "${MIRROR_SRC}" "${MIRROR_DST}" 2>&1 | tail -5
-        success "Workspace mirrored to MinIO: ${MIRROR_DST}"
+        success "Workspace mirrored to ClawFS: ${MIRROR_DST}"
       fi
-    else
-      warn "MinIO alias '${MINIO_ALIAS}' not reachable — skipping mirror"
-      warn "  Run: mc alias set ${MINIO_ALIAS} http://<hub>:9100 <access-key> <secret-key>"
     fi
   else
-    warn "mc not found — skipping MinIO mirror (install with: curl ... | bash)"
+    warn "mc not found — skipping mirror (run: make deps)"
   fi
 else
-  info "MinIO mirror skipped (--skip-mirror)"
+  info "ClawFS mirror skipped (--skip-mirror)"
 fi
 
 # ── Step 2: Show online agents from ClawBus presence ─────────────────────────
@@ -198,6 +228,6 @@ echo ""
 echo "  Agents subscribed to ClawBus will pull immediately."
 echo "  Others will pick it up within 10 minutes via ccc-agent-pull timer."
 echo ""
-echo "  Workspace available via MinIO at:"
-echo "    mc ls ${MINIO_ALIAS}/agents/shared/workspace/"
+echo "  Workspace available via ClawFS at:"
+echo "    mc ls ${MINIO_ALIAS}/${CLAWFS_BUCKET}/${CLAWFS_REPO_PATH}/"
 echo ""
