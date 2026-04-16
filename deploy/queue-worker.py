@@ -13,6 +13,7 @@ Systemd:          ExecStart=/usr/bin/python3 AGENT_HOME/.ccc/workspace/deploy/qu
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -23,6 +24,12 @@ from pathlib import Path
 # ── Configuration ────────────────────────────────────────────────────────────
 
 CCC_DIR = Path(os.environ.get("HOME", "/home")) / ".ccc"
+
+# Ensure ~/.local/bin is in PATH so `claude` is findable when invoked by
+# systemd/supervisord/launchd which don't load the user's shell profile.
+_home_local_bin = str(Path(os.environ.get("HOME", "/home")) / ".local" / "bin")
+if _home_local_bin not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _home_local_bin + ":" + os.environ.get("PATH", "/usr/bin:/bin")
 ENV_FILE = CCC_DIR / ".env"
 LOG_FILE = CCC_DIR / "logs" / "queue-worker.log"
 QUENCH_FILE = CCC_DIR / "quench"
@@ -234,9 +241,11 @@ def run_claude(prompt: str, item_id: str) -> tuple[str, int]:
     ka_thread = threading.Thread(target=keepalive_loop, daemon=True)
     ka_thread.start()
 
+    claude_bin = shutil.which("claude") or "claude"
+
     try:
         result = subprocess.run(
-            ["claude", "-p", prompt],
+            [claude_bin, "-p", prompt],
             capture_output=True,
             text=True,
             timeout=CLAUDE_TIMEOUT,
