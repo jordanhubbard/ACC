@@ -224,7 +224,13 @@ fn handle_quench(cfg: &Config, msg: &BusMessage) {
 }
 
 async fn handle_exec(cfg: &Config, client: &Client, msg: &BusMessage, _raw: &str) {
-    let body = msg.body.as_ref();
+    // body may be a JSON object OR a JSON-encoded string (exec.rs sends envelope.to_string())
+    let body_owned: Value = match msg.body.as_ref() {
+        Some(Value::String(s)) => serde_json::from_str(s).unwrap_or(Value::Null),
+        Some(v) => v.clone(),
+        None => Value::Null,
+    };
+    let body = Some(&body_owned);
     let exec_id = str_field(&Some(body.cloned().unwrap_or(Value::Null)), "execId")
         .or_else(|| str_field(&Some(body.cloned().unwrap_or(Value::Null)), "id"))
         .unwrap_or_default();
