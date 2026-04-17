@@ -141,6 +141,12 @@ def _find_hermes() -> str:
     raise FileNotFoundError("hermes CLI not found — install hermes-agent first")
 
 
+def _hermes_uses_subcommands(hermes_bin: str) -> bool:
+    """Return True if this hermes build uses 'hermes chat' subcommand style (v0.9+)."""
+    r = subprocess.run([hermes_bin, "chat", "--help"], capture_output=True, text=True, timeout=5)
+    return r.returncode == 0
+
+
 def _run_hermes(
     query: str | None = None,
     session_id: str | None = None,
@@ -154,13 +160,25 @@ def _run_hermes(
     new_session_id may differ from session_id if compression rotated it.
     """
     hermes = _find_hermes()
-    cmd = [hermes, "--max-iterations", str(max_iterations), "--quiet"]
-    if session_id:
-        cmd += ["--resume", session_id]
-    elif query:
-        cmd += ["--query", query]
+
+    # v0.9+ uses subcommands: hermes chat -q "..." -Q --max-turns N
+    # Older builds use top-level flags: hermes --query "..." --quiet --max-iterations N
+    if _hermes_uses_subcommands(hermes):
+        cmd = [hermes, "chat", "--max-turns", str(max_iterations), "-Q"]
+        if session_id:
+            cmd += ["--resume", session_id]
+        elif query:
+            cmd += ["-q", query]
+        else:
+            raise ValueError("Either query or session_id required")
     else:
-        raise ValueError("Either query or session_id required")
+        cmd = [hermes, "--max-iterations", str(max_iterations), "--quiet"]
+        if session_id:
+            cmd += ["--resume", session_id]
+        elif query:
+            cmd += ["--query", query]
+        else:
+            raise ValueError("Either query or session_id required")
 
     env = {**os.environ}
     if item_id:
