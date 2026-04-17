@@ -88,6 +88,21 @@ bd close <id>         # Complete work
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
+### Two-Tier Task Convention
+
+CCC uses **two complementary task systems**:
+
+| System | Purpose | Examples |
+|--------|---------|---------|
+| **Beads (`.beads/`)** | CCC development backlog — code changes, bugs, features, doc updates | `CCC-c49`, `CCC-3so` |
+| **CCC fleet queue (`/api/queue`)** | Operational fleet tasks — deployments, migrations, agent health, directives | `wq-API-…` |
+
+**Use Beads when**: the work involves editing files in this repo, fixing a bug in the codebase, or tracking a design decision.
+
+**Use the fleet queue when**: the work requires a running agent (hermes/claude), targets a remote machine, or is an operational action (restart, rotate tokens, deploy script).
+
+A fleet queue task that produces a PR should reference or close the corresponding Beads issue.
+
 ## Session Completion
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
