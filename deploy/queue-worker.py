@@ -82,6 +82,39 @@ if not AGENT_NAME or not CCC_URL or not CCC_AGENT_TOKEN:
     sys.exit(1)
 
 
+# ── Capability detection ──────────────────────────────────────────────────────
+
+def _detect_capabilities() -> frozenset[str]:
+    """
+    Return the set of executor types this agent can handle.
+    Checked against task required_executors (hard filter) at claim time.
+
+    Override by setting AGENT_CAPABILITIES=claude_cli,gpu,... in ~/.ccc/.env.
+    """
+    from_env = os.environ.get("AGENT_CAPABILITIES", "")
+    if from_env:
+        return frozenset(c.strip() for c in from_env.split(",") if c.strip())
+
+    caps: set[str] = set()
+    if shutil.which("claude"):
+        caps.add("claude_cli")
+        caps.add("claude_sdk")
+    if shutil.which("hermes"):
+        caps.add("hermes")
+    if os.environ.get("NVIDIA_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"):
+        caps.add("inference_key")
+    # GPU: nvidia driver or AMD ROCm present
+    if (
+        Path("/proc/driver/nvidia").exists()
+        or shutil.which("nvidia-smi")
+        or Path("/dev/kfd").exists()   # AMD ROCm
+    ):
+        caps.add("gpu")
+    return frozenset(caps)
+
+AGENT_CAPABILITIES = _detect_capabilities()
+
+
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
 
 def _curl(method: str, path: str, body: dict | None = None) -> dict | None:
@@ -148,13 +181,6 @@ def post_comment(item_id: str, text: str) -> None:
     _curl("POST", f"/api/item/{item_id}/comment", {
         "text": text[:2000], "author": AGENT_NAME,
     })
-
-
-def check_best_agent(executor_hint: str) -> str | None:
-    resp = _curl("GET", f"/api/agents/best?task={executor_hint}")
-    if resp:
-        return resp.get("agent") or resp.get("name")
-    return None
 
 
 # ── Quench check ─────────────────────────────────────────────────────────────
@@ -623,22 +649,38 @@ def run_hermes(
 # ── Item selector ─────────────────────────────────────────────────────────────
 
 def select_item(items: list[dict]) -> dict | None:
+    """
+    Fan-out model: every worker races to claim every eligible task.
+    Eligibility rules (in order):
+      1. Status must be pending.
+      2. Skip tasks reserved for a human (assignee == "jkh").
+      3. Skip tasks explicitly assigned to a *different* named agent.
+         Tasks with assignee in ("", "all") are open to everyone.
+      4. If required_executors is set, this agent must support at least one.
+         (Hard hardware filter — e.g. gpu, hermes. Unusual in practice.)
+      5. preferred_executor is advisory only — no filtering.
+    Workers race; /api/item/:id/claim is atomic — only one succeeds.
+    """
     priority_order = {"urgent": 0, "high": 1, "normal": 2, "medium": 2, "low": 3, "idea": 99}
     candidates = []
     for item in items:
         if item.get("status") != "pending":
             continue
+
         assignee = item.get("assignee", "")
+        # Skip human-reserved tasks
         if assignee == "jkh":
             continue
-        if assignee not in (AGENT_NAME, "all", ""):
+        # Skip tasks pinned to a different specific agent
+        if assignee and assignee not in (AGENT_NAME, "all"):
             continue
-        if assignee == "all":
-            executor = item.get("preferred_executor") or (item.get("tags") or [""])[0]
-            best = check_best_agent(executor)
-            if best and best != AGENT_NAME:
-                log.debug(f"Skipping {item['id']} (best agent is {best})")
-                continue
+
+        # Hard capability gate: required_executors must intersect our capabilities
+        required = set(item.get("required_executors") or [])
+        if required and not (required & AGENT_CAPABILITIES):
+            log.debug(f"Skipping {item['id']} — requires {required}, have {AGENT_CAPABILITIES}")
+            continue
+
         candidates.append(item)
 
     if not candidates:
@@ -655,6 +697,7 @@ def select_item(items: list[dict]) -> dict | None:
 
 def main() -> None:
     log.info(f"Starting queue-worker (agent={AGENT_NAME}, hub={CCC_URL})")
+    log.info(f"Capabilities: {sorted(AGENT_CAPABILITIES) or ['(none detected — set AGENT_CAPABILITIES in .env)']}")
     post_heartbeat("queue-worker starting")
     instructions  = load_agent_instructions()
     poll_interval = POLL_INTERVAL_IDLE
