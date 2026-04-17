@@ -7,7 +7,6 @@
 #   acc.exec    → execute shell code and post result to /api/exec/{id}/result
 #                 (replaces the broken ccc-agent listen binary which has a reqwest
 #                 zero-timeout bug that causes immediate connection close)
-#   rcc.update / rcc.quench / rcc.exec → backward compat during fleet migration
 #
 # Designed to run as a long-lived daemon under supervisord or systemd.
 # Reconnects automatically on disconnect or error.
@@ -253,14 +252,9 @@ process_stream() {
       # Only handle messages directed to us or broadcast
       if [[ "$msg_to" == "all" || "$msg_to" == "$AGENT_NAME" ]]; then
         case "$msg_type" in
-          # ACC message types (new)
           acc.update) handle_acc_update "$msg_body" ;;
           acc.quench) handle_acc_quench "$msg_body" ;;
           acc.exec)   handle_acc_exec   "$data_buf" ;;
-          # RCC message types (backward compat — kept during fleet migration)
-          rcc.update) handle_acc_update "$msg_body" ;;
-          rcc.quench) handle_acc_quench "$msg_body" ;;
-          rcc.exec)   handle_acc_exec   "$data_buf" ;;
           ping)
             log "ping received from $(_json_field "$data_buf" "from")"
             ;;
