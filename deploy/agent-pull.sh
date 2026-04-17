@@ -122,7 +122,7 @@ else
 
   # Rebuild acc-agent if its source changed and this node runs it
   if echo "$CHANGED" | grep -q "^agent/"; then
-    if command -v systemctl &>/dev/null && systemctl is-active --quiet acc-agent.service 2>/dev/null; then
+    if command -v systemctl &>/dev/null && (systemctl is-active --quiet acc-bus-listener.service 2>/dev/null || systemctl is-active --quiet acc-queue-worker.service 2>/dev/null); then
       log "acc-agent source changed — rebuilding from local disk..."
       export PATH="${HOME}/.cargo/bin:${PATH}"
       if command -v cargo &>/dev/null; then
@@ -138,8 +138,8 @@ else
             INSTALL_DIR="${HOME}/.acc/bin"
             mkdir -p "$INSTALL_DIR"
             if install -m 755 "$BUILT" "${INSTALL_DIR}/acc-agent"; then
-              sudo systemctl restart acc-agent.service && log "acc-agent rebuilt and restarted" \
-                || log "WARNING: acc-agent restart failed"
+              sudo systemctl restart acc-bus-listener.service acc-queue-worker.service acc-nvidia-proxy.service 2>/dev/null || true
+              log "acc-agent rebuilt and services restarted"
             else
               log "WARNING: acc-agent install failed"
             fi
