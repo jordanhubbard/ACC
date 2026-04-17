@@ -129,7 +129,11 @@ rcc/dashboard/data/
 __pycache__/
 skills/agent-skills/
 skills/superpowers/
-ccc/
+
+# Dashboard / ClawChat WASM build outputs (source lives on hub, not in this repo)
+dashboard/
+clawchat/
+clawfs-sync/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
