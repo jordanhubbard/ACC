@@ -295,10 +295,8 @@ seed_hermes_memory() {
 Clone these on any new command node without waiting to be asked:
 - ~/Src/CCC       — core fleet repo (already present)
 - ~/Src/tokenhub  — required: LLM router and secret store
-- ~/Src/nanolang  — dev nodes only
-- ~/Src/agentos   — dev nodes only
 
-Minimum viable command node (no GPU, no dev): CCC + tokenhub.
+Minimum viable command node: CCC + tokenhub.
 
 ## Beliefs
 

@@ -168,17 +168,13 @@ Core infrastructure is operational. The "immediate next steps" from March have s
 - ✅ **.ccc/brain/`** — LLM queue + retry engine live; fallback chain: Claude Sonnet → Llama 70B → Nemotron
 - ✅ **.ccc/wasm-dashboard/`** — Full Leptos WASM dashboard with 10 tabs (Kanban, AgentBus, Audit, Profiler, etc.)
 - ✅ **.ccc/api/routes/`** — Monolithic `index.mjs` split into domain route modules
-- ✅ **nanolang** — Full compiled language with 5 backends, LSP, formatter, playground
-- ✅ **agentOS** — seL4/Microkit RTOS for WASM agent slots (cap broker, OOM killer, snapshot sched, profiler)
 - ✅ **tokenhub** — LLM gateway (Go, OpenAI-compat, rate limiting, circuit breakers)
 
 ## Active Work Areas
 
 1. **.ccc/brain/` edge cases** — All-models-degraded recovery, partial state replay under failure
-2. **agentOS WASM runtime** — Live migration of WASM slots between sparky and Boris
-3. **nanolang stdlib** — Complete stdlib coverage; bench suite vs reference programs
-4. **AgentChat** — Agent communication hub (Leptos WASM SPA, served at /clawchat/)
-5. **Fleet expansion** — New nodes join via `rocky register`; auto-provision from topology
+2. **AgentChat** — Agent communication hub (Leptos WASM SPA, served at /clawchat/)
+3. **Fleet expansion** — New nodes join via `rocky register`; auto-provision from topology
 
 ---
 

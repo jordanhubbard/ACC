@@ -266,10 +266,8 @@ State is stored as JSON files in `~/.ccc/data/` on the hub:
 | Repo | Location | Purpose |
 |------|----------|---------|
 | `tokenhub` | `~/Src/tokenhub` | LLM routing gateway — must run before agents do inference |
-| `nanolang` | `~/Src/nanolang` | Compiled systems language |
-| `agentos` | `~/Src/agentos` | seL4 RTOS for WASM agent slots |
 
-Minimal setup (no GPU, no WASM): CCC + tokenhub only.
+Minimal setup: CCC + tokenhub only.
 
 ---
 

@@ -13,12 +13,10 @@ CCC spans multiple repos. On any new command node, clone them **without waiting 
 ```bash
 git clone https://github.com/jordanhubbard/CCC      ~/Src/CCC
 git clone https://github.com/jordanhubbard/tokenhub  ~/Src/tokenhub
-git clone https://github.com/jordanhubbard/nanolang  ~/Src/nanolang
-git clone https://github.com/jordanhubbard/agentos   ~/Src/agentos
 ```
 
-Minimum for a command node (no GPU, no dev): `CCC` + `tokenhub`.
-Full dev node (Natasha/Bullwinkle): all four.
+Minimum for a command node (no GPU): `CCC` + `tokenhub`.
+Full dev node (Natasha/Bullwinkle): same — CCC + tokenhub.
 
 The human should only need to hand you `CCC_URL` and `CCC_AGENT_TOKEN`. Everything else you figure out.
 
