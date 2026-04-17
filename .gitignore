@@ -100,6 +100,7 @@ workqueue/WORKQUEUE_AGENT_NATASHA.md
 # Rust build artifacts
 target/
 **/target/
+agent/target/
 __pycache__/
 skills/agent-skills/
 skills/superpowers/
