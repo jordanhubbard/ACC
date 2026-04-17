@@ -110,6 +110,9 @@ dashboard/
 clawchat/
 clawfs-sync/
 
+# ccc-server build artifacts (source now tracked in ccc-server/)
+ccc-server/target/
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
