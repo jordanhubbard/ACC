@@ -15,6 +15,16 @@ BOOTSTRAP.md
 .env
 !deploy/.env.template
 
+# Per-instance agent configs (contain private IPs, hostnames, hardware details)
+# These live on each agent node, not in the repo
+deploy/agents/*/personality.md
+!deploy/agents/TEMPLATE/personality.md
+people/
+
+# Instance-specific onboarding docs (contain live tokens and IPs)
+onboarding/ONBOARD_*.md
+!onboarding/ONBOARD_*.md.tmpl
+
 # Generated configs (rendered from *.tmpl by make init-rcc)
 # These contain real hostnames/tokens — never commit them
 onboarding/ONBOARD_*.rendered.md
