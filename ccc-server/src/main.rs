@@ -8,7 +8,6 @@ pub mod brain;
 pub mod config;
 pub mod db;
 mod routes;
-pub mod s3;
 pub mod state;
 pub mod supervisor;
 
@@ -45,23 +44,7 @@ async fn main() {
         None
     };
 
-    // Build MinIO/S3 client
-    let s3_bucket = cfg.minio_bucket.clone();
-    let s3_client = {
-        let endpoint = cfg.minio_endpoint.clone();
-        let access_key = cfg.minio_access_key.clone();
-        let secret_key = cfg.minio_secret_key.clone();
-        match (access_key, secret_key) {
-            (Some(ak), Some(sk)) => {
-                tracing::info!("S3/MinIO client initialized (bucket={})", s3_bucket);
-                Some(Arc::new(crate::s3::MinioClient::new(&endpoint, &ak, &sk, "us-east-1")))
-            }
-            _ => {
-                tracing::warn!("MINIO_ACCESS_KEY or MINIO_SECRET_KEY not set — S3/ClawFS disabled");
-                None
-            }
-        }
-    };
+    tracing::info!("AccFS root: {}", cfg.fs_root);
 
     // Open auth DB (always-on)
     let auth_conn = match db::open_auth(&cfg.auth_db_path) {
@@ -82,6 +65,7 @@ async fn main() {
     let secrets_path_c  = cfg.secrets_path.clone();
     let projects_path_c = cfg.projects_path.clone();
     let db_path         = cfg.db_path.clone();
+    let fs_root         = cfg.fs_root.clone();
 
     let app_state = Arc::new(AppState {
         auth_tokens: cfg.auth_tokens,
@@ -100,8 +84,7 @@ async fn main() {
         bus_tx: tokio::sync::broadcast::channel(256).0,
         bus_seq: std::sync::atomic::AtomicU64::new(0),
         start_time: std::time::SystemTime::now(),
-        s3_client,
-        s3_bucket,
+        fs_root,
         supervisor: supervisor_handle,
     });
 

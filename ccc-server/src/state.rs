@@ -34,8 +34,7 @@ pub struct AppState {
     pub bus_tx: broadcast::Sender<String>,
     pub bus_seq: AtomicU64,
     pub start_time: std::time::SystemTime,
-    pub s3_client: Option<Arc<crate::s3::MinioClient>>,
-    pub s3_bucket: String,
+    pub fs_root: String,
     pub supervisor: Option<Arc<SupervisorHandle>>,
 }
 

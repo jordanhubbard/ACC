@@ -22,15 +22,14 @@ async fn get_setup_status(State(state): State<Arc<AppState>>) -> impl IntoRespon
     let first_run = state.auth_tokens.is_empty();
 
     let tokenhub_url = std::env::var("TOKENHUB_URL").unwrap_or_default();
-    let has_minio = !std::env::var("MINIO_ENDPOINT")
-        .unwrap_or_default()
-        .is_empty();
+    let fs_root = std::env::var("ACC_FS_ROOT").unwrap_or_else(|_| "/srv/accfs".to_string());
+    let has_accfs = std::path::Path::new(&fs_root).exists();
     let agent_name = std::env::var("AGENT_NAME").unwrap_or_else(|_| "ccc".to_string());
 
     Json(json!({
         "first_run": first_run,
         "has_tokenhub": !tokenhub_url.is_empty(),
-        "has_minio": has_minio,
+        "has_accfs": has_accfs,
         "agent_name": agent_name,
         "version": env!("CARGO_PKG_VERSION"),
     }))
@@ -53,8 +52,7 @@ async fn get_config(State(state): State<Arc<AppState>>, headers: HeaderMap) -> i
         "public_url":         std::env::var("CCC_HOST_PUBLIC").unwrap_or_default(),
         "tokenhub_url":       std::env::var("TOKENHUB_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string()),
         "supervisor_enabled": std::env::var("SUPERVISOR_ENABLED").unwrap_or_default() == "true",
-        "minio_endpoint":     std::env::var("MINIO_ENDPOINT").unwrap_or_default(),
-        "minio_bucket":       std::env::var("MINIO_BUCKET").unwrap_or_else(|_| "agents".to_string()),
+        "fs_root":            std::env::var("ACC_FS_ROOT").unwrap_or_else(|_| "/srv/accfs".to_string()),
         "ccc_port":           port,
         "log_level":          std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
     })).into_response()
@@ -90,8 +88,7 @@ async fn put_config(
         ("agent_name",    "AGENT_NAME"),
         ("public_url",    "CCC_HOST_PUBLIC"),
         ("tokenhub_url",  "TOKENHUB_URL"),
-        ("minio_endpoint","MINIO_ENDPOINT"),
-        ("minio_bucket",  "MINIO_BUCKET"),
+        ("fs_root",       "ACC_FS_ROOT"),
         ("log_level",     "RUST_LOG"),
     ];
 

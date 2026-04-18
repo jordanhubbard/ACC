@@ -1,8 +1,7 @@
-/// /api/fs/* — S3-backed AgentFS API
+/// /api/fs/* — Local-disk AgentFS API
 ///
-/// MinIO endpoint from MINIO_ENDPOINT env (default http://localhost:9000).
-/// Bucket from MINIO_BUCKET env (default "agents").
-use crate::s3::MinioClient;
+/// Reads/writes files under fs_root (ACC_FS_ROOT env var, default /srv/accfs).
+/// Replaces the former MinIO/S3-backed implementation.
 use crate::AppState;
 use axum::{
     extract::{Query, State},
@@ -13,6 +12,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -24,40 +24,39 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/fs/exists", head(fs_exists))
 }
 
-// ── Path validation ───────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn validate_path(path: &str, agent: Option<&str>) -> Result<(), &'static str> {
+fn fs_root(state: &AppState) -> PathBuf {
+    PathBuf::from(&state.fs_root)
+}
+
+fn validate_path(path: &str) -> Result<(), &'static str> {
     if path.is_empty() {
         return Err("path required");
     }
-    if path.contains("..") {
+    if path.contains("..") || path.starts_with('/') {
         return Err("path traversal not allowed");
     }
-    if path.starts_with("shared/") {
-        return Ok(());
+    Ok(())
+}
+
+fn resolve_full_path(root: &Path, path: &str) -> Result<PathBuf, &'static str> {
+    validate_path(path)?;
+    Ok(root.join(path))
+}
+
+fn content_type_for(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
+        Some("json") => "application/json",
+        Some("txt" | "md" | "sh" | "toml" | "yaml" | "yml") => "text/plain; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "application/javascript",
+        Some("rs" | "py" | "cpp" | "h" | "c") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
     }
-    if let Some(agent) = agent {
-        let prefix = format!("{}/", agent);
-        if path.starts_with(&prefix) {
-            return Ok(());
-        }
-    }
-    Err("path must start with 'shared/' or '{agent}/'")
 }
 
-fn s3_unavailable() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(json!({"error": "S3 not configured"})),
-    )
-        .into_response()
-}
-
-fn client(state: &AppState) -> Option<&Arc<MinioClient>> {
-    state.s3_client.as_ref()
-}
-
-// ── GET /api/fs/read?path=...&agent=... ───────────────────────────────────────
+// ── GET /api/fs/read?path=... ─────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct ReadQuery {
@@ -67,33 +66,18 @@ struct ReadQuery {
 }
 
 async fn fs_read(State(state): State<Arc<AppState>>, Query(params): Query<ReadQuery>) -> Response {
-    let Some(s3) = client(&state) else {
-        return s3_unavailable();
+    let _ = params.agent; // kept for API compat
+    let root = fs_root(&state);
+    let full = match resolve_full_path(&root, &params.path) {
+        Ok(p) => p,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
     };
-
-    if params.path.contains("..") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "path traversal not allowed"})),
-        )
-            .into_response();
-    }
-    if params.path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "path required"})),
-        )
-            .into_response();
-    }
-
-    match s3.get_object(&state.s3_bucket, &params.path).await {
-        Ok((bytes, content_type)) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, content_type)],
-            bytes,
-        )
-            .into_response(),
-        Err(e) if MinioClient::is_no_such_key(&e) => {
+    match tokio::fs::read(&full).await {
+        Ok(bytes) => {
+            let ct = content_type_for(&params.path);
+            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, ct)], bytes).into_response()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             (StatusCode::NOT_FOUND, Json(json!({"error": "Not found"}))).into_response()
         }
         Err(e) => (
@@ -120,19 +104,23 @@ async fn fs_write(
     State(state): State<Arc<AppState>>,
     Json(body): Json<WriteBody>,
 ) -> impl IntoResponse {
-    let Some(s3) = client(&state) else {
-        return s3_unavailable();
+    let _ = (body.agent, body.scope); // kept for API compat
+    let root = fs_root(&state);
+    let full = match resolve_full_path(&root, &body.path) {
+        Ok(p) => p,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
     };
-
-    if let Err(e) = validate_path(&body.path, body.agent.as_deref()) {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response();
+    if let Some(parent) = full.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
     }
-
-    let _scope = body.scope.as_deref().unwrap_or("private");
-    let content_bytes = body.content.into_bytes();
-    let size = content_bytes.len();
-
-    match s3.put_object(&state.s3_bucket, &body.path, content_bytes).await {
+    let size = body.content.len();
+    match tokio::fs::write(&full, body.content.as_bytes()).await {
         Ok(()) => (
             StatusCode::OK,
             Json(json!({"ok": true, "path": body.path, "size": size})),
@@ -146,7 +134,7 @@ async fn fs_write(
     }
 }
 
-// ── GET /api/fs/list?prefix=...&agent=... ─────────────────────────────────────
+// ── GET /api/fs/list?prefix=... ───────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct ListQuery {
@@ -160,25 +148,27 @@ async fn fs_list(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListQuery>,
 ) -> impl IntoResponse {
-    let Some(s3) = client(&state) else {
-        return s3_unavailable();
-    };
-
+    let _ = params.agent;
+    let root = fs_root(&state);
     let prefix = params.prefix.unwrap_or_default();
 
-    match s3.list_objects_v2(&state.s3_bucket, &prefix).await {
-        Ok(objects) => {
-            let items: Vec<serde_json::Value> = objects
-                .iter()
-                .map(|obj| {
-                    json!({
-                        "key": obj.key,
-                        "size": obj.size,
-                        "lastModified": obj.last_modified,
-                    })
-                })
-                .collect();
-            (StatusCode::OK, Json(json!({"ok": true, "objects": items}))).into_response()
+    let scan_root = if prefix.is_empty() {
+        root.clone()
+    } else {
+        if prefix.contains("..") {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "path traversal not allowed"})),
+            )
+                .into_response();
+        }
+        root.join(&prefix)
+    };
+
+    match walk_dir(&root, &scan_root).await {
+        Ok(items) => (StatusCode::OK, Json(json!({"ok": true, "objects": items}))).into_response(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::OK, Json(json!({"ok": true, "objects": []}))).into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -186,6 +176,41 @@ async fn fs_list(
         )
             .into_response(),
     }
+}
+
+async fn walk_dir(root: &Path, dir: &Path) -> std::io::Result<Vec<serde_json::Value>> {
+    let mut results = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let mut entries = tokio::fs::read_dir(&current).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let meta = entry.metadata().await?;
+            if meta.is_dir() {
+                stack.push(path);
+            } else {
+                let key = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().to_string();
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| {
+                            chrono::DateTime::<chrono::Utc>::from(
+                                std::time::UNIX_EPOCH + d,
+                            )
+                            .to_rfc3339()
+                        })
+                    })
+                    .unwrap_or_default();
+                results.push(json!({
+                    "key": key,
+                    "size": meta.len(),
+                    "lastModified": modified,
+                }));
+            }
+        }
+    }
+    Ok(results)
 }
 
 // ── DELETE /api/fs/delete?path=... ────────────────────────────────────────────
@@ -207,28 +232,16 @@ async fn fs_delete(
         )
             .into_response();
     }
-
-    let Some(s3) = client(&state) else {
-        return s3_unavailable();
+    let root = fs_root(&state);
+    let full = match resolve_full_path(&root, &params.path) {
+        Ok(p) => p,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
     };
-
-    if params.path.contains("..") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "path traversal not allowed"})),
-        )
-            .into_response();
-    }
-    if params.path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "path required"})),
-        )
-            .into_response();
-    }
-
-    match s3.delete_object(&state.s3_bucket, &params.path).await {
+    match tokio::fs::remove_file(&full).await {
         Ok(()) => (StatusCode::OK, Json(json!({"ok": true}))).into_response(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, Json(json!({"error": "Not found"}))).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"ok": false, "error": e.to_string()})),
@@ -248,17 +261,14 @@ async fn fs_exists(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ExistsQuery>,
 ) -> StatusCode {
-    let Some(s3) = client(&state) else {
-        return StatusCode::SERVICE_UNAVAILABLE;
+    let root = fs_root(&state);
+    let full = match resolve_full_path(&root, &params.path) {
+        Ok(p) => p,
+        Err(_) => return StatusCode::BAD_REQUEST,
     };
-
-    if params.path.contains("..") || params.path.is_empty() {
-        return StatusCode::BAD_REQUEST;
-    }
-
-    match s3.head_object(&state.s3_bucket, &params.path).await {
-        Ok(true) => StatusCode::OK,
-        Ok(false) => StatusCode::NOT_FOUND,
+    match tokio::fs::metadata(&full).await {
+        Ok(_) => StatusCode::OK,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

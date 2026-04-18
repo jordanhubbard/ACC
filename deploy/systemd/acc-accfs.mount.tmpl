@@ -1,0 +1,13 @@
+[Unit]
+Description=ACC shared filesystem (Rocky Samba/SMB)
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=//100.89.199.14/accfs
+Where=AGENT_HOME/.acc/shared
+Type=cifs
+Options=credentials=/etc/samba/smbcredentials,uid=AGENT_UID,gid=AGENT_GID,file_mode=0664,dir_mode=0775,_netdev,vers=3.0,nofail
+
+[Install]
+WantedBy=multi-user.target

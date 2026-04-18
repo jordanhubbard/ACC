@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.acc.accfs-mount</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>mkdir -p AGENT_HOME/.acc/shared &amp;&amp; /sbin/mount_smbfs //jkh@100.89.199.14/accfs AGENT_HOME/.acc/shared 2&gt;&gt; AGENT_HOME/.acc/logs/accfs-mount.log || true</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>AGENT_HOME/.acc/logs/accfs-mount.log</string>
+    <key>StandardErrorPath</key>
+    <string>AGENT_HOME/.acc/logs/accfs-mount.log</string>
+</dict>
+</plist>

@@ -19,7 +19,7 @@ pub fn router() -> Router<Arc<AppState>> {
 async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Value> {
     let tokenhub_url =
         std::env::var("TOKENHUB_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string());
-    let minio_endpoint = std::env::var("MINIO_ENDPOINT").unwrap_or_default();
+    let fs_root = std::env::var("ACC_FS_ROOT").unwrap_or_else(|_| "/srv/accfs".to_string());
     let qdrant_url =
         std::env::var("QDRANT_FLEET_URL").unwrap_or_else(|_| "http://127.0.0.1:6333".to_string());
 
@@ -35,12 +35,12 @@ async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Value> {
             "enabled": true,
         }),
         json!({
-            "id":      "minio",
+            "id":      "accfs",
             "kind":    "storage",
-            "label":   "MinIO / S3 Storage",
-            "url":     minio_endpoint,
-            "status":  if minio_endpoint.is_empty() { "unconfigured" } else { "configured" },
-            "enabled": !minio_endpoint.is_empty(),
+            "label":   "AccFS (Samba/SMB)",
+            "url":     format!("smb://100.89.199.14/accfs"),
+            "status":  if std::path::Path::new(&fs_root).exists() { "configured" } else { "unconfigured" },
+            "enabled": std::path::Path::new(&fs_root).exists(),
         }),
         json!({
             "id":      "qdrant",

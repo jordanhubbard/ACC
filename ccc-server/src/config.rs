@@ -20,19 +20,10 @@ pub struct CccConfig {
     pub bus_log_path: Option<String>,
     pub projects_path: Option<String>,
     pub auth_tokens: Vec<String>,
-    pub minio: MinioConfig,
+    pub fs_root: Option<String>,
     pub supervisor: SupervisorConfig,
     pub qdrant: QdrantConfig,
     pub tokenhub: TokenhubConfig,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
-#[serde(default)]
-pub struct MinioConfig {
-    pub endpoint: Option<String>,
-    pub bucket: Option<String>,
-    pub access_key: Option<String>,
-    pub secret_key: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -73,10 +64,7 @@ pub struct ResolvedConfig {
     /// Path to the auth SQLite database (always-on, regardless of db_path).
     /// Default: ~/.ccc/auth.db
     pub auth_db_path: String,
-    pub minio_endpoint: String,
-    pub minio_bucket: String,
-    pub minio_access_key: Option<String>,
-    pub minio_secret_key: Option<String>,
+    pub fs_root: String,
     pub supervisor_enabled: bool,
     pub tokenhub_bin: String,
     pub qdrant_url: String,
@@ -188,10 +176,7 @@ pub fn load() -> ResolvedConfig {
             .collect()
     };
 
-    let minio_endpoint = resolve_str("MINIO_ENDPOINT", j.minio.endpoint, "http://minio.service.consul:9000");
-    let minio_bucket = resolve_str("MINIO_BUCKET", j.minio.bucket, "agents");
-    let minio_access_key = evar("MINIO_ACCESS_KEY").or(j.minio.access_key);
-    let minio_secret_key = evar("MINIO_SECRET_KEY").or(j.minio.secret_key);
+    let fs_root = resolve_str("ACC_FS_ROOT", j.fs_root, "/srv/accfs");
 
     let supervisor_enabled = evar("SUPERVISOR_ENABLED")
         .map(|s| s == "true")
@@ -227,10 +212,7 @@ pub fn load() -> ResolvedConfig {
         auth_tokens,
         db_path,
         auth_db_path,
-        minio_endpoint,
-        minio_bucket,
-        minio_access_key,
-        minio_secret_key,
+        fs_root,
         supervisor_enabled,
         tokenhub_bin,
         qdrant_url,
