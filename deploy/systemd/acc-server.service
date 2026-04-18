@@ -6,7 +6,7 @@ After=network.target
 [Service]
 Type=simple
 User=AGENT_USER
-WorkingDirectory=AGENT_HOME/Src/CCC
+WorkingDirectory=AGENT_HOME/.acc
 
 ExecStart=/usr/local/bin/acc-server
 
