@@ -121,6 +121,8 @@ print(json.dumps(secs))
 fi
 
 # ── Agent: set up mount ────────────────────────────────────────────────────────
+# Lazy-unmount any existing mount before (re-)mounting — rm -rf hangs on live mounts
+mountpoint -q "$SHARED_DIR" 2>/dev/null && { sudo umount -l "$SHARED_DIR" 2>/dev/null || true; }
 mkdir -p "$SHARED_DIR"
 mkdir -p "${ACC_DEST}/logs"
 
@@ -218,6 +220,10 @@ PYEOF
 fi
 
 # ── Tear down JuiceFS/agentfs services if present ─────────────────────────────
+# Unmount any old JuiceFS/clawfs mounts first so rm -rf doesn't hang
+for _old in /mnt/clawfs "$HOME/.acc/clawfs" "$HOME/.ccc/clawfs"; do
+  mountpoint -q "$_old" 2>/dev/null && { sudo umount -l "$_old" 2>/dev/null || true; }
+done
 for svc in clawfs-sync agentfs-sync; do
   if command -v systemctl &>/dev/null && systemctl list-unit-files "${svc}.service" &>/dev/null; then
     systemd_teardown "$svc" 2>/dev/null || true

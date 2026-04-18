@@ -63,6 +63,10 @@ if [[ -f "$HOME/.acc/.env" ]]; then
   info "Backed up existing .env to $ENV_BACKUP"
 fi
 
+# Unmount any network filesystems under .acc before wiping (rm -rf hangs on live mounts)
+for _mnt in "$HOME/.acc/shared" "$HOME/.ccc/shared"; do
+  mountpoint -q "$_mnt" 2>/dev/null && { sudo umount -l "$_mnt" 2>/dev/null || true; }
+done
 rm -rf "$HOME/.acc" 2>/dev/null || true
 success "Clean slate ready"
 
