@@ -11,30 +11,38 @@ ACC_DEST="${HOME}/.acc"
 WORKSPACE="${ACC_DEST}/workspace"
 SHARED_DIR="${ACC_DEST}/shared"
 ENV_FILE="${ACC_DEST}/.env"
-SMB_HOST="100.89.199.14"
-SMB_SHARE="accfs"
-SMB_USER="jkh"
+SMB_HOST="${SMB_HOST:-}"
+SMB_SHARE="${SMB_SHARE:-accfs}"
+SMB_USER="${SMB_USER:-$(whoami)}"
 
 m_info "Migrate MinIO/JuiceFS AgentFS to Samba/CIFS AccFS"
 
-# ── Fetch SMB password from CCC secrets ────────────────────────────────────────
+# ── Fetch SMB credentials from CCC secrets ─────────────────────────────────────
+_fetch_secret() {
+  local key="$1"
+  if [[ -n "${ACC_URL:-}" ]] && [[ -n "${ACC_AGENT_TOKEN:-}" ]]; then
+    curl -sf -H "Authorization: Bearer ${ACC_AGENT_TOKEN}" \
+      "${ACC_URL}/api/secrets/${key}" 2>/dev/null \
+      | python3 -c "import json,sys
+try: print(json.load(sys.stdin).get('value',''))
+except: pass" 2>/dev/null || true
+  fi
+}
+
 SMB_PASS=""
-if [[ -n "${ACC_URL:-}" ]] && [[ -n "${ACC_AGENT_TOKEN:-}" ]]; then
-  SMB_PASS=$(curl -sf \
-    -H "Authorization: Bearer ${ACC_AGENT_TOKEN}" \
-    "${ACC_URL}/api/secrets/SMB_PASSWORD" 2>/dev/null \
-    | python3 -c "
-import json,sys
-try:
-    d = json.load(sys.stdin)
-    print(d.get('value', ''))
-except: pass
-" 2>/dev/null || true)
-fi
+[[ -z "$SMB_PASS" ]] && SMB_PASS="$(_fetch_secret SMB_PASSWORD)"
+
+[[ -z "$SMB_HOST" ]] && SMB_HOST="$(_fetch_secret rocky_smb_host)"
+[[ -z "$SMB_USER" ]] && { _u="$(_fetch_secret rocky_smb_user)"; [[ -n "$_u" ]] && SMB_USER="$_u"; }
+[[ -z "$SMB_SHARE" ]] && { _s="$(_fetch_secret rocky_smb_share)"; [[ -n "$_s" ]] && SMB_SHARE="$_s"; }
 
 if [[ -z "$SMB_PASS" ]]; then
   m_warn "SMB_PASSWORD not found in CCC secrets — set it via /api/secrets then re-run"
   m_warn "Skipping mount setup; AccFS may not work until SMB_PASSWORD is available"
+fi
+
+if [[ -z "$SMB_HOST" ]]; then
+  m_warn "SMB_HOST not set and rocky_smb_host not in secrets — cannot set up AccFS mount"
 fi
 
 # ── Detect hub role (Rocky runs ccc-server locally) ───────────────────────────
@@ -102,11 +110,11 @@ import json, sys
 d = json.loads(sys.argv[1])
 secs = d.get('secrets', {})
 secs['SMB_PASSWORD'] = sys.argv[2]
-secs['rocky_smb_user'] = 'jkh'
-secs['rocky_smb_host'] = '100.89.199.14'
-secs['rocky_smb_share'] = 'accfs'
+secs['rocky_smb_user'] = sys.argv[3]
+secs['rocky_smb_host'] = sys.argv[4]
+secs['rocky_smb_share'] = sys.argv[5]
 print(json.dumps(secs))
-" "$EXISTING" "$SMB_PASS" 2>/dev/null || echo '')
+" "$EXISTING" "$SMB_PASS" "$SMB_USER" "$SMB_HOST" "$SMB_SHARE" 2>/dev/null || echo '')
     if [[ -n "$UPDATED" ]]; then
       curl -sf -X POST \
         -H "Authorization: Bearer ${ACC_AGENT_TOKEN}" \
@@ -144,7 +152,7 @@ if on_platform macos; then
   mkdir -p "${HOME}/Library/LaunchAgents"
 
   if [[ -f "$PLIST_TMPL" ]]; then
-    sed "s|AGENT_HOME|${HOME}|g" "$PLIST_TMPL" > "$PLIST_OUT"
+    sed "s|AGENT_HOME|${HOME}|g; s|AGENT_SMB_USER|${SMB_USER}|g; s|AGENT_SMB_HOST|${SMB_HOST}|g; s|AGENT_SMB_SHARE|${SMB_SHARE}|g" "$PLIST_TMPL" > "$PLIST_OUT"
     launchctl unload "$PLIST_OUT" 2>/dev/null || true
     launchctl load -w "$PLIST_OUT" && m_success "com.acc.accfs-mount loaded"
     sleep 3
@@ -186,7 +194,7 @@ elif on_platform linux; then
   if [[ -f "$MOUNT_TMPL" ]]; then
     AGENT_UID=$(id -u)
     AGENT_GID=$(id -g)
-    sed "s|AGENT_HOME|${HOME}|g; s|AGENT_UID|${AGENT_UID}|g; s|AGENT_GID|${AGENT_GID}|g" \
+    sed "s|AGENT_HOME|${HOME}|g; s|AGENT_UID|${AGENT_UID}|g; s|AGENT_GID|${AGENT_GID}|g; s|AGENT_SMB_HOST|${SMB_HOST}|g; s|AGENT_SMB_SHARE|${SMB_SHARE}|g" \
       "$MOUNT_TMPL" | sudo tee "$UNIT_FILE" > /dev/null
     sudo systemctl daemon-reload
     sudo systemctl enable "${MOUNT_UNIT}"

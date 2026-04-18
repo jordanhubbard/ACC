@@ -1,6 +1,6 @@
 [Unit]
 Description=ACC NVIDIA Header-Stripping Proxy (anthropic-beta compat)
-Documentation=https://github.com/jordanhubbard/CCC
+Documentation=https://github.com/{OWNER}/CCC
 After=network-online.target
 Wants=network-online.target
 

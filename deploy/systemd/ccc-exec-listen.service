@@ -1,6 +1,6 @@
 [Unit]
 Description=CCC Exec Listener (ClawBus remote exec agent)
-Documentation=https://github.com/jordanhubbard/CCC
+Documentation=https://github.com/{OWNER}/CCC
 After=network-online.target ccc-agent.service
 Wants=network-online.target
 

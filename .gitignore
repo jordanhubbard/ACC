@@ -15,15 +15,21 @@ BOOTSTRAP.md
 .env
 !deploy/.env.template
 
-# Per-instance agent configs (contain private IPs, hostnames, hardware details)
-# These live on each agent node, not in the repo
+# Per-instance agent files (IPs, hostnames, SSH strings)
+# config.md and personality.md are gitignored; SOUL.md CAN be committed
+deploy/agents/*/config.md
 deploy/agents/*/personality.md
-!deploy/agents/TEMPLATE/personality.md
-people/
+!deploy/agents/TEMPLATE/
 
-# Instance-specific onboarding docs (contain live tokens and IPs)
+# Per-instance onboarding docs (contain live tokens and IPs)
 onboarding/ONBOARD_*.md
 !onboarding/ONBOARD_*.md.tmpl
+
+# Per-instance operational state
+capabilities-manifest.json
+data/exec.jsonl
+workqueue/heartbeats.jsonl
+people/
 
 # Generated configs (rendered from *.tmpl by make init-rcc)
 # These contain real hostnames/tokens — never commit them

@@ -15,7 +15,7 @@ services:
 
   # ── CCC API (Rust/Axum) ────────────────────────────────────────────────
   ccc-api:
-    image: ${CCC_IMAGE:-ghcr.io/jordanhubbard/ccc:latest}
+    image: ${CCC_IMAGE:-ghcr.io/{OWNER}/ccc:latest}
     build:
       context: .
       dockerfile: Dockerfile

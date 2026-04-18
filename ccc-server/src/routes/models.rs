@@ -113,8 +113,7 @@ async fn trigger_deploy(
         .unwrap_or_else(|_| {
             // Try relative paths from common locations
             let candidates = [
-                "/home/jkh/Src/rockyandfriends.ccc/scripts/model-deploy.mjs",
-                "..ccc/scripts/model-deploy.mjs",
+                "../scripts/model-deploy.mjs",
                 "./scripts/model-deploy.mjs",
             ];
             candidates.iter()

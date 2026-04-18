@@ -10,7 +10,7 @@
 
 set -e
 
-REPO_URL="${REPO_URL:-git@github.com:jordanhubbard/CCC.git}"
+REPO_URL="${REPO_URL:-git@github.com:{OWNER}/CCC.git}"
 CCC_DIR="$HOME/.ccc"
 WORKSPACE="$CCC_DIR/workspace"
 ENV_FILE="$CCC_DIR/.env"

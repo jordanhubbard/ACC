@@ -66,13 +66,12 @@ fi
 # Mapping from CCC secret key → .env variable name
 # Update this map when new secrets are added
 declare -A KEY_MAP=(
-  ["slack/bot_token_omgjkh"]="OMGJKH_BOT"
-  ["slack/bot_token_offtera"]="OFFTERA_BOT"
+  ["slack/bot_token"]="SLACK_BOT_TOKEN"
   ["slack/app_token"]="SLACK_APP_TOKEN"
   ["slack/signing_secret"]="SLACK_SIGNING_SECRET"
-  ["slack/omgjkh_user_token"]="OMGJKH_USER_TOKEN"
-  ["slack/omgjkh_webhook"]="OMGJKH_WEBHOOK"
-  ["slack/watch_channel"]="WATCH_CHANNEL"
+  ["slack/user_token"]="SLACK_USER_TOKEN"
+  ["slack/webhook_url"]="SLACK_WEBHOOK_URL"
+  ["slack/watch_channel"]="SLACK_WATCH_CHANNEL"
   ["nvidia/api_key"]="NVIDIA_API_KEY"
   ["nvidia/api_base"]="NVIDIA_API_BASE"
   ["tokenhub/url"]="TOKENHUB_URL"

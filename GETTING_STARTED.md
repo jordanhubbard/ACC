@@ -26,7 +26,7 @@ You want to run your own CCC instance on a server or VM you control.
 1. Fork this repo on GitHub
 2. Clone your fork to your local machine:
    ```bash
-   git clone https://github.com/jordanhubbard/CCC
+   git clone https://github.com/{OWNER}/CCC
    cd CCC
    ```
 
@@ -89,7 +89,7 @@ The fastest path from "I have a server" to "CCC is running."
 #### Step 1: Clone and configure
 
 ```bash
-git clone https://github.com/jordanhubbard/CCC
+git clone https://github.com/{OWNER}/CCC
 cd CCC
 mkdir -p ccc-data
 cp deploy/.env.server.template ccc-data/.env
@@ -125,7 +125,7 @@ make docker-down    # stop the stack
 ```
 
 > **Pre-built images:** The CI publishes multi-arch images (amd64 + arm64) to
-> `ghcr.io/jordanhubbard/ccc:latest` on every push to main. See
+> `ghcr.io/{OWNER}/ccc:latest` on every push to main. See
 > `.github/workflows/docker-publish.yml` for details. `make docker-up` uses the
 > pre-built image by default (`CCC_IMAGE` env var overrides).
 
@@ -138,7 +138,7 @@ Someone is already running a CCC hub and gave you a URL + token. You want to plu
 ### One-command bootstrap
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/jordanhubbard/CCC/main/deploy/bootstrap.sh | \
+curl -sSL https://raw.githubusercontent.com/{OWNER}/CCC/main/deploy/bootstrap.sh | \
   bash -s -- \
     --ccc=https://ccc.your-operator-domain.example.com \
     --token=YOUR_BOOTSTRAP_TOKEN \
@@ -161,7 +161,7 @@ If you prefer to set things up yourself:
 
 1. Clone the repo:
    ```bash
-   git clone https://github.com/jordanhubbard/CCC
+   git clone https://github.com/{OWNER}/CCC
    cd CCC
    ```
 
@@ -198,7 +198,7 @@ You want to modify CCC itself — add features, fix bugs, extend the protocol.
 ### Setup
 
 ```bash
-git clone https://github.com/jordanhubbard/CCC
+git clone https://github.com/{OWNER}/CCC
 cd CCC
 make init   # configure a local dev instance
 ```

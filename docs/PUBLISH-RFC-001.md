@@ -261,12 +261,12 @@ active ──reload fail──→ error
 Published content lives under a predictable, human-readable URL namespace:
 
 ```
-https://dashboard.yourmom.photos/agents/{agent-name}/{publication-name}/
+https://{your-ccc-domain}/agents/{agent-name}/{publication-name}/
 
 Examples:
-  https://dashboard.yourmom.photos/agents/bullwinkle/webchat/
-  https://dashboard.yourmom.photos/agents/natasha/benchmark/
-  https://dashboard.yourmom.photos/agents/snidely/training-dashboard/
+  https://{your-ccc-domain}/agents/bullwinkle/webchat/
+  https://{your-ccc-domain}/agents/natasha/benchmark/
+  https://{your-ccc-domain}/agents/snidely/training-dashboard/
 ```
 
 **Subdomain opt-in:** If a publication truly needs root-path isolation (WebSockets at `/`, etc.), the publish request can specify `subdomain: true` — requires DNS challenge TLS in Caddy, handled case-by-case.
@@ -386,7 +386,7 @@ From any agent's perspective, publishing should be trivial:
 
 ```bash
 # Artifact (file)
-curl -X POST https://ccc.yourmom.photos/api/publish \
+curl -X POST https://{your-ccc-domain}/api/publish \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -F "type=artifact" \
   -F "file=@report.html" \
@@ -396,7 +396,7 @@ curl -X POST https://ccc.yourmom.photos/api/publish \
 
 # Service (two-step: register → tunnel → activate)
 # Step 1: Register — get a port allocation
-curl -X POST https://ccc.yourmom.photos/api/publish \
+curl -X POST https://{your-ccc-domain}/api/publish \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -d '{"type": "service", "name": "webchat", "visibility": "fleet"}'
 # Returns: {"status": "pending", "port": 19105, "id": "pub-xxx"}
@@ -405,9 +405,9 @@ curl -X POST https://ccc.yourmom.photos/api/publish \
 ssh -R 19105:localhost:3000 jkh@do-host1 -N &
 
 # Step 3: Activate — tell Rocky the tunnel is up
-curl -X PUT https://ccc.yourmom.photos/api/publish/pub-xxx/ready \
+curl -X PUT https://{your-ccc-domain}/api/publish/pub-xxx/ready \
   -H "Authorization: Bearer $AGENT_TOKEN"
-# Returns: {"status": "active", "url": "https://dashboard.yourmom.photos/agents/bullwinkle/webchat/", "live_at": 1712234567890}
+# Returns: {"status": "active", "url": "https://{your-ccc-domain}/agents/bullwinkle/webchat/", "live_at": 1712234567890}
 ```
 
 ---

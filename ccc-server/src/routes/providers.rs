@@ -38,7 +38,7 @@ async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Value> {
             "id":      "accfs",
             "kind":    "storage",
             "label":   "AccFS (Samba/SMB)",
-            "url":     format!("smb://100.89.199.14/accfs"),
+            "url":     std::env::var("SMB_HOST").map(|h| format!("smb://{h}/accfs")).unwrap_or_default(),
             "status":  if std::path::Path::new(&fs_root).exists() { "configured" } else { "unconfigured" },
             "enabled": std::path::Path::new(&fs_root).exists(),
         }),

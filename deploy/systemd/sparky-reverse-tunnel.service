@@ -1,11 +1,11 @@
 [Unit]
-Description=Reverse SSH tunnel from sparky to do-host1 (CI access)
+Description=Reverse SSH tunnel from agent to hub (CI access)
 After=network-online.target tailscaled.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=jkh
+User=AGENT_USER
 ExecStart=/usr/bin/ssh \
     -N \
     -R 2222:localhost:22 \
@@ -13,8 +13,8 @@ ExecStart=/usr/bin/ssh \
     -o ServerAliveCountMax=3 \
     -o ExitOnForwardFailure=yes \
     -o StrictHostKeyChecking=no \
-    -i /home/jkh/.ssh/id_ed25519 \
-    rocky@do-host1.tail407856.ts.net
+    -i AGENT_HOME/.ssh/id_ed25519 \
+    HUB_SSH_USER@HUB_TAILSCALE_HOST
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

@@ -13,17 +13,26 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use crate::AppState;
 
-static CATALOG: &[(&str, &str, &str, &str)] = &[
-    ("ccc-dashboard",  "CCC Dashboard",     "http://146.190.134.110:8789/health", "do-host1"),
-    ("tokenhub-admin", "Tokenhub Admin",    "http://127.0.0.1:8090/health",       "do-host1"),
-    ("clawbus",        "ClawBus",       "http://127.0.0.1:8789/api/health",   "do-host1"),
-    ("boris-vllm",     "Boris vLLM",        "http://127.0.0.1:18080/health",      "boris"),
-    ("peabody-vllm",   "Peabody vLLM",      "http://127.0.0.1:18081/health",      "peabody"),
-    ("sherman-vllm",   "Sherman vLLM",      "http://127.0.0.1:18082/health",      "sherman"),
-    ("snidely-vllm",   "Snidely vLLM",      "http://127.0.0.1:18083/health",      "snidely"),
-    ("dudley-vllm",    "Dudley vLLM",       "http://127.0.0.1:18084/health",      "dudley"),
-    ("qdrant",         "Qdrant",            "http://146.190.134.110:6333/",       "do-host1"),
-];
+fn build_catalog() -> Vec<(String, String, String, String)> {
+    let hub = std::env::var("AGENT_NAME").unwrap_or_else(|_| "hub".to_string());
+    let ccc_port = std::env::var("CCC_PORT").unwrap_or_else(|_| "8789".to_string());
+    let tokenhub_port = std::env::var("TOKENHUB_PORT").unwrap_or_else(|_| "8090".to_string());
+    let public_host = std::env::var("PUBLIC_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let mut entries = vec![
+        ("ccc-server".to_string(),  "CCC Server".to_string(),
+         format!("http://{public_host}:{ccc_port}/health"), hub.clone()),
+        ("tokenhub".to_string(), "Tokenhub".to_string(),
+         format!("http://127.0.0.1:{tokenhub_port}/health"), hub.clone()),
+        ("clawbus".to_string(), "ClawBus".to_string(),
+         format!("http://127.0.0.1:{ccc_port}/api/health"), hub.clone()),
+    ];
+    // Optional Qdrant
+    if let Ok(qdrant_url) = std::env::var("QDRANT_ADDRESS") {
+        entries.push(("qdrant".to_string(), "Qdrant".to_string(),
+            format!("{qdrant_url}/"), hub.clone()));
+    }
+    entries
+}
 
 const CACHE_TTL_SECS: u64 = 30;
 const PROBE_TIMEOUT_MS: u64 = 3000;
@@ -83,9 +92,9 @@ async fn probe_all() -> Vec<Value> {
         .build()
         .unwrap_or_default();
 
-    let probes: Vec<_> = CATALOG.iter().map(|(id, name, url, host)| {
+    let catalog = build_catalog();
+    let probes: Vec<_> = catalog.into_iter().map(|(id, name, url, host)| {
         let client = client.clone();
-        let url = url.to_string();
         async move {
             let start = Instant::now();
             let online = client.get(&url).send().await

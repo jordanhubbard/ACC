@@ -3,7 +3,7 @@
 # Installs hermes-agent, seeds workspace, configures agent identity.
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/jordanhubbard/CCC/main/deploy/bootstrap.sh | \
+#   curl -sSL https://raw.githubusercontent.com/{OWNER}/CCC/main/deploy/bootstrap.sh | \
 #     bash -s -- --ccc=http://<your-ccc-hub-url>:8789 --token=<bootstrap-token> --agent=boris
 #
 # If you have a pre-known agent token, pass --agent-token=<token> to skip the bootstrap API call.
@@ -143,7 +143,7 @@ else
     HERMES_SRC="$HOME/.acc/hermes-src"
     if [[ ! -d "$HERMES_SRC/.git" ]]; then
       info "Cloning hermes-agent from source..."
-      git clone --depth=1 https://github.com/jordanhubbard/hermes-agent.git "$HERMES_SRC" 2>/dev/null || \
+      git clone --depth=1 https://github.com/{OWNER}/hermes-agent.git "$HERMES_SRC" 2>/dev/null || \
         warn "hermes-agent source clone failed — install manually"
     fi
     if [[ -d "$HERMES_SRC" ]]; then
@@ -156,7 +156,7 @@ else
   if command -v hermes &>/dev/null; then
     success "Hermes agent installed"
   else
-    warn "Hermes agent install failed — install manually from: https://github.com/jordanhubbard/hermes-agent"
+    warn "Hermes agent install failed — install manually from: https://github.com/{OWNER}/hermes-agent"
   fi
 fi
 
@@ -166,7 +166,7 @@ info "Setting up ACC workspace at $ACC_WORKSPACE..."
 if [[ -d "$ACC_WORKSPACE/.git" ]]; then
   git -C "$ACC_WORKSPACE" pull --ff-only || warn "git pull failed"
 else
-  git clone "${CCC_REPO:-https://github.com/jordanhubbard/CCC.git}" "$ACC_WORKSPACE"
+  git clone "${CCC_REPO:-https://github.com/{OWNER}/CCC.git}" "$ACC_WORKSPACE"
 fi
 success "CCC workspace ready"
 

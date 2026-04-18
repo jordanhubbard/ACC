@@ -11,8 +11,8 @@ If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out w
 CCC spans multiple repos. On any new command node, clone them **without waiting to be asked**:
 
 ```bash
-git clone https://github.com/jordanhubbard/CCC      ~/Src/CCC
-git clone https://github.com/jordanhubbard/tokenhub  ~/Src/tokenhub
+git clone https://github.com/{OWNER}/CCC      ~/Src/CCC
+git clone https://github.com/{OWNER}/tokenhub  ~/Src/tokenhub
 ```
 
 Minimum for a command node (no GPU): `CCC` + `tokenhub`.
@@ -248,28 +248,28 @@ Agents can be commanded remotely using the CCC exec API — no inbound SSH requi
 
 ```bash
 # Send exec (JS mode - default):
-curl -X POST https://ccc.yourmom.photos/api/exec \
+curl -X POST https://{your-ccc-domain}/api/exec \
   -H "Authorization: Bearer $CCC_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"targets":["peabody"],"code":"process.version"}'
 
 # Send exec (shell mode - for approved commands):
-curl -X POST https://ccc.yourmom.photos/api/exec \
+curl -X POST https://{your-ccc-domain}/api/exec \
   -H "Authorization: Bearer $CCC_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"targets":["all"],"mode":"shell","code":"nvidia-smi --query-gpu=name,memory.used --format=csv,noheader"}'
 
 # Get results:
-curl https://ccc.yourmom.photos/api/exec/<exec-id> \
+curl https://{your-ccc-domain}/api/exec/<exec-id> \
   -H "Authorization: Bearer $CCC_AUTH_TOKEN"
 ```
 
 ### Running the listener daemon
 
 ```bash
-SQUIRRELBUS_TOKEN=wq-5dcad756f6d3e345c00b5cb3dfcbdedb \
-SQUIRRELBUS_URL=https://dashboard.yourmom.photos \
-CCC_URL=https://ccc.yourmom.photos \
+SQUIRRELBUS_TOKEN=$ACC_AGENT_TOKEN \
+SQUIRRELBUS_URL=$ACC_URL \
+CCC_URL=$ACC_URL \
 CCC_AUTH_TOKEN=<agent-token> \
 AGENT_NAME=mynode \
 ALLOW_SHELL_EXEC=true \

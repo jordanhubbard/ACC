@@ -1,6 +1,6 @@
 [Unit]
 Description=CCC Bus Listener (ClawBus SSE daemon)
-Documentation=https://github.com/jordanhubbard/CCC
+Documentation=https://github.com/{OWNER}/CCC
 After=network-online.target
 Wants=network-online.target
 
