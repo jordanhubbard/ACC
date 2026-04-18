@@ -85,14 +85,14 @@ Without the coding CLI turbocharger, `claude_cli` work items stay pending foreve
 
 Runs every 10 minutes automatically. It:
 1. `git pull`s from the repo
-2. If anything changed in `dashboard/`, .ccc/`, or `deploy/`: restarts the affected service
-3. Posts a heartbeat to CCC (if `CCC_URL` and `CCC_AGENT_TOKEN` are set)
-4. Logs to `~/.ccc/logs/pull.log`
+2. If anything changed in `dashboard/`, `.acc/`, or `deploy/`: restarts the affected service
+3. Posts a heartbeat to CCC (if `ACC_URL` and `ACC_AGENT_TOKEN` are set)
+4. Logs to `~/.acc/logs/pull.log`
 
 Manual trigger:
 ```bash
-bash ~/.ccc/workspace/deploy/agent-pull.sh
-tail -f ~/.ccc/logs/pull.log
+bash ~/.acc/workspace/deploy/agent-pull.sh
+tail -f ~/.acc/logs/pull.log
 ```
 
 ### Secrets (`.env`)
@@ -100,7 +100,7 @@ tail -f ~/.ccc/logs/pull.log
 **Secrets never go in git.** The repo holds code. Each node holds its own `.env`.
 
 - Template: `deploy/.env.template` (in git — safe, no real values)
-- Live config: `~/.ccc/.env` (never in git — chmod 600)
+- Live config: `~/.acc/.env` (never in git — chmod 600)
 - Quickest setup: `bash deploy/ccc-init.sh`
 
 Required fields:
@@ -108,10 +108,10 @@ Required fields:
 |-------|-------------|
 | `AGENT_NAME` | Short unique name for this agent |
 | `AGENT_HOST` | Hostname for display in dashboard |
-| `CCC_URL` | URL of the CCC API server |
-| `CCC_AGENT_TOKEN` | Bearer token (issued after registration) |
+| `ACC_URL` | URL of the CCC API server |
+| `ACC_AGENT_TOKEN` | Bearer token (issued after registration) |
 
-Optional: `NVIDIA_API_KEY`, MinIO creds, Azure Blob SAS, Slack/Mattermost/Telegram tokens.
+Optional: `NVIDIA_API_KEY`, Azure Blob SAS, Slack/Telegram tokens, SMB credentials.
 
 ## Container Environments
 

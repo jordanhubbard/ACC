@@ -12,11 +12,11 @@ ExecStart=/usr/local/bin/ccc-server
 
 # Core config
 Environment=CCC_PORT=8789
-Environment=CCC_DATA_DIR=/home/jkh/.ccc/data
+Environment=CCC_DATA_DIR=/home/jkh/.acc/data
 Environment=RUST_LOG=ccc_server=info
 
 # Load per-node secrets (QDRANT_FLEET_KEY, etc.)
-EnvironmentFile=-AGENT_HOME/.ccc/.env
+EnvironmentFile=-AGENT_HOME/.acc/.env
 
 # Restart on crash, not clean exits
 Restart=on-failure

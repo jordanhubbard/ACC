@@ -78,8 +78,8 @@ else
   echo "  ┌─────────────────────────────────────────────────────┐"
   echo "  │  .env created at: $ENV_FILE"
   echo "  │  IMPORTANT: Edit it and fill in your values!"
-  echo "  │  Required: AGENT_NAME, AGENT_HOST, CCC_URL"
-  echo "  │            CCC_AGENT_TOKEN, NVIDIA_API_KEY"
+  echo "  │  Required: AGENT_NAME, AGENT_HOST, ACC_URL"
+  echo "  │            ACC_AGENT_TOKEN, NVIDIA_API_KEY"
   echo "  └─────────────────────────────────────────────────────┘"
   echo ""
   warn "Edit $ENV_FILE before running the agent!"
@@ -287,7 +287,7 @@ seed_hermes_memory() {
 ### CCC Fleet
 - This agent is part of the CCC fleet managed by ~/Src/CCC
 - Full workspace docs live in ~/Src/CCC/AGENTS.md — read on first boot
-- Config: ~/.ccc/.env — CCC_URL and CCC_AGENT_TOKEN are required before starting
+- Config: ~/.acc/.env — ACC_URL and ACC_AGENT_TOKEN are required before starting
 - Workqueue: ~/Src/CCC/workqueue/queue.json — polled each heartbeat cycle
 - Secrets are stored in TokenHub (~/Src/tokenhub); never hardcode credentials
 
