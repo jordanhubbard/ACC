@@ -3,6 +3,12 @@
 //! Replaces nvidia-proxy.py. Listens on 127.0.0.1:9099 and forwards all
 //! requests to NVIDIA_API_BASE, stripping the `anthropic-beta` header that
 //! NVIDIA's LiteLLM endpoint rejects.
+//!
+//! Also sanitizes malformed message histories: if an assistant message
+//! contains tool_use blocks without corresponding tool_result blocks in the
+//! next user message, synthetic tool_result blocks are injected. This prevents
+//! HTTP 400 errors from Bedrock ("tool_use ids were found without tool_result
+//! blocks immediately after").
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -17,6 +23,7 @@ use axum::{
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use reqwest::Client;
+use serde_json::{json, Value};
 
 const STRIP_HEADERS: &[&str] = &["anthropic-beta", "host", "content-length", "transfer-encoding"];
 
@@ -84,12 +91,20 @@ pub async fn run(args: &[String]) {
 async fn proxy_handler(State(state): State<ProxyState>, req: Request) -> Response {
     let (parts, body) = req.into_parts();
 
-    // Collect body (buffered — required to rebuild for reqwest)
     let body_bytes: Bytes = match body.collect().await {
         Ok(c) => c.to_bytes(),
         Err(e) => {
             return error_response(400, &format!("body read error: {e}"));
         }
+    };
+
+    // Sanitize messages on /v1/messages requests to prevent Bedrock 400 errors
+    // caused by orphaned tool_use blocks (no tool_result in the following message).
+    let path = parts.uri.path();
+    let body_bytes = if path.ends_with("/v1/messages") || path == "/v1/messages" {
+        sanitize_body(body_bytes)
+    } else {
+        body_bytes
     };
 
     let path_and_query = parts
@@ -99,13 +114,11 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request) -> Respons
         .unwrap_or("/");
     let url = format!("{}{}", state.upstream, path_and_query);
 
-    // Map axum method → reqwest method (both are http::Method from same crate version)
     let method: reqwest::Method = match parts.method.as_str().parse() {
         Ok(m) => m,
         Err(_) => reqwest::Method::GET,
     };
 
-    // Build forwarded headers, stripping disallowed ones
     let mut fwd_headers = reqwest::header::HeaderMap::new();
     for (name, value) in parts.headers.iter() {
         if STRIP_HEADERS.contains(&name.as_str()) {
@@ -147,6 +160,127 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request) -> Respons
         .unwrap_or_else(|_| error_response(500, "response build error"))
 }
 
+/// Parse the request body and, if it contains a "messages" array, ensure every
+/// assistant message's tool_use blocks have matching tool_result blocks in the
+/// immediately following user message. Injects synthetic tool_result messages
+/// where they are missing. Returns the (possibly rewritten) body bytes.
+fn sanitize_body(body: Bytes) -> Bytes {
+    let mut payload: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return body, // not JSON — pass through unchanged
+    };
+
+    let messages = match payload.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        Some(m) => m,
+        None => return body,
+    };
+
+    let injected = inject_missing_tool_results(messages);
+    if injected == 0 {
+        return body;
+    }
+
+    eprintln!("[proxy] sanitized {injected} orphaned tool_use block(s) — injected synthetic tool_result(s)");
+    match serde_json::to_vec(&payload) {
+        Ok(b) => Bytes::from(b),
+        Err(_) => body,
+    }
+}
+
+/// Walk the messages array and inject synthetic tool_result user messages for
+/// any orphaned tool_use blocks. Returns the number of tool_use IDs fixed.
+fn inject_missing_tool_results(messages: &mut Vec<Value>) -> usize {
+    let mut fixed = 0;
+    let mut i = 0;
+    while i < messages.len() {
+        let tool_use_ids = collect_tool_use_ids(&messages[i]);
+        if tool_use_ids.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        // Collect which IDs already have a tool_result in the next message
+        let covered: std::collections::HashSet<String> = if i + 1 < messages.len() {
+            collect_tool_result_ids(&messages[i + 1])
+                .into_iter()
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+
+        let missing: Vec<String> = tool_use_ids
+            .iter()
+            .filter(|id| !covered.contains(*id))
+            .cloned()
+            .collect();
+
+        if missing.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        // Build synthetic tool_result blocks for each missing ID
+        let result_blocks: Vec<Value> = missing
+            .iter()
+            .map(|id| {
+                json!({
+                    "type": "tool_result",
+                    "tool_use_id": id,
+                    "content": "[result unavailable — session was interrupted before this tool completed]",
+                    "is_error": true
+                })
+            })
+            .collect();
+
+        let synthetic_msg = json!({
+            "role": "user",
+            "content": result_blocks
+        });
+
+        fixed += missing.len();
+        messages.insert(i + 1, synthetic_msg);
+        i += 2; // skip past both the assistant message and the newly inserted user message
+    }
+    fixed
+}
+
+/// Return the tool_use IDs from an assistant message's content blocks.
+fn collect_tool_use_ids(msg: &Value) -> Vec<String> {
+    if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+        return vec![];
+    }
+    let content = match msg.get("content").and_then(|c| c.as_array()) {
+        Some(c) => c,
+        None => return vec![],
+    };
+    content
+        .iter()
+        .filter(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        .filter_map(|block| block.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+        .collect()
+}
+
+/// Return the tool_use IDs covered by tool_result blocks in a user message.
+fn collect_tool_result_ids(msg: &Value) -> Vec<String> {
+    if msg.get("role").and_then(|r| r.as_str()) != Some("user") {
+        return vec![];
+    }
+    let content = match msg.get("content").and_then(|c| c.as_array()) {
+        Some(c) => c,
+        None => return vec![],
+    };
+    content
+        .iter()
+        .filter(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
+        .filter_map(|block| {
+            block
+                .get("tool_use_id")
+                .and_then(|id| id.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect()
+}
+
 fn error_response(status: u16, msg: &str) -> Response {
     Response::builder()
         .status(status)
@@ -158,6 +292,7 @@ fn error_response(status: u16, msg: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_strip_headers_list() {
@@ -167,8 +302,84 @@ mod tests {
     }
 
     #[test]
-    fn test_error_response_status() {
-        let resp = error_response(502, "bad gateway");
-        assert_eq!(resp.status(), 502);
+    fn test_no_tool_use_unchanged() {
+        let mut msgs = vec![
+            json!({"role": "user", "content": "hello"}),
+            json!({"role": "assistant", "content": "hi"}),
+        ];
+        assert_eq!(inject_missing_tool_results(&mut msgs), 0);
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn test_paired_tool_use_unchanged() {
+        let mut msgs = vec![
+            json!({"role": "user", "content": "go"}),
+            json!({"role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {}}
+            ]}),
+            json!({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}
+            ]}),
+        ];
+        assert_eq!(inject_missing_tool_results(&mut msgs), 0);
+        assert_eq!(msgs.len(), 3);
+    }
+
+    #[test]
+    fn test_orphaned_tool_use_gets_synthetic_result() {
+        let mut msgs = vec![
+            json!({"role": "user", "content": "go"}),
+            json!({"role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu_orphan", "name": "bash", "input": {}}
+            ]}),
+            // No tool_result message follows — the next message is a new user turn
+            json!({"role": "user", "content": "what happened?"}),
+        ];
+        let fixed = inject_missing_tool_results(&mut msgs);
+        assert_eq!(fixed, 1);
+        assert_eq!(msgs.len(), 4);
+        // Injected message should be at index 2
+        assert_eq!(msgs[2]["role"], "user");
+        let content = msgs[2]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "tool_result");
+        assert_eq!(content[0]["tool_use_id"], "tu_orphan");
+        assert_eq!(content[0]["is_error"], true);
+    }
+
+    #[test]
+    fn test_multiple_orphaned_tool_uses_single_synthetic() {
+        let mut msgs = vec![
+            json!({"role": "user", "content": "go"}),
+            json!({"role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu_a", "name": "bash", "input": {}},
+                {"type": "tool_use", "id": "tu_b", "name": "read", "input": {}}
+            ]}),
+        ];
+        let fixed = inject_missing_tool_results(&mut msgs);
+        assert_eq!(fixed, 2);
+        assert_eq!(msgs.len(), 3);
+        let content = msgs[2]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+    }
+
+    #[test]
+    fn test_partially_covered_tool_use() {
+        let mut msgs = vec![
+            json!({"role": "user", "content": "go"}),
+            json!({"role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu_a", "name": "bash", "input": {}},
+                {"type": "tool_use", "id": "tu_b", "name": "read", "input": {}}
+            ]}),
+            // Only tu_a is covered
+            json!({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "tu_a", "content": "ok"}
+            ]}),
+        ];
+        let fixed = inject_missing_tool_results(&mut msgs);
+        assert_eq!(fixed, 1);
+        assert_eq!(msgs.len(), 4);
+        let content = msgs[2]["content"].as_array().unwrap();
+        assert_eq!(content[0]["tool_use_id"], "tu_b");
     }
 }
