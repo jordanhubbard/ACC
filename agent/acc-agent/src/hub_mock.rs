@@ -26,6 +26,10 @@ pub struct HubState {
     pub item_claim_status: u16,
     /// HTTP status code for PUT  /api/tasks/:id/claim (default 200)
     pub task_claim_status: u16,
+    /// JSON payloads to stream from GET /bus/stream as SSE data events.
+    /// Each entry is emitted as `data: <entry>\n\n`.  The connection closes
+    /// after all events have been sent, so listen_once() returns cleanly.
+    pub sse_events: Vec<String>,
 }
 
 impl Default for HubState {
@@ -35,6 +39,7 @@ impl Default for HubState {
             tasks: vec![],
             item_claim_status: 200,
             task_claim_status: 200,
+            sse_events: vec![],
         }
     }
 }
@@ -58,6 +63,10 @@ impl HubMock {
 
     pub async fn with_tasks(tasks: Vec<Value>) -> Self {
         Self::with_state(HubState { tasks, ..Default::default() }).await
+    }
+
+    pub async fn with_sse(events: Vec<String>) -> Self {
+        Self::with_state(HubState { sse_events: events, ..Default::default() }).await
     }
 
     pub async fn with_state(initial: HubState) -> Self {
@@ -104,6 +113,8 @@ fn build_router(state: S) -> Router {
         .route("/api/tasks/:id/unclaim",        put(ok))
         // Exec result (bus worker)
         .route("/api/exec/:id/result",          post(ok))
+        // SSE stream (bus listener)
+        .route("/bus/stream",                   get(sse_stream))
         .with_state(state)
 }
 
@@ -137,6 +148,12 @@ async fn task_list(
     };
     let count = matched.len() as u64;
     Json(json!({"tasks": matched, "count": count}))
+}
+
+async fn sse_stream(State(st): State<S>) -> impl IntoResponse {
+    let events = st.read().await.sse_events.clone();
+    let body: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
+    ([("content-type", "text/event-stream")], body)
 }
 
 async fn task_claim(State(st): State<S>, Path(id): Path<String>) -> impl IntoResponse {

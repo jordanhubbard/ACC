@@ -448,6 +448,176 @@ mod tests {
         assert_ne!(sig1, hmac_sign(&payload, "other-secret"));
     }
 
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    fn test_cfg_in_dir(dir: &std::path::Path, url: &str) -> Config {
+        Config {
+            acc_dir: dir.to_path_buf(),
+            acc_url: url.to_string(),
+            acc_token: "test-tok".to_string(),
+            agent_name: "natasha".to_string(),
+            agentbus_token: String::new(),
+        }
+    }
+
+    fn mk_event(type_: &str, to: &str) -> String {
+        format!(r#"data: {{"type":"{type_}","to":"{to}"}}"#)
+    }
+
+    fn mk_event_body(type_: &str, to: &str, body_json: &str) -> String {
+        format!(r#"data: {{"type":"{type_}","to":"{to}","body":{body_json}}}"#)
+    }
+
+    // ── dispatch unit tests (no HTTP) ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_dispatch_ping_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_cfg_in_dir(dir.path(), "http://unused");
+        let client = Client::new();
+        dispatch(&cfg, &client, &mk_event("ping", "natasha")).await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_work_available_touches_signal() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_cfg_in_dir(dir.path(), "http://unused");
+        let client = Client::new();
+        dispatch(&cfg, &client, &mk_event("work.available", "all")).await;
+        assert!(cfg.work_signal_file().exists(), "work-signal must be created");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_project_arrived_touches_signal() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_cfg_in_dir(dir.path(), "http://unused");
+        let client = Client::new();
+        dispatch(&cfg, &client, &mk_event("project.arrived", "natasha")).await;
+        assert!(cfg.work_signal_file().exists());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_quench_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_cfg_in_dir(dir.path(), "http://unused");
+        let client = Client::new();
+        dispatch(&cfg, &client, &mk_event_body("acc.quench", "all", r#"{"minutes":5}"#)).await;
+        assert!(cfg.quench_file().exists(), "quench file must be written");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_skips_wrong_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_cfg_in_dir(dir.path(), "http://unused");
+        let client = Client::new();
+        // to="boris" — natasha should ignore it
+        dispatch(&cfg, &client, &mk_event("work.available", "boris")).await;
+        assert!(!cfg.work_signal_file().exists(), "natasha must not react to boris's message");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_malformed_json_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_cfg_in_dir(dir.path(), "http://unused");
+        let client = Client::new();
+        dispatch(&cfg, &client, "data: {not valid json}").await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_empty_event_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_cfg_in_dir(dir.path(), "http://unused");
+        let client = Client::new();
+        dispatch(&cfg, &client, "").await;
+    }
+
+    // ── listen_once SSE end-to-end tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_listen_once_hub_unreachable_returns_gracefully() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_cfg_in_dir(dir.path(), "http://127.0.0.1:1");
+        let client = Client::builder().timeout(Duration::from_secs(1)).build().unwrap();
+        // Must not panic or hang.
+        listen_once(&cfg, &client).await;
+    }
+
+    #[tokio::test]
+    async fn test_listen_once_processes_ping_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = crate::hub_mock::HubMock::with_sse(vec![
+            serde_json::json!({"type":"ping","from":"hub","to":"all"}).to_string(),
+        ]).await;
+        let cfg = test_cfg_in_dir(dir.path(), &mock.url);
+        let client = build_client();
+        listen_once(&cfg, &client).await;
+        // ping leaves no observable side-effects — just verify no panic
+    }
+
+    #[tokio::test]
+    async fn test_listen_once_quench_event_writes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = crate::hub_mock::HubMock::with_sse(vec![
+            serde_json::json!({"type":"acc.quench","to":"all","body":{"minutes":10,"reason":"test"}}).to_string(),
+        ]).await;
+        let cfg = test_cfg_in_dir(dir.path(), &mock.url);
+        let client = build_client();
+        listen_once(&cfg, &client).await;
+        assert!(cfg.quench_file().exists(), "quench file must exist after acc.quench event");
+    }
+
+    #[tokio::test]
+    async fn test_listen_once_work_signal_event_touches_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = crate::hub_mock::HubMock::with_sse(vec![
+            serde_json::json!({"type":"work.available","to":"all"}).to_string(),
+        ]).await;
+        let cfg = test_cfg_in_dir(dir.path(), &mock.url);
+        let client = build_client();
+        listen_once(&cfg, &client).await;
+        assert!(cfg.work_signal_file().exists());
+    }
+
+    #[tokio::test]
+    async fn test_listen_once_processes_multiple_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = crate::hub_mock::HubMock::with_sse(vec![
+            serde_json::json!({"type":"acc.quench","to":"all","body":{"minutes":5}}).to_string(),
+            serde_json::json!({"type":"work.available","to":"all"}).to_string(),
+        ]).await;
+        let cfg = test_cfg_in_dir(dir.path(), &mock.url);
+        let client = build_client();
+        listen_once(&cfg, &client).await;
+        assert!(cfg.quench_file().exists(), "quench file from first event");
+        assert!(cfg.work_signal_file().exists(), "work signal from second event");
+    }
+
+    #[tokio::test]
+    async fn test_listen_once_skips_events_for_other_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = crate::hub_mock::HubMock::with_sse(vec![
+            serde_json::json!({"type":"work.available","to":"boris"}).to_string(),
+        ]).await;
+        let cfg = test_cfg_in_dir(dir.path(), &mock.url);
+        let client = build_client();
+        listen_once(&cfg, &client).await;
+        assert!(!cfg.work_signal_file().exists(), "natasha must not react to boris's work signal");
+    }
+
+    #[tokio::test]
+    async fn test_listen_once_handles_malformed_events_gracefully() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = crate::hub_mock::HubMock::with_sse(vec![
+            "not valid json at all".to_string(),
+            serde_json::json!({"type":"work.available","to":"all"}).to_string(),
+        ]).await;
+        let cfg = test_cfg_in_dir(dir.path(), &mock.url);
+        let client = build_client();
+        listen_once(&cfg, &client).await;
+        // valid event after bad one is still processed
+        assert!(cfg.work_signal_file().exists());
+    }
+
     // ── post_result hub mock tests ────────────────────────────────────────────
 
     #[tokio::test]
