@@ -358,3 +358,75 @@ async fn exec_resolves_capability_to_agent() {
         }
     }
 }
+
+// ── GET /api/agents?online=true ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn agents_online_filter_returns_only_online() {
+    let srv = helpers::TestServer::new().await;
+    // Register sets lastSeen=now, so a freshly registered agent is online
+    helpers::call(
+        &srv.app,
+        helpers::post_json("/api/agents/register", &json!({"name": "live-bot", "host": "puck"})),
+    ).await;
+
+    let resp = helpers::call(&srv.app, helpers::get("/api/agents?online=true")).await;
+    let body = helpers::body_json(resp).await;
+    assert_eq!(body["ok"], true);
+    let agents = body["agents"].as_array().unwrap();
+    assert!(!agents.is_empty());
+    // Every agent returned must have online=true
+    assert!(agents.iter().all(|a| a["online"].as_bool().unwrap_or(false)));
+}
+
+// ── GET /api/agents/names ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn agent_names_empty_cluster() {
+    let srv = helpers::TestServer::new().await;
+    let resp = helpers::call(&srv.app, helpers::get("/api/agents/names")).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = helpers::body_json(resp).await;
+    assert_eq!(body["ok"], true);
+    assert!(body["names"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn agent_names_lists_registered_agents() {
+    let srv = helpers::TestServer::new().await;
+    helpers::call(
+        &srv.app,
+        helpers::post_json("/api/agents/register", &json!({"name": "natasha", "host": "puck"})),
+    ).await;
+    helpers::call(
+        &srv.app,
+        helpers::post_json("/api/agents/register", &json!({"name": "boris", "host": "rocky"})),
+    ).await;
+
+    let resp = helpers::call(&srv.app, helpers::get("/api/agents/names")).await;
+    let body = helpers::body_json(resp).await;
+    let names: Vec<&str> = body["names"].as_array().unwrap()
+        .iter().filter_map(|v| v.as_str()).collect();
+    assert!(names.contains(&"natasha"));
+    assert!(names.contains(&"boris"));
+}
+
+#[tokio::test]
+async fn agent_names_excludes_decommissioned() {
+    let srv = helpers::TestServer::new().await;
+    helpers::call(
+        &srv.app,
+        helpers::post_json("/api/agents/register", &json!({"name": "retired", "host": "old"})),
+    ).await;
+    // Decommission it
+    helpers::call(
+        &srv.app,
+        helpers::patch_json("/api/agents/retired", &json!({"status": "decommissioned"})),
+    ).await;
+
+    let resp = helpers::call(&srv.app, helpers::get("/api/agents/names")).await;
+    let body = helpers::body_json(resp).await;
+    let names: Vec<&str> = body["names"].as_array().unwrap()
+        .iter().filter_map(|v| v.as_str()).collect();
+    assert!(!names.contains(&"retired"));
+}

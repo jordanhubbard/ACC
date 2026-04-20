@@ -1,11 +1,12 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{delete, get, post},
     Router,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 use crate::AppState;
 use crate::state::flush_agents;
@@ -13,6 +14,7 @@ use crate::state::flush_agents;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/agents", get(get_agents).post(post_agent))
+        .route("/api/agents/names", get(get_agent_names))
         .route("/api/agents/register", post(register_agent))
         .route("/api/agents/:name", get(get_agent_by_name).post(upsert_agent).patch(patch_agent).delete(delete_agent))
         .route("/api/agents/:name/heartbeat", post(agent_heartbeat))
@@ -39,26 +41,51 @@ fn online_status(agent: &Value) -> &'static str {
     if is_online(agent) { "online" } else { "offline" }
 }
 
-async fn get_agents(State(state): State<Arc<AppState>>) -> Json<Value> {
+// GET /api/agents[?online=true]
+// ?online=true — return only agents whose lastSeen is within 300s
+async fn get_agents(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    let online_only = params.get("online").map(|v| v == "true").unwrap_or(false);
     let agents = state.agents.read().await;
     let mut result: Vec<Value> = match agents.as_object() {
-        Some(map) => map.values().map(|a| {
+        Some(map) => map.values().filter_map(|a| {
+            if online_only && !is_online(a) { return None; }
             let mut record = a.clone();
             if let Some(obj) = record.as_object_mut() {
                 obj.insert("online".into(), json!(is_online(a)));
                 obj.insert("onlineStatus".into(), json!(online_status(a)));
             }
-            record
+            Some(record)
         }).collect(),
         None => vec![],
     };
-    // Sort by lastSeen desc (ISO 8601 strings sort lexicographically)
     result.sort_by(|a, b| {
         let ts_a = a.get("lastSeen").and_then(|v| v.as_str()).unwrap_or("");
         let ts_b = b.get("lastSeen").and_then(|v| v.as_str()).unwrap_or("");
         ts_b.cmp(ts_a)
     });
     Json(json!({ "ok": true, "agents": result }))
+}
+
+// GET /api/agents/names[?online=true]
+// Lightweight peer-discovery endpoint — returns only names, no telemetry.
+async fn get_agent_names(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    let online_only = params.get("online").map(|v| v == "true").unwrap_or(false);
+    let agents = state.agents.read().await;
+    let names: Vec<&str> = match agents.as_object() {
+        Some(map) => map.iter().filter_map(|(name, a)| {
+            if online_only && !is_online(a) { return None; }
+            if online_status(a) == "decommissioned" { return None; }
+            Some(name.as_str())
+        }).collect(),
+        None => vec![],
+    };
+    Json(json!({ "ok": true, "names": names }))
 }
 
 async fn get_heartbeats(State(state): State<Arc<AppState>>) -> Json<Value> {

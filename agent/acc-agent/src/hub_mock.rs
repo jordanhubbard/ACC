@@ -27,9 +27,9 @@ pub struct HubState {
     /// HTTP status code for PUT  /api/tasks/:id/claim (default 200)
     pub task_claim_status: u16,
     /// JSON payloads to stream from GET /bus/stream as SSE data events.
-    /// Each entry is emitted as `data: <entry>\n\n`.  The connection closes
-    /// after all events have been sent, so listen_once() returns cleanly.
     pub sse_events: Vec<String>,
+    /// Agent names returned by GET /api/agents/names
+    pub agent_names: Vec<String>,
 }
 
 impl Default for HubState {
@@ -40,6 +40,7 @@ impl Default for HubState {
             item_claim_status: 200,
             task_claim_status: 200,
             sse_events: vec![],
+            agent_names: vec![],
         }
     }
 }
@@ -115,6 +116,8 @@ fn build_router(state: S) -> Router {
         .route("/api/exec/:id/result",          post(ok))
         // SSE stream (bus listener)
         .route("/bus/stream",                   get(sse_stream))
+        // Peer discovery
+        .route("/api/agents/names",             get(agent_names))
         .with_state(state)
 }
 
@@ -148,6 +151,13 @@ async fn task_list(
     };
     let count = matched.len() as u64;
     Json(json!({"tasks": matched, "count": count}))
+}
+
+async fn agent_names(State(st): State<S>) -> Json<Value> {
+    let names: Vec<Value> = st.read().await.agent_names.iter()
+        .map(|n| Value::String(n.clone()))
+        .collect();
+    Json(json!({"ok": true, "names": names}))
 }
 
 async fn sse_stream(State(st): State<S>) -> impl IntoResponse {

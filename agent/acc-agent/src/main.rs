@@ -7,6 +7,7 @@ mod exec_registry;
 mod hermes;
 mod json;
 mod migrate;
+mod peers;
 mod proxy;
 mod queue;
 mod tasks;
