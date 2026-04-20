@@ -256,12 +256,8 @@ fn is_quenched(cfg: &Config) -> bool {
 fn log(cfg: &Config, msg: &str) {
     let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
     let line = format!("[{ts}] [tasks] [{}] {msg}\n", cfg.agent_name);
+    // Write to stderr only; callers redirect to file via nohup/systemd to avoid double-write.
     eprint!("{line}");
-    let log_path = cfg.log_file("tasks");
-    let _ = std::fs::OpenOptions::new()
-        .create(true).append(true)
-        .open(&log_path)
-        .and_then(|mut f| { use std::io::Write; f.write_all(line.as_bytes()) });
 }
 
 #[cfg(test)]
