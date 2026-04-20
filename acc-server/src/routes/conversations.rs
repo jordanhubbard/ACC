@@ -20,8 +20,10 @@ static CONVERSATIONS_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::ne
 
 fn conversations_path() -> &'static str {
     CONVERSATIONS_PATH.get_or_init(|| {
-        std::env::var("CONVERSATIONS_PATH")
-            .unwrap_or_else(|_| "./data/conversations.json".to_string())
+        std::env::var("CONVERSATIONS_PATH").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+            format!("{}/.local/state/acc/conversations.json", home)
+        })
     })
 }
 

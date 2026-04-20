@@ -21,7 +21,10 @@ static ISSUES_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 fn issues_path() -> &'static str {
     ISSUES_PATH.get_or_init(|| {
-        std::env::var("ISSUES_PATH").unwrap_or_else(|_| "./data/issues.json".to_string())
+        std::env::var("ISSUES_PATH").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+            format!("{}/.local/state/acc/issues.json", home)
+        })
     })
 }
 

@@ -27,7 +27,7 @@ onboarding/ONBOARD_*.md
 
 # Per-instance operational state
 capabilities-manifest.json
-acc-server/data/
+data/exec.jsonl
 workqueue/heartbeats.jsonl
 people/
 

@@ -126,10 +126,15 @@ fn resolve_str(env_key: &str, json_val: Option<String>, default: &str) -> String
         .unwrap_or_else(|| default.to_string())
 }
 
+fn default_state_dir() -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    format!("{}/.local/state/acc", home)
+}
+
 pub fn load() -> ResolvedConfig {
     let j = load_json_config();
 
-    let data_dir = resolve_str("ACC_DATA_DIR", j.data_dir.clone(), "./data");
+    let data_dir = resolve_str("ACC_DATA_DIR", j.data_dir.clone(), &default_state_dir());
 
     let queue_path = resolve_str(
         "QUEUE_PATH",

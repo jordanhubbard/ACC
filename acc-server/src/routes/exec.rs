@@ -31,7 +31,10 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 fn exec_log_path() -> String {
-    std::env::var("EXEC_LOG_PATH").unwrap_or_else(|_| "./data/exec.jsonl".to_string())
+    std::env::var("EXEC_LOG_PATH").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        format!("{}/.local/state/acc/exec.jsonl", home)
+    })
 }
 
 fn sign_payload(payload: &Value, secret: &str) -> String {

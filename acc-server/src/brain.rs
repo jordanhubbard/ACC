@@ -77,8 +77,10 @@ impl BrainQueue {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        let state_path = std::env::var("BRAIN_STATE_PATH")
-            .unwrap_or_else(|_| "./data/brain-state.json".to_string());
+        let state_path = std::env::var("BRAIN_STATE_PATH").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+            format!("{}/.local/state/acc/brain-state.json", home)
+        });
         let tick_ms = std::env::var("BRAIN_TICK_MS")
             .ok()
             .and_then(|v| v.parse().ok())

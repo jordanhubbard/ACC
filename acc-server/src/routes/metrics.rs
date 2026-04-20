@@ -31,7 +31,10 @@ static METRICS_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 fn metrics_path() -> &'static str {
     METRICS_PATH.get_or_init(|| {
-        std::env::var("METRICS_PATH").unwrap_or_else(|_| "./data/metrics.jsonl".to_string())
+        std::env::var("METRICS_PATH").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+            format!("{}/.local/state/acc/metrics.jsonl", home)
+        })
     })
 }
 

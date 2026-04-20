@@ -22,7 +22,10 @@ static LESSONS_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 fn lessons_path() -> &'static str {
     LESSONS_PATH.get_or_init(|| {
-        std::env::var("LESSONS_PATH").unwrap_or_else(|_| "./data/lessons.jsonl".to_string())
+        std::env::var("LESSONS_PATH").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+            format!("{}/.local/state/acc/lessons.jsonl", home)
+        })
     })
 }
 
