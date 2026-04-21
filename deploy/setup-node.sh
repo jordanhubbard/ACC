@@ -333,6 +333,23 @@ HERMESMEM
 info "Seeding hermes fleet context..."
 seed_hermes_memory
 
+# ── Rust toolchain ───────────────────────────────────────────────────────
+# Rust is required to build acc-server and other fleet binaries from source.
+info "Checking Rust toolchain..."
+export PATH="$HOME/.cargo/bin:$PATH"
+if command -v rustc &>/dev/null; then
+  success "Rust already installed: $(rustc --version)"
+else
+  info "Installing Rust via rustup..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+  export PATH="$HOME/.cargo/bin:$PATH"
+  if command -v rustc &>/dev/null; then
+    success "Rust installed: $(rustc --version)"
+  else
+    warn "Rust install may have failed — check ~/.cargo/bin manually"
+  fi
+fi
+
 # ── Beads (bd) — required repo dependency ────────────────────────────────
 # Beads is needed on every node so the hub can read project .beads databases
 # and turn issues into queue tasks. Source: https://github.com/gastownhall/beads
