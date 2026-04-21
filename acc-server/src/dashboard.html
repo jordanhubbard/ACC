@@ -612,7 +612,7 @@ function dashboard() {
         status: this.taskModal.status,
         priority: parseInt(this.taskModal.priority, 10),
         task_type: this.taskModal.task_type,
-        phase: this.taskModal.phase.trim() || null,
+        phase: this.taskModal.phase.trim() || '',
       };
       try {
         if (this.taskModal.id) {

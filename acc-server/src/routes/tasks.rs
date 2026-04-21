@@ -166,8 +166,8 @@ async fn create_task(
     let priority = body.get("priority").and_then(|v| v.as_i64()).unwrap_or(2);
     let metadata = body.get("metadata").map(|v| v.to_string()).unwrap_or_else(|| "{}".to_string());
     let task_type = body.get("task_type").and_then(|v| v.as_str()).unwrap_or("work").to_string();
-    let review_of: Option<String> = body.get("review_of").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let phase: Option<String> = body.get("phase").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let review_of: Option<String> = body.get("review_of").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+    let phase: String = body.get("phase").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or_else(|| "build".to_string());
     let blocked_by = body.get("blocked_by")
         .map(|v| v.to_string())
         .unwrap_or_else(|| "[]".to_string());
