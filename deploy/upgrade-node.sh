@@ -171,6 +171,28 @@ if [ -n "${CCC_URL:-}" ] && [ -n "${CCC_AGENT_TOKEN:-}" ]; then
   fi
 fi
 
+# ── Beads (bd) upgrade ───────────────────────────────────────────────────
+BEADS_SRC="${BEADS_SRC:-$HOME/Src/beads}"
+if [ -d "$BEADS_SRC/.git" ] && command -v go &>/dev/null; then
+  if [ "$DRY_RUN" = true ]; then
+    info "  [DRY-RUN] would git pull + make install-force in $BEADS_SRC"
+  else
+    info "Upgrading beads (bd)..."
+    BEADS_BEFORE=$(git -C "$BEADS_SRC" rev-parse HEAD 2>/dev/null)
+    git -C "$BEADS_SRC" pull --quiet --ff-only 2>/dev/null || true
+    BEADS_AFTER=$(git -C "$BEADS_SRC" rev-parse HEAD 2>/dev/null)
+    if [ "$BEADS_BEFORE" != "$BEADS_AFTER" ]; then
+      (cd "$BEADS_SRC" && make install-force) 2>/dev/null \
+        && success "beads rebuilt and installed ($(bd --version 2>/dev/null | head -1))" \
+        || warn "beads rebuild failed"
+    else
+      success "beads already up to date"
+    fi
+  fi
+elif [ ! -d "$BEADS_SRC/.git" ] && command -v go &>/dev/null; then
+  warn "beads source not found at $BEADS_SRC — run setup-node.sh to install"
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

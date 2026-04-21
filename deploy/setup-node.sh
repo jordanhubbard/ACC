@@ -333,6 +333,56 @@ HERMESMEM
 info "Seeding hermes fleet context..."
 seed_hermes_memory
 
+# ── Beads (bd) — required repo dependency ────────────────────────────────
+# Beads is needed on every node so the hub can read project .beads databases
+# and turn issues into queue tasks. Source: https://github.com/gastownhall/beads
+BEADS_SRC="${BEADS_SRC:-$HOME/Src/beads}"
+BEADS_REPO="https://github.com/gastownhall/beads.git"
+
+info "Checking beads (bd) issue tracker..."
+
+if command -v bd &>/dev/null 2>&1 || [ -x "$HOME/.local/bin/bd" ]; then
+  BD_VER=$(bd --version 2>/dev/null | head -1 || "$HOME/.local/bin/bd" --version 2>/dev/null | head -1 || echo "unknown")
+  success "beads already installed: $BD_VER"
+else
+  info "beads not found — installing from $BEADS_REPO"
+
+  # Ensure Go is available (beads is a Go project)
+  if ! command -v go &>/dev/null; then
+    warn "Go not found — cannot build beads from source."
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────┐"
+    echo "  │  Install Go, then re-run setup-node.sh to install beads.    │"
+    echo "  │    Linux:  https://go.dev/dl/ or: snap install go --classic │"
+    echo "  │    macOS:  brew install go                                   │"
+    echo "  │  Then: cd ~/Src/beads && make install-force                  │"
+    echo "  └─────────────────────────────────────────────────────────────┘"
+    echo ""
+  else
+    # Clone if not present
+    if [ ! -d "$BEADS_SRC/.git" ]; then
+      mkdir -p "$(dirname "$BEADS_SRC")"
+      git clone --quiet "$BEADS_REPO" "$BEADS_SRC" 2>/dev/null \
+        && info "beads cloned to $BEADS_SRC" \
+        || { warn "Failed to clone beads from $BEADS_REPO"; }
+    else
+      info "beads source already at $BEADS_SRC — pulling latest"
+      git -C "$BEADS_SRC" pull --quiet --ff-only 2>/dev/null || true
+    fi
+
+    # Build and install
+    if [ -d "$BEADS_SRC" ] && [ -f "$BEADS_SRC/Makefile" ]; then
+      mkdir -p "$HOME/.local/bin"
+      if (cd "$BEADS_SRC" && make install-force) 2>/dev/null; then
+        BD_VER=$(bd --version 2>/dev/null | head -1 || "$HOME/.local/bin/bd" --version 2>/dev/null | head -1 || echo "unknown")
+        success "beads installed: $BD_VER"
+      else
+        warn "beads build failed — check $BEADS_SRC for errors"
+      fi
+    fi
+  fi
+fi
+
 # ── vLLM (local GPU model serving) ──────────────────────────────────────
 if command -v nvidia-smi &>/dev/null; then
   GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
