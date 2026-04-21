@@ -153,7 +153,6 @@ rocky/
 ├── workqueue/              # Queue schema, spec, agent instructions
 ├── squirrelbus/            # Bus protocol spec + plugin
 ├── lib/                    # Shared utilities
-├── dist/                   # Pre-built WASM dashboard (Leptos/trunk, committed to repo)
 ├── docs/                   # Architecture docs, setup guides
 │   └── ARCHITECTURE.md     # This file
 └── deploy/                 # Azure deployment scripts, systemd units, etc.
@@ -166,15 +165,13 @@ rocky/
 Core infrastructure is operational. The "immediate next steps" from March have shipped:
 
 - ✅ **.ccc/brain/`** — LLM queue + retry engine live; fallback chain: Claude Sonnet → Llama 70B → Nemotron
-- ✅ **.ccc/wasm-dashboard/`** — Full Leptos WASM dashboard with 10 tabs (Kanban, AgentBus, Audit, Profiler, etc.)
 - ✅ **.ccc/api/routes/`** — Monolithic `index.mjs` split into domain route modules
 - ✅ **tokenhub** — LLM gateway (Go, OpenAI-compat, rate limiting, circuit breakers)
 
 ## Active Work Areas
 
 1. **.ccc/brain/` edge cases** — All-models-degraded recovery, partial state replay under failure
-2. **AgentChat** — Agent communication hub (Leptos WASM SPA, served at /clawchat/)
-3. **Fleet expansion** — New nodes join via `rocky register`; auto-provision from topology
+2. **Fleet expansion** — New nodes join via `rocky register`; auto-provision from topology
 
 ---
 

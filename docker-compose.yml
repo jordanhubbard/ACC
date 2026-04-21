@@ -9,7 +9,6 @@
 # Notes:
 # - acc-data/ is a bind-mount dir for runtime data (queue, registry, secrets)
 # - logs/ is a shared bind-mount for all service logs
-# - The WASM dashboard dist is bind-mounted from dist/ (pre-built, committed to repo)
 #
 # Override ACC_OWNER/ACC_REPO to use your own fork:
 #   ACC_OWNER=myorg ACC_REPO=my-acc docker compose up
@@ -40,24 +39,6 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    networks:
-      - acc-net
-
-  # ── Dashboard (WASM static) ────────────────────────────────────────────
-  # Serves the pre-built Leptos/WASM frontend from dist/.
-  # The dist/ is committed to the repo and kept current by the wasm-build CI workflow.
-  # Proxies /api and /bus (SSE) to acc-api.
-  dashboard:
-    image: nginx:alpine
-    container_name: acc-dashboard
-    restart: unless-stopped
-    ports:
-      - "${DASHBOARD_PORT:-8788}:80"
-    volumes:
-      - ./dist:/usr/share/nginx/html:ro                      # pre-built WASM dist
-      - ./deploy/nginx/dashboard.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - acc-api
     networks:
       - acc-net
 

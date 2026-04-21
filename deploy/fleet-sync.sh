@@ -3,7 +3,7 @@
 #
 # Run this after committing and pushing changes to GitHub:
 #
-#   git push && bash deploy/fleet-sync.sh --acc=http://<hub>:8788 --token=<token>
+#   git push && bash deploy/fleet-sync.sh --acc=http://<hub>:8789 --token=<token>
 #
 # If ~/.acc/.env exists with ACC_URL and ACC_AGENT_TOKEN set, flags are optional.
 #

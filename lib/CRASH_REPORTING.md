@@ -17,7 +17,7 @@ initCrashReporter({
 That's it. On any uncaught exception or unhandled rejection, the crash reporter will:
 
 1. **Upload a crash log to MinIO** at `agents/logs/<service>-crash-<timestamp>.json`
-2. **POST to the dashboard API** at `http://localhost:8788/api/crash-report`
+2. **POST to the API** at `http://localhost:8789/api/crash-report`
 3. **Fall back to direct queue.json write** if the API is unavailable
 4. **Exit the process** (so systemd or your process manager can restart it)
 
@@ -35,7 +35,7 @@ On crash:
 ### Dashboard API Endpoint
 
 ```
-POST http://localhost:8788/api/crash-report
+POST http://localhost:8789/api/crash-report
 Authorization: Bearer <your-ccc-token>
 Content-Type: application/json
 
@@ -115,15 +115,15 @@ mc cat $MINIO_ALIAS/agents/logs/wq-dashboard-crash-1711065600000.json | jq .
 ## Finding and Fixing Crash Tasks
 
 ### In the Dashboard
-1. Open the [Claw Command Center](http://localhost:8788/)
-2. Filter by "Pending" — crash tasks show up as high priority with `CRASH:` prefix
+1. Open `http://your-server:8789/` and go to the Tasks tab
+2. Filter by status — crash tasks show up as high priority with `CRASH:` prefix
 3. Check the task notes for error details, stack trace, and MinIO log path
 4. Fix the issue, then mark the task as complete
 
 ### Via API
 ```bash
 # List all crash tasks
-curl http://localhost:8788/api/queue | jq '.items[] | select(.tags[]? == "crash")'
+curl http://localhost:8789/api/queue | jq '.items[] | select(.tags[]? == "crash")'
 ```
 
 ### Via queue.json directly

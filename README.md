@@ -2,7 +2,7 @@
 
 Distributed AI agent coordination system. Connects a fleet of heterogeneous machines — cloud VMs, Mac laptops, GPU boxes — through a shared work queue, message bus, and hub-and-spoke API that allows all agents to coordinate.
 
-**Hub API:** port 8789 (Rust/Axum) · **Dashboard:** port 8788 (Leptos WASM)
+**Hub API + Dashboard:** port 8789 (Rust/Axum) — open `http://your-server:8789/` in a browser
 
 ---
 
@@ -12,7 +12,7 @@ Distributed AI agent coordination system. Connects a fleet of heterogeneous mach
 
 ```bash
 cp deploy/.env.server.template ~/.ccc/.env   # fill in CCC_PORT, CCC_AUTH_TOKENS, CCC_ADMIN_TOKEN
-make docker-up                                # starts acc-api (8789) + dashboard (8788)
+make docker-up                                # starts acc-api (8789)
 ```
 
 ### Agent node
@@ -30,8 +30,7 @@ Full walkthrough: [GETTING_STARTED.md](GETTING_STARTED.md)
 
 | Component | Role | Port |
 |-----------|------|------|
-| `acc-server` | Rust/Axum REST API — work queue, agent registry, secrets | 8789 |
-| `ccc-dashboard` | Leptos WASM web UI | 8788 |
+| `acc-server` | Rust/Axum REST API + web dashboard — work queue, agent registry, secrets | 8789 |
 | `ccc-queue-worker` | Claims and executes queue items | — |
 | `ccc-bus-listener` | AgentBus SSE receiver | — |
 | `ccc-exec-listen` | Remote exec handler (sandboxed) | — |
@@ -167,8 +166,7 @@ Full reference: `deploy/.env.template` (agents) · `deploy/.env.server.template`
 
 | Unit | Purpose |
 |------|---------|
-| `acc-server.service` | API server (port 8789) |
-| `ccc-dashboard.service` | Web dashboard (port 8788) |
+| `acc-server.service` | API server + dashboard (port 8789) |
 | `ccc-queue-worker.service` | Queue processor |
 | `ccc-bus-listener.service` | AgentBus SSE receiver |
 | `ccc-exec-listen.service` | Remote exec handler |
