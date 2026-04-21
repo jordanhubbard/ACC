@@ -104,7 +104,6 @@ fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_fleet_tasks_project  ON fleet_tasks(project_id);
         CREATE INDEX IF NOT EXISTS idx_fleet_tasks_agent    ON fleet_tasks(claimed_by, status);
         CREATE INDEX IF NOT EXISTS idx_fleet_tasks_expires  ON fleet_tasks(claim_expires_at);
-        CREATE INDEX IF NOT EXISTS idx_fleet_tasks_phase    ON fleet_tasks(project_id, phase, status);
 
         CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY,
@@ -202,6 +201,32 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     // Migration v1: initial schema is already created by init_schema.
     tracing::info!("Database schema at version {} (current: {})", version, CURRENT_VERSION);
 
+    if version < 2 {
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS fleet_tasks (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open',
+                priority INTEGER NOT NULL DEFAULT 2,
+                claimed_by TEXT,
+                claimed_at TEXT,
+                claim_expires_at TEXT,
+                completed_at TEXT,
+                completed_by TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                metadata TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_fleet_tasks_status  ON fleet_tasks(status, priority, created_at);
+            CREATE INDEX IF NOT EXISTS idx_fleet_tasks_project ON fleet_tasks(project_id);
+            CREATE INDEX IF NOT EXISTS idx_fleet_tasks_agent   ON fleet_tasks(claimed_by, status);
+            CREATE INDEX IF NOT EXISTS idx_fleet_tasks_expires ON fleet_tasks(claim_expires_at);
+        ")?;
+        set_schema_version(conn, 2)?;
+    }
+
     if version < 3 {
         conn.execute_batch("
             CREATE TABLE IF NOT EXISTS requests (
@@ -235,36 +260,13 @@ fn run_migrations(conn: &Connection) -> Result<()> {
                 ALTER TABLE fleet_tasks ADD COLUMN phase TEXT;
                 ALTER TABLE fleet_tasks ADD COLUMN blocked_by TEXT NOT NULL DEFAULT '[]';
                 ALTER TABLE fleet_tasks ADD COLUMN review_result TEXT;
-                CREATE INDEX IF NOT EXISTS idx_fleet_tasks_phase ON fleet_tasks(project_id, phase, status);
             ")?;
         }
+        // Always ensure the phase index exists (idempotent)
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_fleet_tasks_phase ON fleet_tasks(project_id, phase, status);"
+        )?;
         set_schema_version(conn, 4)?;
-    }
-
-    if version < 2 {
-        conn.execute_batch("
-            CREATE TABLE IF NOT EXISTS fleet_tasks (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'open',
-                priority INTEGER NOT NULL DEFAULT 2,
-                claimed_by TEXT,
-                claimed_at TEXT,
-                claim_expires_at TEXT,
-                completed_at TEXT,
-                completed_by TEXT,
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-                metadata TEXT NOT NULL DEFAULT '{}'
-            );
-            CREATE INDEX IF NOT EXISTS idx_fleet_tasks_status  ON fleet_tasks(status, priority, created_at);
-            CREATE INDEX IF NOT EXISTS idx_fleet_tasks_project ON fleet_tasks(project_id);
-            CREATE INDEX IF NOT EXISTS idx_fleet_tasks_agent   ON fleet_tasks(claimed_by, status);
-            CREATE INDEX IF NOT EXISTS idx_fleet_tasks_expires ON fleet_tasks(claim_expires_at);
-        ")?;
-        set_schema_version(conn, 2)?;
     }
 
     set_schema_version(conn, CURRENT_VERSION)?;
