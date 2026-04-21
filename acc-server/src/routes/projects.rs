@@ -276,7 +276,7 @@ async fn create_project(
         .collect();
 
     let git_url = body.get("git_url").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let agentfs_path = format!("/srv/accfs/{}", slug);
+    let agentfs_path = format!("/srv/accfs/shared/{}", slug);
 
     let clone_status = if git_url.is_some() { "pending" } else { "none" };
 
