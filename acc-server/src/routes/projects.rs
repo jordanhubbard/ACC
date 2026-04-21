@@ -511,16 +511,9 @@ async fn import_beads(
         }))).into_response();
     }
 
-    // Map beads priority (0-4) to queue priority string
-    let map_priority = |issue: &Value| -> &'static str {
-        match issue.get("priority").and_then(|v| v.as_u64()) {
-            Some(0) => "critical",
-            Some(1) => "high",
-            Some(2) => "normal",
-            Some(3) => "low",
-            Some(4) => "idea",
-            _ => "normal",
-        }
+    // Beads priority 0-4 maps 1:1 to fleet_tasks INTEGER priority
+    let map_priority = |issue: &Value| -> i64 {
+        issue.get("priority").and_then(|v| v.as_i64()).unwrap_or(2).clamp(0, 4)
     };
 
     // Map issue_type to tags
@@ -600,10 +593,10 @@ async fn import_beads(
                     "beads_id": beads_id,
                 }).to_string());
                 imported.push(json!({
-                    "id": task_id,
-                    "beads_id": beads_id,
-                    "title": title,
-                    "priority": priority,
+                    "id":        task_id,
+                    "beads_id":  beads_id,
+                    "title":     title,
+                    "priority":  priority,
                     "task_type": issue_type,
                 }));
             }
