@@ -2,8 +2,17 @@
 node_modules/
 **/node_modules/
 
-# hermes-agent fork (separate repo, not a submodule)
-hermes-agent/
+# hermes vendored source build/cache artifacts (source itself IS tracked)
+hermes/__pycache__/
+hermes/**/__pycache__/
+hermes/*.egg-info/
+hermes/**/*.egg-info/
+hermes/.pytest_cache/
+hermes/.mypy_cache/
+hermes/.ruff_cache/
+hermes/htmlcov/
+hermes/.coverage
+hermes-data/         # runtime bind-mount (sessions, config, secrets)
 
 # Sensitive / personal
 memory/

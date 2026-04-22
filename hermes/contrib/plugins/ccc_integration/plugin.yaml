@@ -1,0 +1,19 @@
+name: ccc_integration
+version: "1.0"
+description: >
+  Posts heartbeats and completion status to the CCC hub (ClawBus) so the
+  cluster's queue-worker can track hermes agent sessions.  Also marks
+  the owning queue item complete or failed when the session ends.
+
+  Requires CCC_URL and CCC_AGENT_TOKEN in the environment (loaded from
+  ~/.ccc/.env by the CCC bootstrap).  Optional CCC_QUEUE_ITEM_ID tells
+  the plugin which queue item to update on completion.
+
+author: CCC fleet
+requires_env:
+  - CCC_URL
+  - CCC_AGENT_TOKEN
+provides_hooks:
+  - on_session_start
+  - post_llm_call
+  - on_session_end

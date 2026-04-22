@@ -29,7 +29,14 @@ from pathlib import Path
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-CCC_DIR = Path(os.environ.get("HOME", "/home")) / ".ccc"
+# ACC/hermes is now vendored at the repo root — ACC_HERMES_SRC lets operators
+# override if they've installed hermes separately.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+ACC_HERMES_SRC = Path(os.environ.get("ACC_HERMES_SRC", str(_REPO_ROOT / "hermes")))
+ACC_PLUGINS_SRC = ACC_HERMES_SRC / "contrib" / "plugins"
+HERMES_PLUGINS_DST = Path(os.environ.get("HOME", "/root")) / ".hermes" / "plugins"
+
+CCC_DIR = Path(os.environ.get("HOME", "/home")) / ".acc"
 ENV_FILE = CCC_DIR / ".env"
 LOG_FILE = CCC_DIR / "logs" / "hermes-driver.log"
 
@@ -52,20 +59,42 @@ def _log(msg: str) -> None:
 
 # ── Env loading ───────────────────────────────────────────────────────────────
 
+def _install_plugins() -> None:
+    """Sync ACC-specific hermes plugins from repo into ~/.hermes/plugins/."""
+    if not ACC_PLUGINS_SRC.exists():
+        return
+    HERMES_PLUGINS_DST.mkdir(parents=True, exist_ok=True)
+    for plugin_dir in ACC_PLUGINS_SRC.iterdir():
+        if not plugin_dir.is_dir() or plugin_dir.name.startswith("."):
+            continue
+        dst = HERMES_PLUGINS_DST / plugin_dir.name
+        try:
+            import shutil
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(plugin_dir, dst)
+        except Exception as e:
+            _log(f"Plugin install warning: {plugin_dir.name}: {e}")
+
+
 def _load_env() -> None:
-    if ENV_FILE.exists():
-        with open(ENV_FILE) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip().strip("'\""))
+    # Try both ~/.acc/.env (new) and ~/.ccc/.env (legacy)
+    for candidate in [ENV_FILE, Path(os.environ.get("HOME", "/home")) / ".ccc" / ".env"]:
+        if candidate.exists():
+            with open(candidate) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, val = line.partition("=")
+                        os.environ.setdefault(key.strip(), val.strip().strip("'\""))
+            break
 
 
 _load_env()
+_install_plugins()
 
-CCC_URL = os.environ.get("CCC_URL", "").rstrip("/")
-CCC_AGENT_TOKEN = os.environ.get("CCC_AGENT_TOKEN", "")
+CCC_URL = os.environ.get("ACC_URL", os.environ.get("CCC_URL", "")).rstrip("/")
+CCC_AGENT_TOKEN = os.environ.get("CCC_AGENT_TOKEN", os.environ.get("ACC_AGENT_TOKEN", ""))
 AGENT_NAME = os.environ.get("AGENT_NAME", os.uname().nodename.split(".")[0])
 
 
@@ -124,11 +153,13 @@ def _fail(item_id: str, reason: str) -> None:
 # ── Hermes invocation ─────────────────────────────────────────────────────────
 
 def _find_hermes() -> str:
-    """Locate the hermes binary."""
+    """Locate the hermes binary. Prefers ~/.local/bin/hermes (pip install -e .)."""
     for candidate in [
         os.path.expanduser("~/.local/bin/hermes"),
         "/usr/local/bin/hermes",
         "/opt/homebrew/bin/hermes",
+        # vendored source fallback: run directly from the repo
+        str(ACC_HERMES_SRC / "cli.py"),
     ]:
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate

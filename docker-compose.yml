@@ -42,6 +42,50 @@ services:
     networks:
       - acc-net
 
+  # ── Dashboard (WASM static) ────────────────────────────────────────────
+  # Serves the pre-built Leptos/WASM frontend from dist/.
+  # The dist/ is committed to the repo and kept current by the wasm-build CI workflow.
+  # Proxies /api and /bus (SSE) to acc-api.
+  dashboard:
+    image: nginx:alpine
+    container_name: acc-dashboard
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_PORT:-8788}:80"
+    volumes:
+      - ./dist:/usr/share/nginx/html:ro                      # pre-built WASM dist
+      - ./deploy/nginx/dashboard.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - acc-api
+    networks:
+      - acc-net
+
+  # ── Hermes gateway (vendored from jordanhubbard/hermes-agent) ─────────────
+  # Handles all messaging platform integrations (Slack, Signal, Telegram, etc.)
+  # and exposes the hermes agent runtime to the ACC task queue.
+  # Config: ./hermes-data/.hermes/ (bind-mounted to /root/.hermes inside)
+  hermes:
+    build:
+      context: ./hermes
+      dockerfile: Dockerfile
+    container_name: acc-hermes
+    restart: unless-stopped
+    env_file:
+      - ./acc-data/.env
+      - ./hermes-data/.env          # SLACK_BOT_TOKEN, SIGNAL_*, etc.
+    environment:
+      - ACC_URL=http://acc-api:8789
+      - CCC_URL=http://acc-api:8789  # alias used by ccc_integration plugin
+      - HERMES_PLUGINS=ccc_integration,acc_shared_memory
+    volumes:
+      - ./hermes-data:/root/.hermes  # hermes config, sessions, skills, memory
+      - ./logs:/data/logs
+    depends_on:
+      acc-api:
+        condition: service_healthy
+    networks:
+      - acc-net
+
 networks:
   acc-net:
     driver: bridge
