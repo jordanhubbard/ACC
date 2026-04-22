@@ -165,6 +165,33 @@ else
     log "deploy/bin scripts installed to ~/.local/bin/"
   fi
 
+  # Run pending migrations when deploy/migrations/ changes
+  if echo "$CHANGED" | grep -q "^deploy/migrations/"; then
+    log "New migrations detected — running run-migrations.sh"
+    if bash "$WORKSPACE/deploy/run-migrations.sh" >> "$LOG_FILE" 2>&1; then
+      log "Migrations complete"
+    else
+      log "WARNING: run-migrations.sh failed (non-fatal, check $LOG_FILE)"
+    fi
+  fi
+
+  # Re-link hermes and reinstall ACC plugins when hermes/ changes
+  if echo "$CHANGED" | grep -q "^hermes/"; then
+    log "Hermes source changed — re-linking binary and reinstalling plugins"
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$WORKSPACE/hermes/hermes" "$HOME/.local/bin/hermes"
+    PLUGINS_SRC="$WORKSPACE/hermes/contrib/plugins"
+    if [[ -d "$PLUGINS_SRC" ]]; then
+      mkdir -p "$HOME/.hermes/plugins"
+      for _plugin_dir in "$PLUGINS_SRC"/*/; do
+        _plugin_name="$(basename "$_plugin_dir")"
+        rm -rf "$HOME/.hermes/plugins/$_plugin_name"
+        cp -r "$_plugin_dir" "$HOME/.hermes/plugins/$_plugin_name"
+      done
+      log "Hermes plugins reinstalled: $(ls "$HOME/.hermes/plugins/" | tr '\n' ' ')"
+    fi
+  fi
+
   # Sync Hermes skills if the vendored skills changed
   if echo "$CHANGED" | grep -q "^skills/"; then
     if [[ -d "$HOME/.hermes/skills" ]]; then
