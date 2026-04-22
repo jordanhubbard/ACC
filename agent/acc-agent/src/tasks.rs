@@ -620,8 +620,13 @@ fn is_quenched(cfg: &Config) -> bool {
 
 fn log(cfg: &Config, msg: &str) {
     let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
-    let line = format!("[{ts}] [tasks] [{}] {msg}\n", cfg.agent_name);
-    eprint!("{line}");
+    let line = format!("[{ts}] [tasks] [{}] {msg}", cfg.agent_name);
+    eprintln!("{line}");
+    let log_path = cfg.log_file("tasks");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+        use std::io::Write;
+        let _ = writeln!(f, "{line}");
+    }
 }
 
 #[cfg(test)]
