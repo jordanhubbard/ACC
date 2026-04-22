@@ -93,6 +93,27 @@ async fn bus_send(
             .into_response();
     }
 
+    // Validate mime/enc if sender includes a mime field
+    if let Some(mime_str) = body.get("mime").and_then(|v| v.as_str()) {
+        let mime: crate::bus_types::MediaType = mime_str.parse().unwrap_or_else(|_| unreachable!());
+        if !mime.is_known() {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error":"unknown_media_type","mime":mime_str,
+                            "known_types":crate::bus_types::MediaType::all_known()})),
+            ).into_response();
+        }
+        if mime.is_binary() {
+            let enc = body.get("enc").and_then(|v| v.as_str()).unwrap_or("");
+            if enc != "base64" {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({"error":"binary_type_requires_base64_enc","mime":mime_str})),
+                ).into_response();
+            }
+        }
+    }
+
     let seq = state.bus_seq.fetch_add(1, Ordering::SeqCst);
     let now = chrono::Utc::now().to_rfc3339();
 

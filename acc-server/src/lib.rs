@@ -1,4 +1,5 @@
 pub mod brain;
+pub mod bus_types;
 pub mod config;
 pub mod db;
 pub mod routes;
@@ -44,6 +45,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .merge(routes::auth::router())
         .merge(routes::requests::router())
         .merge(routes::soul::router())
+        .merge(routes::blobs::router())
         .layer(cors)
         .with_state(state)
 }
@@ -108,6 +110,9 @@ pub mod testing {
             fs_root:  dir.join("fs").to_string_lossy().into_owned(),
             supervisor: None,
             soul_store: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            blob_store: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            blobs_path: dir.join("blobs").to_string_lossy().into_owned(),
+            dlq_path:   dir.join("bus-dlq.jsonl").to_string_lossy().into_owned(),
         })
     }
 

@@ -28,6 +28,14 @@ struct BusMessage {
     to: Option<String>,
     body: Option<Value>,
     subject: Option<String>,
+    /// MIME type for messages carrying inline content.
+    mime: Option<String>,
+    /// Encoding of `payload` field; "base64" for binary types.
+    enc: Option<String>,
+    /// Inline payload (base64-encoded when enc="base64").
+    payload: Option<String>,
+    /// Blob ID for messages referencing a stored blob.
+    blob_id: Option<String>,
 }
 
 pub async fn run(args: &[String]) {
@@ -158,6 +166,7 @@ async fn dispatch(cfg: &Config, client: &Client, event: &str) {
             log(cfg, &format!("work signal: {msg_type}"));
             touch_work_signal(cfg);
         }
+        "bus.blob_ready" => handle_blob_ready(cfg, &msg),
         "heartbeat" | "queue_sync" | "pong" | "handoff" | "blob" | "status-response" => {}
         other if !other.is_empty() => {
             log(cfg, &format!("unhandled type: {other} (to={msg_to})"));
@@ -568,6 +577,25 @@ fn handle_soul_decommission(cfg: &Config, msg: &BusMessage) {
         .unwrap_or("no reason given");
     log(cfg, &format!("soul.decommission: exiting — {reason}"));
     std::process::exit(0);
+}
+
+fn handle_blob_ready(cfg: &Config, msg: &BusMessage) {
+    let blob_id = msg.blob_id.as_deref().unwrap_or("?");
+    let mime = msg.mime.as_deref().unwrap_or("unknown");
+    log(cfg, &format!("bus.blob_ready: blob_id={blob_id} mime={mime}"));
+}
+
+/// Decode a message payload, handling base64 for binary types.
+/// Returns raw bytes; callers convert to whatever representation they need.
+#[allow(dead_code)]
+fn decode_payload(msg: &BusMessage) -> Option<Vec<u8>> {
+    let payload = msg.payload.as_deref()?;
+    if msg.enc.as_deref() == Some("base64") {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.decode(payload).ok()
+    } else {
+        Some(payload.as_bytes().to_vec())
+    }
 }
 
 fn hmac_sign(payload: &Value, secret: &str) -> String {

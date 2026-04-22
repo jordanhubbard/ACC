@@ -42,9 +42,38 @@ pub struct AppState {
     /// Cached soul packages keyed by agent name.
     /// Populated when an agent responds to a soul.export bus event.
     pub soul_store: RwLock<HashMap<String, serde_json::Value>>,
+    /// In-memory blob metadata store. Keyed by blob_id.
+    pub blob_store: RwLock<HashMap<String, crate::bus_types::BlobMeta>>,
+    /// Filesystem path where blob data is stored (one file per blob_id).
+    pub blobs_path: String,
+    /// Path to the dead-letter queue JSONL file.
+    pub dlq_path: String,
 }
 
 impl AppState {
+    /// Extract raw bearer token from Authorization header.
+    pub fn bearer_token_str<'a>(&self, headers: &'a axum::http::HeaderMap) -> &'a str {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .trim_start_matches("Bearer ")
+            .trim()
+    }
+
+    /// Find agent name by matching token against agents registry.
+    pub async fn agent_from_token(&self, token: &str) -> Option<String> {
+        let agents = self.agents.read().await;
+        if let Some(obj) = agents.as_object() {
+            for (name, agent) in obj {
+                if agent.get("token").and_then(|t| t.as_str()) == Some(token) {
+                    return Some(name.clone());
+                }
+            }
+        }
+        None
+    }
+
     fn bearer_token<'a>(&self, headers: &'a axum::http::HeaderMap) -> &'a str {
         headers
             .get("authorization")

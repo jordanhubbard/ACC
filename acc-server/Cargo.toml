@@ -29,6 +29,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
+base64 = "0.22"
 rusqlite = { version = "0.31", features = ["bundled"] }
 rand = "0.8"
 

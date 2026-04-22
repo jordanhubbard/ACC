@@ -85,6 +85,9 @@ async fn main() {
         fs_root,
         supervisor: supervisor_handle,
         soul_store: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        blob_store: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        blobs_path: format!("{}/blobs", cfg.data_dir),
+        dlq_path: format!("{}/bus-dlq.jsonl", cfg.data_dir),
     });
 
     state::load_all(&app_state).await;
