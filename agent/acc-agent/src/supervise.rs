@@ -238,6 +238,8 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
             .status();
         if tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await.is_err() {
             let _ = child.start_kill();
+            // Reap after SIGKILL so we don't accumulate zombies across re-execs
+            let _ = child.wait().await;
         }
     } else {
         let _ = child.start_kill();
