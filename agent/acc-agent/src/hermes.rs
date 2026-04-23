@@ -287,12 +287,13 @@ fn find_hermes() -> String {
     "hermes".into()
 }
 
-// Slack gateway mode — exec hermes gateway and let it own the process lifecycle
+// Gateway mode — exec hermes gateway run and let it own the process lifecycle.
+// "run" is the foreground subcommand; bare "hermes gateway" prints usage and exits.
 async fn run_gateway(cfg: &Config) {
     let hermes_bin = find_hermes();
     log(cfg, &format!("starting gateway (bin={hermes_bin})"));
     let status = Command::new(&hermes_bin)
-        .args(["gateway"])
+        .args(["gateway", "run"])
         .status()
         .await;
     match status {

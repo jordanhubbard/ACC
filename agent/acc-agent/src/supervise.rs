@@ -51,10 +51,14 @@ fn hermes_gateway_enabled(_: &Config) -> bool {
     if !std::path::Path::new(&format!("{home}/.local/bin/hermes")).exists() {
         return false;
     }
-    // Only start gateway when Slack tokens are configured in ~/.hermes/.env
+    // Start gateway when any supported platform token is configured.
     let env_path = format!("{home}/.hermes/.env");
     std::fs::read_to_string(&env_path)
-        .map(|c| c.lines().any(|l| l.starts_with("SLACK_BOT_TOKEN=")))
+        .map(|c| c.lines().any(|l| {
+            l.starts_with("SLACK_BOT_TOKEN=")
+                || l.starts_with("TELEGRAM_BOT_TOKEN=")
+                || l.starts_with("DISCORD_BOT_TOKEN=")
+        }))
         .unwrap_or(false)
 }
 
