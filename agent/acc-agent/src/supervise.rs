@@ -46,18 +46,31 @@ fn hermes_enabled(_: &Config) -> bool {
     std::path::Path::new(&format!("{home}/.local/bin/hermes")).exists()
 }
 
+fn hermes_gateway_enabled(_: &Config) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !std::path::Path::new(&format!("{home}/.local/bin/hermes")).exists() {
+        return false;
+    }
+    // Only start gateway when Slack tokens are configured in ~/.hermes/.env
+    let env_path = format!("{home}/.hermes/.env");
+    std::fs::read_to_string(&env_path)
+        .map(|c| c.lines().any(|l| l.starts_with("SLACK_BOT_TOKEN=")))
+        .unwrap_or(false)
+}
+
 fn acc_server_enabled(_: &Config) -> bool {
     std::path::Path::new("/usr/local/bin/acc-server").exists()
         || std::path::Path::new("/usr/bin/acc-server").exists()
 }
 
 static CHILDREN: &[ChildSpec] = &[
-    ChildSpec { name: "bus",        args: &["bus"],                           direct_exe: false, enabled: always            },
-    ChildSpec { name: "queue",      args: &["queue"],                         direct_exe: false, enabled: always            },
-    ChildSpec { name: "tasks",      args: &["tasks"],                         direct_exe: false, enabled: always            },
-    ChildSpec { name: "hermes",     args: &["hermes", "--poll"],              direct_exe: false, enabled: hermes_enabled    },
-    ChildSpec { name: "proxy",      args: &["proxy", "--port", "9099"],       direct_exe: false, enabled: nvidia_enabled    },
-    ChildSpec { name: "acc-server", args: &["/usr/local/bin/acc-server"],     direct_exe: true,  enabled: acc_server_enabled},
+    ChildSpec { name: "bus",             args: &["bus"],                           direct_exe: false, enabled: always                },
+    ChildSpec { name: "queue",           args: &["queue"],                         direct_exe: false, enabled: always                },
+    ChildSpec { name: "tasks",           args: &["tasks"],                         direct_exe: false, enabled: always                },
+    ChildSpec { name: "hermes",          args: &["hermes", "--poll"],              direct_exe: false, enabled: hermes_enabled         },
+    ChildSpec { name: "hermes-gateway",  args: &["hermes", "--gateway"],           direct_exe: false, enabled: hermes_gateway_enabled },
+    ChildSpec { name: "proxy",           args: &["proxy", "--port", "9099"],       direct_exe: false, enabled: nvidia_enabled         },
+    ChildSpec { name: "acc-server",      args: &["/usr/local/bin/acc-server"],     direct_exe: true,  enabled: acc_server_enabled     },
 ];
 
 pub async fn run(args: &[String]) {

@@ -29,6 +29,7 @@ pub async fn run(args: &[String]) {
     let mut query: Option<String> = None;
     let mut session_id: Option<String> = None;
     let mut poll = false;
+    let mut gateway = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -37,6 +38,7 @@ pub async fn run(args: &[String]) {
             "--query" => { i += 1; query = args.get(i).cloned(); }
             "--resume" => { i += 1; session_id = args.get(i).cloned(); }
             "--poll" => poll = true,
+            "--gateway" => gateway = true,
             _ => {}
         }
         i += 1;
@@ -46,10 +48,12 @@ pub async fn run(args: &[String]) {
 
     if poll {
         poll_queue(&cfg, &client).await;
+    } else if gateway {
+        run_gateway(&cfg).await;
     } else if session_id.is_some() || query.is_some() || item_id.is_some() {
         run_task(&cfg, &client, query, item_id, session_id).await;
     } else {
-        eprintln!("[hermes] one of --item, --query, --resume, --poll required");
+        eprintln!("[hermes] one of --item, --query, --resume, --poll, --gateway required");
         std::process::exit(1);
     }
 }
@@ -281,6 +285,20 @@ fn find_hermes() -> String {
         }
     }
     "hermes".into()
+}
+
+// Slack gateway mode — exec hermes gateway and let it own the process lifecycle
+async fn run_gateway(cfg: &Config) {
+    let hermes_bin = find_hermes();
+    log(cfg, &format!("starting gateway (bin={hermes_bin})"));
+    let status = Command::new(&hermes_bin)
+        .args(["gateway"])
+        .status()
+        .await;
+    match status {
+        Ok(s) => log(cfg, &format!("gateway exited {s}")),
+        Err(e) => log(cfg, &format!("gateway exec error: {e}")),
+    }
 }
 
 // Queue poll mode
