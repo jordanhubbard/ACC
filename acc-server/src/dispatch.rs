@@ -80,12 +80,60 @@ pub async fn run(state: Arc<AppState>) {
     info!("[dispatch] tick loop started (tick={}s nudge={}s assign={}s backfill={}s)",
         cfg.tick_secs, cfg.nudge_after_secs, cfg.assign_after_secs, cfg.backfill_threshold_secs);
 
+    let mut bus_rx = state.bus_tx.subscribe();
     let mut interval = tokio::time::interval(
         std::time::Duration::from_secs(cfg.tick_secs)
     );
     loop {
-        interval.tick().await;
-        tick(&state, &cfg).await;
+        tokio::select! {
+            _ = interval.tick() => {
+                tick(&state, &cfg).await;
+            }
+            msg = bus_rx.recv() => {
+                match msg {
+                    Ok(s) => handle_bus_message(&state, &cfg, &s).await,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        info!("[dispatch] bus lagged, dropped {} messages", n);
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+    }
+}
+
+async fn handle_bus_message(state: &Arc<AppState>, _cfg: &DispatchConfig, msg: &str) {
+    let v: Value = match serde_json::from_str(msg) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    if v["type"].as_str() != Some("rocky:human_response") { return; }
+    let task_id = match v["idea_task_id"].as_str() { Some(id) => id.to_string(), None => return };
+    let action = match v["action"].as_str() { Some(a) => a.to_string(), None => return };
+    let now = Utc::now();
+
+    match action.as_str() {
+        "extend_7d" => {
+            update_task_meta_field(state, &task_id, "expiry_extended_at", json!(now.to_rfc3339())).await;
+            info!("[dispatch] rocky: extended 7d idea={}", task_id);
+        }
+        "promote_anyway" => {
+            let ideas = fetch_open_ideas(state).await;
+            if let Some(idea) = ideas.iter().find(|i| i["id"].as_str() == Some(task_id.as_str())) {
+                let votes = idea["metadata"]["votes"].as_array().cloned().unwrap_or_default();
+                let approvals: Vec<&Value> = votes.iter()
+                    .filter(|v| v["vote"].as_str() == Some("approve")
+                        && !v["refinement"].as_str().unwrap_or("").is_empty())
+                    .collect();
+                promote_idea(state, idea, &approvals, now).await;
+            }
+            info!("[dispatch] rocky: promoted anyway idea={}", task_id);
+        }
+        "let_expire" => {
+            reject_idea(state, &task_id, now).await;
+            info!("[dispatch] rocky: let expire idea={}", task_id);
+        }
+        _ => {}
     }
 }
 

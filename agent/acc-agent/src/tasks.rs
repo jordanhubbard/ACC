@@ -5,8 +5,10 @@
 //! Multiple agents run this concurrently; the server's SQL atomic claim prevents double-work.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::Notify;
 use tokio::time::sleep;
 use serde_json::Value;
 use crate::config::Config;
@@ -38,6 +40,15 @@ pub async fn run(args: &[String]) {
         .timeout(Duration::from_secs(30))
         .build()
         .expect("http client");
+
+    // Bus subscriber: wakes the poll loop immediately on dispatch nudge/assign
+    let nudge = Arc::new(Notify::new());
+    {
+        let cfg2 = cfg.clone();
+        let client2 = client.clone();
+        let nudge2 = nudge.clone();
+        tokio::spawn(bus_subscriber(cfg2, client2, nudge2));
+    }
 
     loop {
         if is_quenched(&cfg) {
@@ -165,8 +176,75 @@ pub async fn run(args: &[String]) {
             }
         }
 
-        sleep(if claimed { POLL_BUSY } else { POLL_IDLE }).await;
+        if claimed {
+            sleep(POLL_BUSY).await;
+        } else {
+            // Wait for idle timeout OR a dispatch nudge — whichever comes first
+            tokio::select! {
+                _ = sleep(POLL_IDLE) => {}
+                _ = nudge.notified() => {
+                    log(&cfg, "woke early — dispatch nudge received");
+                }
+            }
+        }
     }
+}
+
+// ── Bus subscriber — wakes poll loop on dispatch nudge/assign ─────────────────
+
+async fn bus_subscriber(cfg: Config, client: reqwest::Client, nudge: Arc<Notify>) {
+    let url = format!("{}/bus/stream", cfg.acc_url);
+    loop {
+        match subscribe_sse(&cfg, &client, &url, &nudge).await {
+            Ok(()) => {}
+            Err(e) => {
+                log(&cfg, &format!("[bus] SSE disconnected: {e}, reconnecting in 5s"));
+                sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
+}
+
+async fn subscribe_sse(cfg: &Config, client: &reqwest::Client, url: &str, nudge: &Arc<Notify>) -> Result<(), String> {
+    use futures_util::StreamExt;
+
+    let resp = client.get(url)
+        .bearer_auth(&cfg.acc_token)
+        .send().await
+        .map_err(|e| e.to_string())?;
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+
+        // SSE frames are separated by double newline
+        while let Some(pos) = buf.find("\n\n") {
+            let frame = buf[..pos].to_string();
+            buf = buf[pos + 2..].to_string();
+
+            // Extract data: line from SSE frame
+            for line in frame.lines() {
+                if let Some(data) = line.strip_prefix("data: ") {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                        let msg_type = v["type"].as_str().unwrap_or("");
+                        let to = v["to"].as_str().unwrap_or("");
+                        let is_directed_to_us = to == cfg.agent_name;
+                        let is_broadcast = to.is_empty() || to == "null";
+
+                        if msg_type == "tasks:dispatch_nudge" && (is_directed_to_us || is_broadcast) {
+                            nudge.notify_one();
+                        } else if msg_type == "tasks:dispatch_assigned" && is_directed_to_us {
+                            nudge.notify_one();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // ── Fetching / claiming ───────────────────────────────────────────────────────
