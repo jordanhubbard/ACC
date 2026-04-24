@@ -430,7 +430,7 @@ def run_once(repos: list[str] | None = None) -> dict:
         save_state(STATE_PATH, state)
         # Export beads JSONL so git backup picks it up
         subprocess.run(
-            ["bd", "export", "--output", os.path.join(
+            [_bd_bin(), "export", "--output", os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 ".beads", "issues.jsonl"
             )],
