@@ -125,15 +125,13 @@ register: ## Register this agent with the CCC hub
 build: ## Build all Rust binaries (acc-agent, acc-server, acc CLI)
 	@cargo build --release --manifest-path agent/Cargo.toml
 	@cargo build --release --manifest-path acc-server/Cargo.toml
-	@$(MAKE) build-cli
+	@bash scripts/install-acc.sh --build-only
 
-build-cli: ## Build the acc CLI binary
-	@cargo build --release --manifest-path acc-cli/Cargo.toml
+build-cli: ## Build the acc CLI binary (installs Rust via rustup if needed)
+	@bash scripts/install-acc.sh --build-only
 
-install-cli: build-cli ## Build and install acc CLI to $$HOME/.local/bin/acc
-	@mkdir -p "$$HOME/.local/bin"
-	@cp acc-cli/target/release/acc "$$HOME/.local/bin/acc"
-	@echo "Installed acc to $$HOME/.local/bin/acc"
+install-cli: ## Build and install acc CLI to $$HOME/.local/bin/acc (installs Rust if needed)
+	@bash scripts/install-acc.sh
 
 # ── Testing ────────────────────────────────────────────────────────────────
 
