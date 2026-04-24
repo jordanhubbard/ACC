@@ -86,6 +86,13 @@ pub async fn run(args: &[String]) {
         Err(e) => { eprintln!("[tasks] http client: {e}"); std::process::exit(1); }
     };
 
+    // Recovery: unclaim any tasks the server still attributes to this
+    // agent. They were claimed by a previous process that died (restart,
+    // crash, kill); we have no in-memory state for them and cannot
+    // resume work in-flight. Without this, a restarted agent sees
+    // active >= max_concurrent and never polls work.
+    cleanup_stale_claims(&cfg, &client).await;
+
     // Bus subscriber: wakes the poll loop immediately on dispatch nudge/assign
     let nudge = Arc::new(Notify::new());
     {
@@ -239,6 +246,38 @@ pub async fn run(args: &[String]) {
                 }
             }
         }
+    }
+}
+
+// ── Startup recovery — release stale claims from previous process ───────────
+
+async fn cleanup_stale_claims(cfg: &Config, client: &Client) {
+    let stale = match client
+        .tasks()
+        .list()
+        .status(TaskStatus::Claimed)
+        .agent(cfg.agent_name.clone())
+        .send()
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            log(cfg, &format!("startup recovery: failed to list own claims: {e}"));
+            return;
+        }
+    };
+    if stale.is_empty() {
+        return;
+    }
+    log(
+        cfg,
+        &format!("startup recovery: releasing {} stale claim(s) from previous process", stale.len()),
+    );
+    for t in &stale {
+        let _ = client.tasks().unclaim(&t.id, Some(&cfg.agent_name)).await;
+        // Populate cooldown so we don't immediately re-claim. Other
+        // agents (who haven't been running this task) can still pick it up.
+        mark_done(&t.id);
     }
 }
 
