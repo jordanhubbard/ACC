@@ -33,6 +33,8 @@ pub struct DispatchConfig {
     pub idea_vote_expiry_secs: i64,
     pub idea_expiry_warn_before_secs: i64,
     pub rocky_response_timeout_secs: i64,
+    /// Max tasks to explicitly assign to any single agent per tick (prevents bulk pile-on)
+    pub max_tasks_per_agent: usize,
 }
 
 impl DispatchConfig {
@@ -50,6 +52,7 @@ impl DispatchConfig {
             idea_vote_expiry_secs:     env_i64("ACC_IDEA_VOTE_EXPIRY", 604_800),
             idea_expiry_warn_before_secs: env_i64("ACC_IDEA_EXPIRY_WARN_BEFORE", 86_400),
             rocky_response_timeout_secs:  env_i64("ACC_ROCKY_RESPONSE_TIMEOUT", 14_400),
+            max_tasks_per_agent:          env_usize("ACC_MAX_TASKS_PER_AGENT", 2),
         }
     }
 }
@@ -141,14 +144,16 @@ async fn tick(state: &Arc<AppState>, cfg: &DispatchConfig) {
     let agents_snapshot = state.agents.read().await.clone();
     let now = Utc::now();
 
-    // Gather claimed-task counts per agent for load scoring
-    let claimed_counts = get_claimed_counts(state).await;
+    // Mutable so we can track in-tick assignments and avoid pile-on
+    let mut claimed_counts = get_claimed_counts(state).await;
 
     // Fetch all open, non-discovery, non-idea tasks (for dispatch phases 1-3)
     let open_tasks = fetch_open_dispatchable_tasks(state).await;
 
     for task in &open_tasks {
-        dispatch_task(state, cfg, task, &agents_snapshot, &claimed_counts, now).await;
+        if let Some(assigned) = dispatch_task(state, cfg, task, &agents_snapshot, &claimed_counts, now).await {
+            *claimed_counts.entry(assigned).or_insert(0) += 1;
+        }
     }
 
     // Idea voting nudges and tally
@@ -163,6 +168,7 @@ async fn tick(state: &Arc<AppState>, cfg: &DispatchConfig) {
 
 // ── Phase dispatcher ──────────────────────────────────────────────────────────
 
+/// Returns the agent name if a phase-3 explicit assignment was made, else None.
 async fn dispatch_task(
     state: &Arc<AppState>,
     cfg: &DispatchConfig,
@@ -170,14 +176,14 @@ async fn dispatch_task(
     agents: &Value,
     claimed_counts: &HashMap<String, usize>,
     now: DateTime<Utc>,
-) {
-    let task_id = match task["id"].as_str() { Some(id) => id, None => return };
+) -> Option<String> {
+    let task_id = match task["id"].as_str() { Some(id) => id, None => return None };
     let created_at = match task["created_at"].as_str()
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc))
     {
         Some(dt) => dt,
-        None => return,
+        None => return None,
     };
 
     let dispatch_meta = task["metadata"]["dispatch"].as_object();
@@ -195,7 +201,7 @@ async fn dispatch_task(
         .unwrap_or_default();
 
     if assign_attempts >= cfg.max_assign_attempts {
-        return; // gave up on this task
+        return None; // gave up on this task
     }
 
     let age_secs = (now - created_at).num_seconds();
@@ -206,16 +212,17 @@ async fn dispatch_task(
     let past_assign = nudge_age >= cfg.assign_after_secs || is_backfill;
 
     if past_assign {
-        if let Some(agent) = select_best_agent(task, agents, claimed_counts, &blacklist) {
+        if let Some(agent) = select_best_agent(task, agents, claimed_counts, &blacklist, cfg.max_tasks_per_agent) {
             explicit_assign(state, task_id, &agent, now).await;
             info!("[dispatch] phase3 assign task={} agent={}", task_id, agent);
+            return Some(agent);
         } else {
-            // no capable agent online — fall back to broadcast nudge
+            // no capable agent with capacity — fall back to broadcast nudge
             publish_nudge(state, task_id, task, None);
             update_nudge_meta(state, task_id, task, now).await;
-            info!("[dispatch] phase2 broadcast (no capable agent) task={}", task_id);
+            info!("[dispatch] phase2 broadcast (no capable agent with capacity) task={}", task_id);
         }
-        return;
+        return None;
     }
 
     // Phase 2: broadcast nudge (past nudge threshold, not yet assign threshold)
@@ -224,7 +231,7 @@ async fn dispatch_task(
 
     if past_nudge {
         // Try directed first; fall back to broadcast if no match
-        let target = select_best_agent(task, agents, claimed_counts, &blacklist);
+        let target = select_best_agent(task, agents, claimed_counts, &blacklist, cfg.max_tasks_per_agent);
         publish_nudge(state, task_id, task, target.as_deref());
         update_nudge_meta(state, task_id, task, now).await;
         if let Some(ref a) = target {
@@ -233,17 +240,20 @@ async fn dispatch_task(
             info!("[dispatch] phase2 broadcast task={}", task_id);
         }
     }
+    None
 }
 
 // ── Capability matching (pure — no I/O) ──────────────────────────────────────
 
 /// Select the best online agent for a task.
 /// Pure function: takes snapshots, returns agent name or None.
+/// Rejects agents whose claimed count is already at or above `max_per_agent`.
 pub fn select_best_agent(
     task: &Value,
     agents: &Value,
     claimed_counts: &HashMap<String, usize>,
     blacklist: &[String],
+    max_per_agent: usize,
 ) -> Option<String> {
     let required_executor = task["metadata"]["preferred_executor"].as_str()
         .filter(|s| !s.is_empty());
@@ -253,6 +263,8 @@ pub fn select_best_agent(
         .filter_map(|(name, agent)| {
             if !is_agent_online(agent) { return None; }
             if blacklist.contains(name) { return None; }
+            let load = *claimed_counts.get(name).unwrap_or(&0);
+            if load >= max_per_agent { return None; }
             if let Some(req) = required_executor {
                 let caps = &agent["capabilities"];
                 let has_cap = caps.get(req)
@@ -260,7 +272,6 @@ pub fn select_best_agent(
                     .unwrap_or(false);
                 if !has_cap { return None; }
             }
-            let load = *claimed_counts.get(name).unwrap_or(&0);
             Some((name.clone(), load))
         })
         .collect();
@@ -288,7 +299,9 @@ pub async fn nudge_new_task(state: &Arc<AppState>, task: &Value) {
     let task_id = match task["id"].as_str() { Some(id) => id, None => return };
     let agents = state.agents.read().await;
     let claimed_counts = get_claimed_counts(state).await;
-    let target = select_best_agent(task, &agents, &claimed_counts, &[]);
+    let max_per_agent = std::env::var("ACC_MAX_TASKS_PER_AGENT")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(2usize);
+    let target = select_best_agent(task, &agents, &claimed_counts, &[], max_per_agent);
     publish_nudge(state, task_id, task, target.as_deref());
 }
 
@@ -594,8 +607,9 @@ pub async fn detect_idle_agents(
             if claimed_counts.get(name).copied().unwrap_or(0) > 0 { continue; }
 
             // No claimable real work
+            let max_per_agent = cfg.max_tasks_per_agent;
             let has_work = open_real_tasks.iter().any(|task| {
-                select_best_agent(task, agents, claimed_counts, &[]).as_deref() == Some(name.as_str())
+                select_best_agent(task, agents, claimed_counts, &[], max_per_agent).as_deref() == Some(name.as_str())
                 || task["metadata"]["preferred_executor"].as_str().is_none()
             });
             if has_work { continue; }
@@ -841,7 +855,7 @@ mod tests {
             ("beta",  true, &["gpu"], 10),
         ]);
         let task = make_task(None);
-        let result = select_best_agent(&task, &agents, &HashMap::new(), &[]);
+        let result = select_best_agent(&task, &agents, &HashMap::new(), &[], 99);
         assert!(result.is_some());
     }
 
@@ -852,7 +866,7 @@ mod tests {
             ("gpu-agent", true, &["gpu", "claude_cli"], 10),
         ]);
         let task = make_task(Some("gpu"));
-        let result = select_best_agent(&task, &agents, &HashMap::new(), &[]);
+        let result = select_best_agent(&task, &agents, &HashMap::new(), &[], 99);
         assert_eq!(result.as_deref(), Some("gpu-agent"));
     }
 
@@ -863,7 +877,7 @@ mod tests {
             ("offline", false, &[], 10),
         ]);
         let task = make_task(None);
-        let result = select_best_agent(&task, &agents, &HashMap::new(), &[]);
+        let result = select_best_agent(&task, &agents, &HashMap::new(), &[], 99);
         assert_eq!(result.as_deref(), Some("online"));
     }
 
@@ -877,7 +891,7 @@ mod tests {
         counts.insert("busy".to_string(), 3);
         counts.insert("light".to_string(), 1);
         let task = make_task(None);
-        let result = select_best_agent(&task, &agents, &counts, &[]);
+        let result = select_best_agent(&task, &agents, &counts, &[], 99);
         assert_eq!(result.as_deref(), Some("light"));
     }
 
@@ -889,7 +903,7 @@ mod tests {
             ("mango", true, &[], 10),
         ]);
         let task = make_task(None);
-        let result = select_best_agent(&task, &agents, &HashMap::new(), &[]);
+        let result = select_best_agent(&task, &agents, &HashMap::new(), &[], 99);
         assert_eq!(result.as_deref(), Some("alpha"));
     }
 
@@ -899,7 +913,7 @@ mod tests {
             ("offline", false, &[], 10),
         ]);
         let task = make_task(None);
-        let result = select_best_agent(&task, &agents, &HashMap::new(), &[]);
+        let result = select_best_agent(&task, &agents, &HashMap::new(), &[], 99);
         assert!(result.is_none());
     }
 
@@ -911,7 +925,7 @@ mod tests {
         ]);
         let task = make_task(None);
         let blacklist = vec!["agent-a".to_string()];
-        let result = select_best_agent(&task, &agents, &HashMap::new(), &blacklist);
+        let result = select_best_agent(&task, &agents, &HashMap::new(), &blacklist, 99);
         assert_eq!(result.as_deref(), Some("agent-b"));
     }
 
@@ -922,7 +936,7 @@ mod tests {
         ]);
         let task = make_task(None);
         let blacklist = vec!["agent-a".to_string()];
-        let result = select_best_agent(&task, &agents, &HashMap::new(), &blacklist);
+        let result = select_best_agent(&task, &agents, &HashMap::new(), &blacklist, 99);
         assert!(result.is_none());
     }
 

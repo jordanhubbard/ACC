@@ -58,65 +58,65 @@ pub async fn run(args: &[String]) {
         }
 
         let active = count_active_tasks(&cfg, &client).await;
-        if active >= max_concurrent {
-            log(&cfg, &format!("at capacity ({}/{}), waiting", active, max_concurrent));
-            sleep(POLL_IDLE).await;
-            continue;
-        }
+        let at_work_cap = active >= max_concurrent;
 
         // Fetch online peers once per cycle (used by all three polls)
         let online_peers = peers::list_peers(&cfg, &client).await;
         let mut claimed = false;
 
-        // ── Poll 1: work tasks ──────────────────────────────────────────────
-        let fetch_limit = ((max_concurrent - active) * 5).max(10);
-        match fetch_open_tasks(&cfg, &client, fetch_limit, "work").await {
-            Err(e) => {
-                log(&cfg, &format!("fetch failed: {e}"));
-                sleep(POLL_IDLE).await;
-                continue;
-            }
-            Ok(open_tasks) => {
-                for task in &open_tasks {
-                    let task_id = task["id"].as_str().unwrap_or("").to_string();
-                    if task_id.is_empty() { continue; }
+        // ── Poll 1: work tasks (skipped when at capacity) ───────────────────
+        if !at_work_cap {
+            let fetch_limit = ((max_concurrent - active) * 5).max(10);
+            match fetch_open_tasks(&cfg, &client, fetch_limit, "work").await {
+                Err(e) => {
+                    log(&cfg, &format!("fetch failed: {e}"));
+                    sleep(POLL_IDLE).await;
+                    continue;
+                }
+                Ok(open_tasks) => {
+                    for task in &open_tasks {
+                        let task_id = task["id"].as_str().unwrap_or("").to_string();
+                        if task_id.is_empty() { continue; }
 
-                    let preferred = task["metadata"]["preferred_executor"].as_str().unwrap_or("");
-                    if !preferred.is_empty()
-                        && preferred != cfg.agent_name.as_str()
-                        && online_peers.iter().any(|p| p == preferred)
-                    {
-                        log(&cfg, &format!("skipping {task_id} — preferred by {preferred} (online)"));
-                        continue;
-                    }
+                        let preferred = task["metadata"]["preferred_executor"].as_str().unwrap_or("");
+                        if !preferred.is_empty()
+                            && preferred != cfg.agent_name.as_str()
+                            && online_peers.iter().any(|p| p == preferred)
+                        {
+                            log(&cfg, &format!("skipping {task_id} — preferred by {preferred} (online)"));
+                            continue;
+                        }
 
-                    match claim_task(&cfg, &client, &task_id).await {
-                        Ok(claimed_task) => {
-                            log(&cfg, &format!("claimed task {task_id}: {}", claimed_task["title"].as_str().unwrap_or("")));
-                            let cfg2 = cfg.clone();
-                            let client2 = client.clone();
-                            let task2 = claimed_task.clone();
-                            let peers2 = online_peers.clone();
-                            tokio::spawn(async move {
-                                execute_task(&cfg2, &client2, &task2, &peers2).await;
-                            });
-                            claimed = true;
-                            break;
-                        }
-                        Err(409) | Err(423) => { /* already claimed or blocked, try next */ }
-                        Err(429) => {
-                            log(&cfg, "at capacity (server side)");
-                            break;
-                        }
-                        Err(e) => {
-                            log(&cfg, &format!("claim error {e} for {task_id}"));
+                        match claim_task(&cfg, &client, &task_id).await {
+                            Ok(claimed_task) => {
+                                log(&cfg, &format!("claimed task {task_id}: {}", claimed_task["title"].as_str().unwrap_or("")));
+                                let cfg2 = cfg.clone();
+                                let client2 = client.clone();
+                                let task2 = claimed_task.clone();
+                                let peers2 = online_peers.clone();
+                                tokio::spawn(async move {
+                                    execute_task(&cfg2, &client2, &task2, &peers2).await;
+                                });
+                                claimed = true;
+                                break;
+                            }
+                            Err(409) | Err(423) => { /* already claimed or blocked, try next */ }
+                            Err(429) => {
+                                log(&cfg, "at capacity (server side)");
+                                break;
+                            }
+                            Err(e) => {
+                                log(&cfg, &format!("claim error {e} for {task_id}"));
+                            }
                         }
                     }
                 }
             }
         }
 
-        // ── Poll 2: review tasks ────────────────────────────────────────────
+        // ── Poll 2: review tasks (runs even when at work capacity) ──────────
+        // Reviews are bounded to 1 concurrent per agent (max_concurrent cap
+        // applies separately; reviews are lighter than full work tasks).
         if !claimed {
             if let Ok(review_tasks) = fetch_open_tasks(&cfg, &client, 10, "review").await {
                 for task in &review_tasks {
@@ -151,7 +151,7 @@ pub async fn run(args: &[String]) {
         }
 
         // ── Poll 3: phase_commit tasks ──────────────────────────────────────
-        if !claimed {
+        if !claimed && !at_work_cap {
             if let Ok(phase_tasks) = fetch_open_tasks(&cfg, &client, 5, "phase_commit").await {
                 for task in &phase_tasks {
                     let task_id = task["id"].as_str().unwrap_or("").to_string();
@@ -174,6 +174,10 @@ pub async fn run(args: &[String]) {
                     }
                 }
             }
+        }
+
+        if at_work_cap && !claimed {
+            log(&cfg, &format!("at work capacity ({}/{}), waiting", active, max_concurrent));
         }
 
         if claimed {
