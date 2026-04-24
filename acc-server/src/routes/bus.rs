@@ -185,19 +185,42 @@ async fn bus_presence(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Initialize the bus sequence counter from the log on startup.
+///
+/// Reads the last-written message's `seq` field and returns `seq + 1` so
+/// the next assigned sequence continues monotonically across server
+/// restarts. Previously `bus_seq` was hard-initialized to 0, which caused
+/// msg-id collisions with existing log entries every restart and made
+/// "newest seq" a meaningless ordering signal.
+pub fn initial_bus_seq(path: &str) -> u64 {
+    let Ok(content) = std::fs::read_to_string(path) else { return 0 };
+    for line in content.lines().rev() {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if let Some(seq) = v.get("seq").and_then(|s| s.as_u64()) {
+                return seq + 1;
+            }
+        }
+    }
+    0
+}
+
 async fn load_bus_messages(path: &str, limit: usize, q: &BusQuery) -> Vec<String> {
     let content = match tokio::fs::read_to_string(path).await {
         Ok(c) => c,
         Err(_) => return vec![],
     };
 
-    content
+    // Walk the log newest-first, apply filters, take up to `limit` matching
+    // messages, then reverse to chronological (oldest-first) for the caller.
+    //
+    // The previous implementation did `.rev().take(limit*4).rev().take(limit)`,
+    // which returns the *oldest* `limit` messages in the most recent
+    // `limit*4` line window — i.e. a mid-log slice, not the tail. On a log
+    // with N > limit*4 lines, SSE replay and `/bus/messages` both silently
+    // served 20-day-old data while live writes continued at the tail.
+    let mut matched: Vec<String> = content
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .rev()
-        .take(limit * 4) // over-fetch to account for filtered-out messages
-        .collect::<Vec<_>>()
-        .into_iter()
         .rev()
         .filter(|line| {
             let Ok(v) = serde_json::from_str::<Value>(line) else { return false };
@@ -237,7 +260,11 @@ async fn load_bus_messages(path: &str, limit: usize, q: &BusQuery) -> Vec<String
         })
         .take(limit)
         .map(|s| s.to_string())
-        .collect()
+        .collect();
+
+    // Reverse back so callers get chronological order (oldest → newest).
+    matched.reverse();
+    matched
 }
 
 async fn append_line(path: &str, line: &str) -> std::io::Result<()> {

@@ -108,7 +108,9 @@ pub mod testing {
             projects: tokio::sync::RwLock::new(Vec::new()),
             brain:    Arc::new(brain::BrainQueue::new()),
             bus_tx:   tokio::sync::broadcast::channel(256).0,
-            bus_seq:  std::sync::atomic::AtomicU64::new(0),
+            bus_seq:  std::sync::atomic::AtomicU64::new(
+                crate::routes::bus::initial_bus_seq(&dir.join("bus.jsonl").to_string_lossy()),
+            ),
             start_time: std::time::SystemTime::now(),
             fs_root:  dir.join("fs").to_string_lossy().into_owned(),
             supervisor: None,
