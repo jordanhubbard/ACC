@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
     response::{IntoResponse, Json},
-    routing::{delete, get},
+    routing::get,
     Router,
 };
 use serde::Deserialize;

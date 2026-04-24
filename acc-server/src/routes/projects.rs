@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
     response::{IntoResponse, Json},
-    routing::{get, patch, post},
+    routing::{get, post},
     Router,
 };
 use serde_json::{json, Value};

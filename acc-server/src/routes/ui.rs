@@ -43,7 +43,7 @@ async fn get_bootstrap(
 ) -> impl IntoResponse {
     let token = params.get("token").cloned().unwrap_or_default();
     // Check if token matches any agent's bootstrap token
-    let agents = state.agents.read().await;
+    let _agents = state.agents.read().await;
     let secrets = state.secrets.read().await;
 
     let global_bootstrap = secrets

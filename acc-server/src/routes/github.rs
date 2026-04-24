@@ -22,7 +22,7 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 fn verify_signature(secret: &str, body: &[u8], sig_header: &str) -> bool {
-    use std::fmt::Write;
+    
     // sig_header is "sha256=<hex>"
     let Some(hex_sig) = sig_header.strip_prefix("sha256=") else {
         return false;

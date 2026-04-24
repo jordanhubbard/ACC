@@ -14,7 +14,7 @@ use axum::{
 use rusqlite::params;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use crate::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
