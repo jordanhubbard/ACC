@@ -289,13 +289,20 @@ fn find_hermes() -> String {
     "hermes".into()
 }
 
-// Gateway mode — exec hermes gateway run and let it own the process lifecycle.
-// "run" is the foreground subcommand; bare "hermes gateway" prints usage and exits.
+// Gateway mode — exec `hermes gateway run --replace` and let it own the
+// process lifecycle.
+//
+// `--replace` causes hermes to take over from any pre-existing gateway
+// (matches its own PID file) instead of exiting with status 1 and a
+// "Gateway already running" message. Without this flag we observed a
+// supervisor spam-loop on do-host1: every restart from supervise would
+// hit the existing PID, exit 1, get respawned, repeat. With `--replace`
+// the new invocation cleanly takes over and runs steady-state.
 async fn run_gateway(cfg: &Config) {
     let hermes_bin = find_hermes();
     log(cfg, &format!("starting gateway (bin={hermes_bin})"));
     let status = Command::new(&hermes_bin)
-        .args(["gateway", "run"])
+        .args(["gateway", "run", "--replace"])
         .status()
         .await;
     match status {
