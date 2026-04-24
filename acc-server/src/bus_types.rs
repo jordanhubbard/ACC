@@ -89,6 +89,15 @@ media_types! {
     (ImageGif,         "image/gif",                 true),
     (ImageWebp,        "image/webp",                true),
     (ImageSvg,         "image/svg+xml",             false), // SVG is XML text
+    // ── 3D Models ─────────────────────────────────────────────────────────────
+    (ModelGltfJson,    "model/gltf+json",           false), // glTF JSON
+    (ModelGltfBinary,  "model/gltf-binary",         true),  // glTF binary (GLB)
+    (ModelObj,         "model/obj",                 false), // Wavefront OBJ (text)
+    (ModelUsdz,        "model/vnd.usdz+zip",        true),  // USDZ container
+    (ModelStl,         "model/stl",                 true),  // STL (binary or ASCII)
+    (ModelPly,         "model/ply",                 true),  // PLY polygon file
+    (ModelVrml,        "model/vrml",                false), // VRML (text)
+    (ModelFbx,         "model/fbx",                 true),  // FBX binary container
     // ── Binary ────────────────────────────────────────────────────────────────
     (OctetStream,      "application/octet-stream",  true),
 }
@@ -158,6 +167,15 @@ mod tests {
         assert!(MediaType::ImageGif.is_binary());
         assert!(MediaType::ImageWebp.is_binary());
         assert!(MediaType::OctetStream.is_binary());
+        // 3-D model types
+        assert!(!MediaType::ModelGltfJson.is_binary()); // JSON text
+        assert!(MediaType::ModelGltfBinary.is_binary());
+        assert!(!MediaType::ModelObj.is_binary());      // OBJ is text
+        assert!(MediaType::ModelUsdz.is_binary());
+        assert!(MediaType::ModelStl.is_binary());
+        assert!(MediaType::ModelPly.is_binary());
+        assert!(!MediaType::ModelVrml.is_binary());     // VRML is text
+        assert!(MediaType::ModelFbx.is_binary());
     }
 
     #[test]
@@ -186,6 +204,6 @@ mod tests {
 
     #[test]
     fn test_count_known_types() {
-        assert_eq!(MediaType::all_known().len(), 17);
+        assert_eq!(MediaType::all_known().len(), 25);
     }
 }

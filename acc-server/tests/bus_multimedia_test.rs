@@ -45,7 +45,7 @@ async fn round_trip(srv: &TestServer, mime: &str, data: &[u8], binary: bool) {
     assert_eq!(returned, data, "data mismatch for mime={mime}");
 }
 
-// ── Upload / download round-trips for all 17 media types ─────────────────────
+// ── Upload / download round-trips for all 25 media types ─────────────────────
 
 #[tokio::test]
 async fn test_text_plain_round_trip() {
@@ -147,6 +147,62 @@ async fn test_image_webp_round_trip() {
 async fn test_application_octet_stream_round_trip() {
     let srv = TestServer::new().await;
     round_trip(&srv, "application/octet-stream", b"\x00\x01\x02\x03\xff", true).await;
+}
+
+// ── Upload / download round-trips for 3-D model types ────────────────────────
+
+#[tokio::test]
+async fn test_model_gltf_json_round_trip() {
+    let srv = TestServer::new().await;
+    round_trip(&srv, "model/gltf+json", br#"{"asset":{"version":"2.0"}}"#, false).await;
+}
+
+#[tokio::test]
+async fn test_model_gltf_binary_round_trip() {
+    let srv = TestServer::new().await;
+    // GLB magic: 0x46546C67 ("glTF") little-endian
+    round_trip(&srv, "model/gltf-binary", b"glTF\x02\x00\x00\x00", true).await;
+}
+
+#[tokio::test]
+async fn test_model_obj_round_trip() {
+    let srv = TestServer::new().await;
+    round_trip(&srv, "model/obj", b"# Wavefront OBJ\nv 0 0 0\n", false).await;
+}
+
+#[tokio::test]
+async fn test_model_usdz_round_trip() {
+    let srv = TestServer::new().await;
+    // USDZ is a ZIP container; use a minimal ZIP local-file header magic.
+    round_trip(&srv, "model/vnd.usdz+zip", b"PK\x03\x04", true).await;
+}
+
+#[tokio::test]
+async fn test_model_stl_round_trip() {
+    let srv = TestServer::new().await;
+    // Binary STL: 80-byte header + uint32 triangle count (0).
+    let mut stl = vec![0u8; 80];
+    stl.extend_from_slice(&[0u8; 4]); // 0 triangles
+    round_trip(&srv, "model/stl", &stl, true).await;
+}
+
+#[tokio::test]
+async fn test_model_ply_round_trip() {
+    let srv = TestServer::new().await;
+    round_trip(&srv, "model/ply", b"ply\nformat binary_little_endian 1.0\nend_header\n", true).await;
+}
+
+#[tokio::test]
+async fn test_model_vrml_round_trip() {
+    let srv = TestServer::new().await;
+    round_trip(&srv, "model/vrml", b"#VRML V2.0 utf8\n", false).await;
+}
+
+#[tokio::test]
+async fn test_model_fbx_round_trip() {
+    let srv = TestServer::new().await;
+    // FBX binary magic: "Kaydara FBX Binary  \x00"
+    round_trip(&srv, "model/fbx", b"Kaydara FBX Binary  \x00", true).await;
 }
 
 // ── Validation tests ──────────────────────────────────────────────────────────
