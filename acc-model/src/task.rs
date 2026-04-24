@@ -34,6 +34,21 @@ pub enum ReviewResult {
     Rejected,
 }
 
+macro_rules! impl_fromstr_via_serde {
+    ($ty:ty) => {
+        impl std::str::FromStr for $ty {
+            type Err = serde_json::Error;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                serde_json::from_value(serde_json::Value::String(s.to_string()))
+            }
+        }
+    };
+}
+
+impl_fromstr_via_serde!(TaskStatus);
+impl_fromstr_via_serde!(TaskType);
+impl_fromstr_via_serde!(ReviewResult);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
