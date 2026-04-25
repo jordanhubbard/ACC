@@ -726,6 +726,16 @@ async fn resolve_workspace(cfg: &Config, client: &Client, project_id: &str, task
         }
     }
 
+    // Hub-resident fallback: on the AgentFS-server node (do-host1) the
+    // share lives at /srv/accfs/shared/<slug>/ and isn't mounted back
+    // onto ~/.acc/shared/ (no self-loop). Without setup-node.sh's
+    // symlink farm in place, fall back to the canonical hub path so
+    // agents on the hub host still find populated workspaces.
+    let hub_path = std::path::Path::new("/srv/accfs/shared").join(&workspace_name);
+    if hub_path.exists() {
+        return hub_path;
+    }
+
     // Fallback: shared/<slug-or-id> (will be created by caller); for
     // task-scoped paths a per-task local dir is the last resort.
     if task_id.is_empty() {

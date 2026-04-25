@@ -431,8 +431,31 @@ _agentfs_healthy() {
   _agentfs_mounted && ls "$AGENTFS_MOUNT" >/dev/null 2>&1
 }
 
+_agentfs_is_hub_resident() {
+  # The hub serves AgentFS from /srv/accfs/shared. On the hub itself,
+  # we don't mount our own export — we symlink the shared dir into
+  # ~/.acc/shared/<slug> so agents looking up workspaces find them.
+  [ -d /srv/accfs/shared ] && ! mount | grep -q "on /srv/accfs" 2>/dev/null
+}
+
 if _agentfs_healthy; then
   success "AgentFS already mounted and healthy at $AGENTFS_MOUNT"
+elif _agentfs_is_hub_resident; then
+  # Hub-resident agent (e.g. rocky on do-host1): /srv/accfs/shared/ is a
+  # real local directory, not a mount. Mounting our own SMB export back
+  # at $HOME/.acc/shared causes a self-loop. Symlink each project's
+  # shared dir directly so workspace lookups resolve to the real path.
+  info "Hub-resident detected — wiring AgentFS via symlink farm (no SMB mount needed)"
+  mkdir -p "$AGENTFS_MOUNT"
+  _linked=0
+  for _src in /srv/accfs/shared/*/; do
+    _slug=$(basename "$_src")
+    _dst="$AGENTFS_MOUNT/$_slug"
+    if [ ! -e "$_dst" ]; then
+      ln -s "$_src" "$_dst" && _linked=$((_linked+1))
+    fi
+  done
+  success "AgentFS symlink farm: $_linked new link(s) added at $AGENTFS_MOUNT"
 else
   mkdir -p "$AGENTFS_MOUNT"
 
@@ -502,16 +525,32 @@ EOF"
     fi
 
   elif [[ "$PLATFORM" == "macos" ]]; then
-    # macOS: use mount_smbfs + LaunchAgent for persistence
-    _plist="$HOME/Library/LaunchAgents/com.acc.accfs-mount.plist"
-    if [ ! -f "$_plist" ]; then
-      _pw_fragment=""
-      if [[ -n "${ACC_SMB_PASSWORD:-}" ]]; then
+    # macOS: mount_smbfs + LaunchAgent for persistence.
+    # Without ACC_SMB_PASSWORD, mount_smbfs falls back to anonymous and
+    # the server rejects with "Authentication error". Surface this
+    # clearly instead of silently installing a plist that fails forever.
+    if [[ -z "${ACC_SMB_PASSWORD:-}" ]]; then
+      warn "macOS AgentFS mount needs ACC_SMB_PASSWORD."
+      echo ""
+      echo "  ┌──────────────────────────────────────────────────────────────────┐"
+      echo "  │  macOS doesn't read /etc/samba/smbcredentials. To enable the    │"
+      echo "  │  AgentFS mount on this Mac:                                      │"
+      echo "  │                                                                  │"
+      echo "  │    1. Get the Samba password from the hub (/etc/samba/...)      │"
+      echo "  │    2. Add to ~/.acc/.env (or ~/.zshrc) before re-running setup: │"
+      echo "  │         ACC_SMB_PASSWORD='<password>'                            │"
+      echo "  │    3. Or store it in macOS Keychain and use a credential        │"
+      echo "  │       reference in the LaunchAgent (more secure).                │"
+      echo "  │                                                                  │"
+      echo "  │  Without this, agent task workspaces will be empty stubs and    │"
+      echo "  │  any task this agent claims will silently fail to do real work. │"
+      echo "  └──────────────────────────────────────────────────────────────────┘"
+      echo ""
+    else
+      _plist="$HOME/Library/LaunchAgents/com.acc.accfs-mount.plist"
+      if [ ! -f "$_plist" ]; then
         _pw_fragment="${AGENTFS_USER}:${ACC_SMB_PASSWORD}@"
-      else
-        _pw_fragment="${AGENTFS_USER}@"
-      fi
-      cat > "$_plist" << EOF
+        cat > "$_plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -530,17 +569,18 @@ EOF"
 </dict>
 </plist>
 EOF
-      launchctl load "$_plist" 2>/dev/null
-      sleep 2
-      success "AgentFS LaunchAgent installed"
-    else
-      success "AgentFS LaunchAgent already present"
-    fi
-    # Verify (note: ls may fail from SSH due to macOS TCC; use mount + stat)
-    if _agentfs_mounted; then
-      success "AgentFS mounted at $AGENTFS_MOUNT (macOS TCC may block ls from SSH — normal)"
-    else
-      warn "AgentFS not mounted — check ~/Library/LaunchAgents/com.acc.accfs-mount.plist and logs"
+        launchctl load "$_plist" 2>/dev/null
+        sleep 2
+        success "AgentFS LaunchAgent installed"
+      else
+        success "AgentFS LaunchAgent already present"
+      fi
+      # Verify (note: ls may fail from SSH due to macOS TCC; use mount + stat)
+      if _agentfs_mounted; then
+        success "AgentFS mounted at $AGENTFS_MOUNT (macOS TCC may block ls from SSH — normal)"
+      else
+        warn "AgentFS not mounted — check ~/Library/LaunchAgents/com.acc.accfs-mount.plist and logs"
+      fi
     fi
   fi
 fi
