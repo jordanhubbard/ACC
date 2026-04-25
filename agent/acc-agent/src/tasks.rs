@@ -524,7 +524,28 @@ async fn execute_phase_commit_task(cfg: &Config, client: &reqwest::Client, task:
 }
 
 async fn run_git_phase_commit(workspace: &PathBuf, branch: &str, commit_msg: &str) -> Result<String, String> {
+    // Ensure the workspace directory exists before invoking git.
+    // If it is missing (e.g. the path was constructed from a stale/macOS HOME on a
+    // Linux host) git -C would fail with "cannot change to '<path>'".
+    if !workspace.exists() {
+        return Err(format!(
+            "workspace directory does not exist: {}",
+            workspace.display()
+        ));
+    }
+
     let ws = workspace.to_str().unwrap_or(".");
+
+    // Verify this is actually a git repository so we surface a clear error
+    // instead of a cryptic git message.
+    let is_git = Command::new("git")
+        .args(["-C", ws, "rev-parse", "--git-dir"])
+        .output().await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !is_git {
+        return Err(format!("workspace is not a git repository: {ws}"));
+    }
 
     let checkout = Command::new("git")
         .args(["-C", ws, "checkout", "-B", branch])
@@ -575,12 +596,17 @@ async fn resolve_workspace(cfg: &Config, project_id: &str, task_id: &str) -> Pat
         let p = shared.join(project_id);
         if p.exists() { return p; }
     }
-    if task_id.is_empty() {
+    let path = if task_id.is_empty() {
         // Shared project workspace (for review and phase_commit tasks)
         cfg.acc_dir.join("shared").join(if project_id.is_empty() { "default" } else { project_id })
     } else {
         cfg.acc_dir.join("task-workspaces").join(task_id)
-    }
+    };
+    // Always ensure the resolved workspace directory exists so that git and
+    // other tools never fail with "cannot change to '<path>': No such file or
+    // directory" when the directory was not yet created.
+    let _ = std::fs::create_dir_all(&path);
+    path
 }
 
 async fn complete_task(cfg: &Config, client: &reqwest::Client, task_id: &str, output: &str) {
