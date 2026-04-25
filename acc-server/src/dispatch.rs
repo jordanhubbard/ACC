@@ -164,6 +164,101 @@ async fn tick(state: &Arc<AppState>, cfg: &DispatchConfig) {
 
     // Idle agent discovery
     detect_and_assign_discovery(state, cfg, &agents_snapshot, &claimed_counts, now).await;
+
+    // Auto-file phase_commit tasks for projects whose AgentFS is dirty
+    // and don't already have a milestone-commit task in flight.
+    auto_file_phase_commits(state).await;
+}
+
+// ── Auto-phase-commit (CCC-amn) ───────────────────────────────────────────
+//
+// Per the CCC-tk0 lifecycle, AgentFS state is committed and pushed back to
+// git only by a phase_commit task. Without something *filing* those tasks,
+// dirty bits accumulate forever (observed: natasha alone sitting on 532
+// modified lines across 6 projects, never pushed). This phase scans
+// projects each tick and queues a phase_commit task for any active project
+// that's dirty AND doesn't already have one in flight.
+
+async fn auto_file_phase_commits(state: &Arc<AppState>) {
+    let projects = state.projects.read().await.clone();
+
+    for project in projects.iter() {
+        let dirty = project.get("agentfs_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+        if !dirty {
+            continue;
+        }
+        let project_id = match project.get("id").and_then(|v| v.as_str()) {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => continue,
+        };
+        let project_status = project.get("status").and_then(|v| v.as_str()).unwrap_or("active");
+        if project_status != "active" {
+            continue; // skip archived projects
+        }
+
+        // Skip if a phase_commit task is already pending or in flight for
+        // this project. Prevents pile-on across ticks.
+        let already_in_flight: i64 = {
+            let db = state.fleet_db.lock().await;
+            db.query_row(
+                "SELECT COUNT(*) FROM fleet_tasks
+                 WHERE project_id=?1
+                   AND task_type='phase_commit'
+                   AND status IN ('open','claimed','in_progress')",
+                params![project_id],
+                |row| row.get(0),
+            ).unwrap_or(0)
+        };
+        if already_in_flight > 0 {
+            continue;
+        }
+
+        // File a new phase_commit task
+        let task_id = format!("task-{}", uuid::Uuid::new_v4().simple());
+        let project_name = project.get("name").and_then(|v| v.as_str()).unwrap_or("project").to_string();
+        let title = format!("phase_commit: {project_name}");
+        let description = format!(
+            "Auto-filed milestone-commit task. The project's AgentFS workspace \
+             has accumulated uncommitted edits. Commit them (any branch is \
+             fine — phase_commit handler creates phase/{{phase}} and pushes), \
+             then call POST /api/projects/{project_id}/clean to clear the \
+             dirty bit.\n\n\
+             Source: dispatch.rs auto_file_phase_commits"
+        );
+        let metadata = json!({
+            "source": "auto-phase-commit",
+            "auto_filed_at": Utc::now().to_rfc3339(),
+        }).to_string();
+        let phase = "milestone";
+
+        let inserted = {
+            let db = state.fleet_db.lock().await;
+            db.execute(
+                "INSERT INTO fleet_tasks
+                  (id, project_id, title, description, priority, metadata, task_type, phase, blocked_by)
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5, 'phase_commit', ?6, '[]')",
+                params![task_id, project_id, title, description, metadata, phase],
+            )
+        };
+        match inserted {
+            Ok(_) => {
+                info!("[dispatch] auto-filed phase_commit task {} for project {} ({})",
+                    task_id, project_id, project_name);
+                let _ = state.bus_tx.send(
+                    json!({
+                        "type": "tasks:added",
+                        "task_id": task_id,
+                        "task_type": "phase_commit",
+                        "project_id": project_id,
+                        "auto_filed": true,
+                    }).to_string()
+                );
+            }
+            Err(e) => {
+                info!("[dispatch] auto-file phase_commit failed for project {}: {e}", project_id);
+            }
+        }
+    }
 }
 
 // ── Phase dispatcher ──────────────────────────────────────────────────────────
