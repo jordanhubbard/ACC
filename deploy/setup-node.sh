@@ -418,8 +418,21 @@ fi
 AGENTFS_HOST="${AGENTFS_HOST:-100.89.199.14}"
 AGENTFS_SHARE="accfs"
 AGENTFS_USER="${AGENTFS_USER:-jkh}"
-AGENTFS_MOUNT="${AGENTFS_MOUNT:-$HOME/.acc/shared}"
 AGENTFS_CREDS="/etc/samba/smbcredentials"
+
+# CCC-uu5: on macOS, mounting under ~/ puts the SMB share inside TCC's
+# 'Files & Folders' gate. Combined with launchctl-spawned acc-agent
+# being ad-hoc signed (each rebuild = new TCC identity), every write
+# fails with EPERM and the LLM agent burns turns retrying. Mounting
+# under /Volumes escapes that gate (network-volume TCC category is
+# granted system-wide, not per-binary). We keep ~/.acc/shared as a
+# symlink so all existing path-resolution code still works.
+AGENTFS_MOUNT_LOGICAL="$HOME/.acc/shared"
+if [[ "$PLATFORM" == "macos" ]]; then
+  AGENTFS_MOUNT="${AGENTFS_MOUNT:-/Volumes/accfs}"
+else
+  AGENTFS_MOUNT="${AGENTFS_MOUNT:-$HOME/.acc/shared}"
+fi
 
 info "Checking AgentFS mount..."
 
@@ -548,8 +561,31 @@ EOF"
       echo ""
     else
       _plist="$HOME/Library/LaunchAgents/com.acc.accfs-mount.plist"
-      if [ ! -f "$_plist" ]; then
-        _pw_fragment="${AGENTFS_USER}:${ACC_SMB_PASSWORD}@"
+      _pw_fragment="${AGENTFS_USER}:${ACC_SMB_PASSWORD}@"
+      # CCC-uu5: pre-create /Volumes/accfs as user-owned so the LaunchAgent
+      # (running as user) can mount there without sudo. /Volumes itself is
+      # root-owned (mode 0775, group=wheel) so we need sudo once.
+      if [ "$AGENTFS_MOUNT" = "/Volumes/accfs" ] && [ ! -d "$AGENTFS_MOUNT" ]; then
+        if sudo -n true 2>/dev/null; then
+          sudo mkdir -p "$AGENTFS_MOUNT" && sudo chown "$USER":staff "$AGENTFS_MOUNT"
+          info "Pre-created $AGENTFS_MOUNT (sudo)"
+        else
+          warn "Need sudo to pre-create $AGENTFS_MOUNT — run: sudo mkdir -p $AGENTFS_MOUNT && sudo chown $USER:staff $AGENTFS_MOUNT"
+        fi
+      fi
+      # CCC-uu5: rewrite plist if it points at the legacy ~/.acc/shared
+      # mount path so an existing install gets migrated to /Volumes.
+      _needs_rewrite=false
+      if [ -f "$_plist" ] && grep -q "$HOME/.acc/shared" "$_plist" 2>/dev/null; then
+        _needs_rewrite=true
+        info "Migrating AgentFS LaunchAgent from ~/.acc/shared to $AGENTFS_MOUNT (CCC-uu5)"
+        launchctl unload "$_plist" 2>/dev/null || true
+        # Unmount old location if currently mounted there (best-effort)
+        if mount | grep -q "on $HOME/.acc/shared"; then
+          /sbin/umount "$HOME/.acc/shared" 2>/dev/null || true
+        fi
+      fi
+      if [ ! -f "$_plist" ] || [ "$_needs_rewrite" = "true" ]; then
         cat > "$_plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -571,10 +607,38 @@ EOF"
 EOF
         launchctl load "$_plist" 2>/dev/null
         sleep 2
-        success "AgentFS LaunchAgent installed"
+        success "AgentFS LaunchAgent installed (mount → $AGENTFS_MOUNT)"
       else
         success "AgentFS LaunchAgent already present"
       fi
+
+      # CCC-uu5: keep ~/.acc/shared as a symlink → /Volumes/accfs so
+      # resolve_workspace() and any other code expecting the old path
+      # still works after the migration.
+      if [ "$AGENTFS_MOUNT" != "$AGENTFS_MOUNT_LOGICAL" ]; then
+        if [ -L "$AGENTFS_MOUNT_LOGICAL" ]; then
+          # Already a symlink; refresh target only if it's wrong
+          _cur_target=$(readlink "$AGENTFS_MOUNT_LOGICAL")
+          if [ "$_cur_target" != "$AGENTFS_MOUNT" ]; then
+            ln -snf "$AGENTFS_MOUNT" "$AGENTFS_MOUNT_LOGICAL"
+            info "Updated symlink $AGENTFS_MOUNT_LOGICAL → $AGENTFS_MOUNT"
+          fi
+        elif [ -e "$AGENTFS_MOUNT_LOGICAL" ]; then
+          # Existing dir or mountpoint — back it up rather than blow away
+          if [ -d "$AGENTFS_MOUNT_LOGICAL" ] && [ -z "$(ls -A "$AGENTFS_MOUNT_LOGICAL" 2>/dev/null)" ]; then
+            rmdir "$AGENTFS_MOUNT_LOGICAL" 2>/dev/null || true
+            ln -s "$AGENTFS_MOUNT" "$AGENTFS_MOUNT_LOGICAL" && \
+              success "Linked $AGENTFS_MOUNT_LOGICAL → $AGENTFS_MOUNT"
+          else
+            warn "$AGENTFS_MOUNT_LOGICAL exists and is not empty — leave it alone; expected symlink to $AGENTFS_MOUNT"
+          fi
+        else
+          mkdir -p "$(dirname "$AGENTFS_MOUNT_LOGICAL")"
+          ln -s "$AGENTFS_MOUNT" "$AGENTFS_MOUNT_LOGICAL" && \
+            success "Linked $AGENTFS_MOUNT_LOGICAL → $AGENTFS_MOUNT"
+        fi
+      fi
+
       # Verify (note: ls may fail from SSH due to macOS TCC; use mount + stat)
       if _agentfs_mounted; then
         success "AgentFS mounted at $AGENTFS_MOUNT (macOS TCC may block ls from SSH — normal)"
