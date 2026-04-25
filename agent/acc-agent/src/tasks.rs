@@ -574,27 +574,55 @@ async fn run_git_phase_commit(workspace: &PathBuf, branch: &str, commit_msg: &st
         }
     }
 
-    let push = tokio::time::timeout(
-        Duration::from_secs(600),
-        Command::new("git").args(["-C", ws, "push", "origin", branch]).output()
-    ).await
-    .map_err(|_| "git push timed out".to_string())?
-    .map_err(|e| format!("git push: {e}"))?;
+    // Attempt the push with retries for transient network failures (DNS
+    // resolution, SSH host unreachable, connection timeout, etc.).  Three
+    // attempts are made with an exponential backoff before giving up.  If all
+    // attempts fail with transient errors the local commit is preserved and the
+    // caller is notified via an Ok result so that no follow-up investigation
+    // task is filed — the next phase-commit cycle will retry the push
+    // automatically once connectivity is restored.
+    const MAX_PUSH_ATTEMPTS: u32 = 3;
+    let mut last_transient_stderr = String::new();
 
-    if push.status.success() {
-        Ok(String::from_utf8_lossy(&push.stdout).to_string())
-    } else {
+    for attempt in 1..=MAX_PUSH_ATTEMPTS {
+        let push = tokio::time::timeout(
+            Duration::from_secs(120),
+            Command::new("git")
+                .args(["-C", ws, "push", "--set-upstream", "origin", branch])
+                .output()
+        ).await
+        .map_err(|_| "git push timed out".to_string())?
+        .map_err(|e| format!("git push: {e}"))?;
+
+        if push.status.success() {
+            return Ok(String::from_utf8_lossy(&push.stdout).to_string());
+        }
+
         let stderr = String::from_utf8_lossy(&push.stderr).to_string();
-        // Treat transient network failures (DNS resolution, unreachable host,
-        // SSH connection refused) as a soft warning rather than a hard error.
-        // The local commit has already been recorded; a later phase-commit
-        // cycle or a human can retry the push once connectivity is restored.
+
         if is_transient_network_error(&stderr) {
-            Ok(format!("committed locally on {branch}; push skipped (network unavailable): {stderr}"))
+            // Treat transient network failures (DNS resolution, unreachable
+            // host, SSH connection refused) as retryable.  Back off before the
+            // next attempt; skip the delay after the final attempt.
+            last_transient_stderr = stderr;
+            if attempt < MAX_PUSH_ATTEMPTS {
+                let delay = Duration::from_secs(u64::from(attempt) * 10);
+                sleep(delay).await;
+            }
         } else {
-            Err(stderr)
+            // Hard failure (auth error, non-fast-forward rejection, repository
+            // not found, etc.) — do not retry; surface as an error immediately.
+            return Err(stderr);
         }
     }
+
+    // All retry attempts exhausted with transient errors.  The local commit
+    // has already been recorded; a later phase-commit cycle or a human can
+    // retry the push once connectivity is restored.
+    Ok(format!(
+        "committed locally on {branch}; push skipped after {MAX_PUSH_ATTEMPTS} attempts \
+         (network unavailable): {last_transient_stderr}"
+    ))
 }
 
 /// Returns true when a `git push` stderr looks like a transient network
@@ -903,6 +931,18 @@ mod tests {
     #[test]
     fn test_transient_connection_timed_out() {
         let stderr = "ssh: connect to host github.com port 22: Connection timed out";
+        assert!(is_transient_network_error(stderr));
+    }
+
+    #[test]
+    fn test_transient_connection_reset_by_peer() {
+        let stderr = "fatal: connection reset by peer";
+        assert!(is_transient_network_error(stderr));
+    }
+
+    #[test]
+    fn test_transient_no_route_to_host() {
+        let stderr = "ssh: connect to host github.com port 22: No route to host";
         assert!(is_transient_network_error(stderr));
     }
 
