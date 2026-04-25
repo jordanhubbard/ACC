@@ -168,6 +168,59 @@ async fn tick(state: &Arc<AppState>, cfg: &DispatchConfig) {
     // Auto-file phase_commit tasks for projects whose AgentFS is dirty
     // and don't already have a milestone-commit task in flight.
     auto_file_phase_commits(state).await;
+
+    // Auto-unclaim tasks whose claim_expires_at is in the past — the
+    // agent that claimed them either died, lost network, or never
+    // posted progress. Defense in depth alongside agent-side
+    // RECLAIM_COOLDOWN + heartbeat (CCC-t9b).
+    sweep_expired_claims(state).await;
+}
+
+// ── Stale-claim sweeper (CCC-t9b) ─────────────────────────────────────────
+//
+// claim_task sets claim_expires_at = now + 4h. Without enforcement, dead
+// agents hold tasks forever and capacity never frees up. Unclaim any task
+// whose expiry has passed; the dispatch loop will re-route it on the
+// next tick.
+async fn sweep_expired_claims(state: &Arc<AppState>) {
+    let now_str = Utc::now().to_rfc3339();
+    let unclaimed: Vec<(String, String)> = {
+        let db = state.fleet_db.lock().await;
+        let mut stmt = match db.prepare(
+            "SELECT id, COALESCE(claimed_by,'') FROM fleet_tasks
+             WHERE status IN ('claimed','in_progress')
+               AND claim_expires_at IS NOT NULL
+               AND claim_expires_at < ?1"
+        ) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let rows = stmt.query_map(params![now_str], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        });
+        let rows = match rows { Ok(r) => r, Err(_) => return };
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    if unclaimed.is_empty() { return; }
+
+    let db = state.fleet_db.lock().await;
+    for (id, prev_agent) in &unclaimed {
+        let _ = db.execute(
+            "UPDATE fleet_tasks SET status='open', claimed_by=NULL, claimed_at=NULL,
+                claim_expires_at=NULL, updated_at=?1
+             WHERE id=?2 AND status IN ('claimed','in_progress')
+               AND claim_expires_at IS NOT NULL AND claim_expires_at < ?1",
+            params![now_str, id],
+        );
+        info!("[dispatch] swept expired claim task={} prev_agent={}", id, prev_agent);
+        let _ = state.bus_tx.send(json!({
+            "type": "tasks:unclaimed",
+            "task_id": id,
+            "agent": prev_agent,
+            "reason": "claim_expired",
+        }).to_string());
+    }
 }
 
 // ── Auto-phase-commit (CCC-amn) ───────────────────────────────────────────
