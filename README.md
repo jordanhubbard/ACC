@@ -285,3 +285,5 @@ Minimal setup: CCC + tokenhub only.
 ## Generated Assets
 
 Generated files (images, PDFs, charts, etc.) go under `assets/<project-name>/`. Never dump to the repo root.
+FOO-CCC-8hs-acceptance-1
+FOO-CCC-pjf-runtime-3

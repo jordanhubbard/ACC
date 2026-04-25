@@ -44,6 +44,8 @@ async fn main() {
     };
     let initial_hashes: std::collections::HashSet<String> =
         db::auth_all_token_hashes(&auth_conn).into_iter().collect();
+    let initial_roles: std::collections::HashMap<String, String> =
+        db::auth_all_token_roles(&auth_conn).into_iter().collect();
     tracing::info!("Auth DB: {} user(s) loaded", initial_hashes.len());
     let auth_db = Arc::new(tokio::sync::Mutex::new(auth_conn));
 
@@ -67,6 +69,7 @@ async fn main() {
     let app_state = Arc::new(AppState {
         auth_tokens: cfg.auth_tokens,
         user_token_hashes: std::sync::RwLock::new(initial_hashes),
+        user_token_roles: std::sync::RwLock::new(initial_roles),
         auth_db,
         fleet_db: fleet_db.clone(),
         queue_path: cfg.queue_path,
@@ -84,6 +87,7 @@ async fn main() {
         start_time: std::time::SystemTime::now(),
         fs_root,
         supervisor: supervisor_handle,
+        max_blob_bytes: 100 * 1024 * 1024,
     });
 
     state::load_all(&app_state).await;

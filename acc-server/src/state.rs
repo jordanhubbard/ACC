@@ -2,9 +2,9 @@ use crate::brain::BrainQueue;
 use crate::supervisor::SupervisorHandle;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::sync::atomic::AtomicU64;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use tokio::sync::{broadcast, RwLock};
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -20,6 +20,9 @@ pub struct AppState {
     pub auth_tokens: HashSet<String>,
     /// In-memory cache of user token SHA-256 hashes (loaded from auth.db, updated on add/delete).
     pub user_token_hashes: std::sync::RwLock<HashSet<String>>,
+    /// In-memory map of token_hash → role ("owner" | "collaborator").
+    /// Kept in sync with auth.db by the user management endpoints.
+    pub user_token_roles: std::sync::RwLock<HashMap<String, String>>,
     /// Auth SQLite database (always-on).
     pub auth_db: Arc<tokio::sync::Mutex<rusqlite::Connection>>,
     /// Fleet task pool SQLite database (always-on).
@@ -39,6 +42,8 @@ pub struct AppState {
     pub start_time: std::time::SystemTime,
     pub fs_root: String,
     pub supervisor: Option<Arc<SupervisorHandle>>,
+    /// Maximum number of bytes accepted for a single blob upload.
+    pub max_blob_bytes: u64,
 }
 
 impl AppState {
@@ -52,7 +57,7 @@ impl AppState {
     }
 
     /// Returns true if the request carries a valid agent token (from config).
-    /// Used to gate admin-only endpoints.
+    /// Agent tokens are treated as owner-level — they can perform any operation.
     pub fn is_admin_authed(&self, headers: &axum::http::HeaderMap) -> bool {
         if self.auth_tokens.is_empty() {
             return true;
@@ -69,14 +74,15 @@ impl AppState {
         false
     }
 
-    /// Returns true if the request is authenticated by either an agent token or a user token.
+    /// Returns true if the request is authenticated by either an agent token or a user token
+    /// (any role).
     pub fn is_authed(&self, headers: &axum::http::HeaderMap) -> bool {
         let user_hashes = self.user_token_hashes.read().unwrap();
         if self.auth_tokens.is_empty() && user_hashes.is_empty() {
             return true; // dev mode — no tokens configured at all
         }
 
-        // Check agent tokens (plaintext)
+        // Agent tokens implicitly authenticate (owner-level).
         if self.is_admin_authed(headers) {
             return true;
         }
@@ -84,10 +90,7 @@ impl AppState {
         // Check user tokens (SHA-256 hash of the bearer token)
         let token = self.bearer_token(headers);
         if !token.is_empty() {
-            use sha2::{Sha256, Digest};
-            let mut hasher = Sha256::new();
-            hasher.update(token.as_bytes());
-            let hash = hex::encode(hasher.finalize());
+            let hash = Self::hash_bearer(token);
             use subtle::ConstantTimeEq;
             for valid_hash in user_hashes.iter() {
                 let a: &[u8] = hash.as_bytes();
@@ -99,6 +102,106 @@ impl AppState {
         }
 
         false
+    }
+
+    /// Returns the role string (`"owner"` or `"collaborator"`) associated with
+    /// the request's bearer token, or `None` when:
+    ///
+    /// * the request carries no bearer token, or
+    /// * the token is not found in either the agent-token set or the user-role
+    ///   map (i.e. the caller is unauthenticated).
+    ///
+    /// Agent tokens from config are always mapped to `"owner"`.
+    /// In dev mode (no tokens configured at all) every caller is implicitly
+    /// considered `"owner"`.
+    pub fn token_role<'h>(&self, headers: &'h axum::http::HeaderMap) -> Option<&'static str> {
+        // Dev mode — no tokens configured; treat everyone as owner.
+        let user_hashes = self.user_token_hashes.read().unwrap();
+        if self.auth_tokens.is_empty() && user_hashes.is_empty() {
+            return Some("owner");
+        }
+        drop(user_hashes);
+
+        // Agent tokens (from config) are always owner-level.
+        if self.is_admin_authed(headers) {
+            return Some("owner");
+        }
+
+        // Look up user-token role from the in-memory map.
+        let token = self.bearer_token(headers);
+        if token.is_empty() {
+            return None;
+        }
+        let hash = Self::hash_bearer(token);
+        let roles = self.user_token_roles.read().unwrap();
+        use subtle::ConstantTimeEq;
+        for (stored_hash, role) in roles.iter() {
+            let a: &[u8] = hash.as_bytes();
+            let b: &[u8] = stored_hash.as_bytes();
+            if a.len() == b.len() && bool::from(a.ct_eq(b)) {
+                // Map the stored (heap-allocated) role string to a 'static str
+                // so callers don't need to hold the lock guard.
+                return Some(if role == "owner" { "owner" } else { "collaborator" });
+            }
+        }
+        None
+    }
+
+    /// Returns true if the request is authenticated AND the caller holds the
+    /// `owner` role.
+    ///
+    /// Gate destructive / privileged operations on this:
+    ///   - agent registration / deletion
+    ///   - exec dispatch
+    ///   - secrets write / delete
+    ///
+    /// Agent tokens (from config) are always treated as owner-level.
+    /// In dev mode (no tokens at all) every caller is owner.
+    pub fn is_owner_authed(&self, headers: &axum::http::HeaderMap) -> bool {
+        // Dev mode or agent token → owner.
+        if self.is_admin_authed(headers) {
+            return true;
+        }
+
+        // User token: look up role.
+        let token = self.bearer_token(headers);
+        if token.is_empty() {
+            return false;
+        }
+        let hash = Self::hash_bearer(token);
+        let roles = self.user_token_roles.read().unwrap();
+        use subtle::ConstantTimeEq;
+        for (stored_hash, role) in roles.iter() {
+            let a: &[u8] = hash.as_bytes();
+            let b: &[u8] = stored_hash.as_bytes();
+            if a.len() == b.len() && bool::from(a.ct_eq(b)) {
+                return role == "owner";
+            }
+        }
+        false
+    }
+
+    /// Returns true if the request is authenticated AND the caller holds at
+    /// least the `collaborator` role (i.e. any authenticated user token, or
+    /// an agent/owner token).
+    ///
+    /// Use this to gate endpoints that require a real user identity but do not
+    /// need owner-level privileges — for example, commenting on a task or
+    /// submitting a review.
+    ///
+    /// Agent tokens (from config) always satisfy this check.
+    /// In dev mode (no tokens configured at all) every caller satisfies it.
+    pub fn is_collaborator_authed(&self, headers: &axum::http::HeaderMap) -> bool {
+        // is_authed already accepts any valid token (agent or user, any role).
+        self.is_authed(headers)
+    }
+
+    /// SHA-256 of a raw bearer token string, returned as a lowercase hex string.
+    pub fn hash_bearer(token: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        hex::encode(hasher.finalize())
     }
 }
 

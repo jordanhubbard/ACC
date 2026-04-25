@@ -26,6 +26,54 @@ async fn create_item(
     body["item"].clone()
 }
 
+// ── Auth guard tests ──────────────────────────────────────────────────────────
+//
+// GET /api/queue, GET /api/queue/stale, and GET /api/item/:id all expose the
+// full queue contents (descriptions, assignees, journal entries,
+// preferred_executor hints).  They are auth-gated with is_authed() to match the
+// posture of every other non-health read endpoint in the server.
+
+#[tokio::test]
+async fn get_queue_requires_auth() {
+    let srv = helpers::TestServer::new().await;
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/api/queue")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = helpers::call(&srv.app, req).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn get_stale_requires_auth() {
+    let srv = helpers::TestServer::new().await;
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/api/queue/stale")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = helpers::call(&srv.app, req).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn get_item_requires_auth() {
+    let srv = helpers::TestServer::new().await;
+    // Create an item first (POST /api/queue is used by agents and currently
+    // unauthenticated; we use the authenticated helper here for convenience).
+    let item = create_item(&srv, "Auth guard test", "Verifying GET /api/item/:id is auth-gated").await;
+    let id = item["id"].as_str().expect("id");
+
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!("/api/item/{id}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = helpers::call(&srv.app, req).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CCC Fleet Monitor — combined health check + Slack ingestion.
+ACC Fleet Monitor — combined health check + Slack ingestion.
 Runs every 10 minutes via Hermes cron.
 Outputs a compact summary for the cron delivery target.
 """

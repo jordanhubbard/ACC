@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CCC Fleet Health Check — runs every 10 minutes via Hermes cron.
+ACC Fleet Health Check — runs every 10 minutes via Hermes cron.
 Validates all core services from the perspective of every registered agent.
 Places a unique sentinel on MinIO each pass; agents must confirm they can read it.
 Outputs a JSON report to stdout for the cron job prompt to parse.
@@ -16,7 +16,7 @@ import urllib.error
 from datetime import datetime, timezone
 
 # ── Config ─────────────────────────────────────────────────────────
-CCC_API = os.environ.get("CCC_API", "http://localhost:8789")
+ACC_API = os.environ.get("ACC_API", "http://localhost:8789")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://localhost:9000")
 TOKENHUB_URL = os.environ.get("TOKENHUB_URL", "http://localhost:8090")
@@ -96,8 +96,8 @@ def probe_service(name, url, headers=None, expect_in_body=None):
 def check_core_services():
     """Probe all core infrastructure services on do-host1."""
     results = []
-    results.append(probe_service("ccc-api", f"{CCC_API}/api/health", expect_in_body="ok"))
-    results.append(probe_service("agentbus", f"{CCC_API}/api/health", expect_in_body="ok"))
+    results.append(probe_service("ccc-api", f"{ACC_API}/api/health", expect_in_body="ok"))
+    results.append(probe_service("agentbus", f"{ACC_API}/api/health", expect_in_body="ok"))
     results.append(probe_service("qdrant", f"{QDRANT_URL}/healthz",
                                  headers={"api-key": QDRANT_API_KEY} if QDRANT_API_KEY else None))
     results.append(probe_service("minio", f"{MINIO_ENDPOINT}/minio/health/live"))
@@ -179,8 +179,8 @@ def check_core_services():
 
 # ── Agent Health ───────────────────────────────────────────────────
 def get_registered_agents():
-    """Get agents from CCC API."""
-    status, body = http_get(f"{CCC_API}/api/agents")
+    """Get agents from ACC API."""
+    status, body = http_get(f"{ACC_API}/api/agents")
     if status != 200:
         return []
     data = json.loads(body)

@@ -211,8 +211,13 @@ async fn agent_heartbeat(
 
 async fn register_agent(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
+    if !state.is_owner_authed(&headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "Owner role required"}))).into_response();
+    }
+
     let name = match body.get("name").and_then(|n| n.as_str()) {
         Some(n) => n.to_string(),
         None => return (StatusCode::BAD_REQUEST, Json(json!({"error": "name required"}))).into_response(),
@@ -279,10 +284,10 @@ async fn register_agent(
 
 async fn post_agent(
     State(state): State<Arc<AppState>>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    register_agent(State(state), Json(body)).await
+    register_agent(State(state), headers, Json(body)).await
 }
 
 async fn upsert_agent(

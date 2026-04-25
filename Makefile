@@ -9,6 +9,7 @@
 
 .PHONY: help deps deps-check env sync \
         init register build test release clean \
+        restart-hub \
         docker-build docker-up docker-down docker-logs
 
 help: ## Show this help
@@ -125,6 +126,11 @@ register: ## Register this agent with the CCC hub
 build: ## Build all Rust binaries (acc-agent, acc-server)
 	@cargo build --release --manifest-path agent/Cargo.toml
 	@cargo build --release --manifest-path acc-server/Cargo.toml
+
+# ── Hub management ─────────────────────────────────────────────────────────
+
+restart-hub: ## Stop and restart acc-server on the hub (uses cd / before nohup)
+	@bash deploy/restart-hub.sh
 
 # ── Testing ────────────────────────────────────────────────────────────────
 

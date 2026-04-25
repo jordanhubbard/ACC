@@ -117,6 +117,39 @@ else
       else
         log "WARNING: cargo not found — cannot rebuild acc-server"
       fi
+    elif pgrep -u "$(id -u)" -x acc-server > /dev/null 2>&1; then
+      # Non-systemd host (container / macOS) — nohup-based relaunch.
+      # Use ( cd / && nohup … & ) so acc-server always starts with / as its
+      # working directory, regardless of where agent-pull.sh was invoked from.
+      log "acc-server source changed — rebuilding (nohup path)..."
+      export PATH="${HOME}/.cargo/bin:${PATH}"
+      if command -v cargo &>/dev/null; then
+        if cargo build --release --manifest-path "${WORKSPACE}/acc-server/Cargo.toml" >> "$LOG_FILE" 2>&1; then
+          BUILT="${WORKSPACE}/acc-server/target/release/acc-server"
+          SERVER_DEST="${SERVER_DEST:-/usr/local/bin/acc-server}"
+          SERVER_LOG="${ACC_DIR}/logs/acc-server.log"
+          PID_FILE="${ACC_DIR}/run/acc-server.pid"
+          mkdir -p "${ACC_DIR}/run"
+          if install -m 755 "$BUILT" "${SERVER_DEST}" 2>/dev/null || sudo install -m 755 "$BUILT" "${SERVER_DEST}"; then
+            # Stop existing process before relaunch
+            if [[ -f "${PID_FILE}" ]]; then
+              _old_pid=$(<"${PID_FILE}")
+              kill "${_old_pid}" 2>/dev/null || true
+              rm -f "${PID_FILE}"
+            fi
+            pkill -u "$(id -u)" -x acc-server 2>/dev/null || true
+            sleep 1
+            ( cd / && nohup "${SERVER_DEST}" >> "${SERVER_LOG}" 2>&1 & echo $! > "${PID_FILE}" )
+            log "acc-server rebuilt and relaunched via nohup with working directory / (PID: $(<"${PID_FILE}"))"
+          else
+            log "WARNING: acc-server install failed"
+          fi
+        else
+          log "WARNING: acc-server cargo build failed"
+        fi
+      else
+        log "WARNING: cargo not found — cannot rebuild acc-server"
+      fi
     fi
   fi
 
@@ -186,6 +219,17 @@ else
         cp -r "$_skill_dir" "$HOME/.hermes/skills/${_skill_name}/" && _skill_count=$((_skill_count + 1))
       done
       log "Hermes skills updated: ${_skill_count} skills synced from workspace"
+    fi
+  fi
+
+  # Sync cron-fleet-monitor.py into ~/.hermes/scripts/ when the canonical script changes.
+  # The hermes cron job references it directly as "cron-fleet-monitor.py" (no wrapper).
+  if echo "$CHANGED" | grep -q "^scripts/cron-fleet-monitor\.py$"; then
+    _src="${WORKSPACE}/scripts/cron-fleet-monitor.py"
+    _dst="${HOME}/.hermes/scripts/cron-fleet-monitor.py"
+    if [[ -f "$_src" ]] && [[ -d "$(dirname "$_dst")" ]]; then
+      cp "$_src" "$_dst" && chmod 755 "$_dst"
+      log "Synced scripts/cron-fleet-monitor.py → ~/.hermes/scripts/"
     fi
   fi
 
