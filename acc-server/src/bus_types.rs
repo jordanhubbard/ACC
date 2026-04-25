@@ -89,6 +89,8 @@ media_types! {
     (ImageGif,         "image/gif",                 true),
     (ImageWebp,        "image/webp",                true),
     (ImageSvg,         "image/svg+xml",             false), // SVG is XML text
+    // ── 3D Models ─────────────────────────────────────────────────────────────
+    (ModelFbx,         "model/fbx",                 true),
     // ── Binary ────────────────────────────────────────────────────────────────
     (OctetStream,      "application/octet-stream",  true),
 }
@@ -158,6 +160,7 @@ mod tests {
         assert!(MediaType::ImageGif.is_binary());
         assert!(MediaType::ImageWebp.is_binary());
         assert!(MediaType::OctetStream.is_binary());
+        assert!(MediaType::ModelFbx.is_binary());
     }
 
     #[test]
@@ -186,6 +189,6 @@ mod tests {
 
     #[test]
     fn test_count_known_types() {
-        assert_eq!(MediaType::all_known().len(), 17);
+        assert_eq!(MediaType::all_known().len(), 18);
     }
 }

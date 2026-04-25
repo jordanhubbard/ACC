@@ -45,7 +45,7 @@ async fn round_trip(srv: &TestServer, mime: &str, data: &[u8], binary: bool) {
     assert_eq!(returned, data, "data mismatch for mime={mime}");
 }
 
-// ── Upload / download round-trips for all 17 media types ─────────────────────
+// ── Upload / download round-trips for all 18 media types ─────────────────────
 
 #[tokio::test]
 async fn test_text_plain_round_trip() {
@@ -147,6 +147,13 @@ async fn test_image_webp_round_trip() {
 async fn test_application_octet_stream_round_trip() {
     let srv = TestServer::new().await;
     round_trip(&srv, "application/octet-stream", b"\x00\x01\x02\x03\xff", true).await;
+}
+
+// FBX is a binary 3D-scene container; its canonical MIME type is model/fbx.
+#[tokio::test]
+async fn test_model_fbx_round_trip() {
+    let srv = TestServer::new().await;
+    round_trip(&srv, "model/fbx", b"Kaydara FBX Binary  \x00\x1a\x00", true).await;
 }
 
 // ── Validation tests ──────────────────────────────────────────────────────────
