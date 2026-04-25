@@ -584,8 +584,36 @@ async fn run_git_phase_commit(workspace: &PathBuf, branch: &str, commit_msg: &st
     if push.status.success() {
         Ok(String::from_utf8_lossy(&push.stdout).to_string())
     } else {
-        Err(String::from_utf8_lossy(&push.stderr).to_string())
+        let stderr = String::from_utf8_lossy(&push.stderr).to_string();
+        // Treat transient network failures (DNS resolution, unreachable host,
+        // SSH connection refused) as a soft warning rather than a hard error.
+        // The local commit has already been recorded; a later phase-commit
+        // cycle or a human can retry the push once connectivity is restored.
+        if is_transient_network_error(&stderr) {
+            Ok(format!("committed locally on {branch}; push skipped (network unavailable): {stderr}"))
+        } else {
+            Err(stderr)
+        }
     }
+}
+
+/// Returns true when a `git push` stderr looks like a transient network
+/// problem (DNS failure, TCP connection refused, SSH not reachable, etc.)
+/// rather than a hard configuration or auth error that warrants a bug report.
+fn is_transient_network_error(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    // DNS / hostname resolution failures
+    lower.contains("could not resolve hostname") ||
+    lower.contains("nodename nor servname provided") ||
+    lower.contains("name or service not known") ||
+    // TCP-level failures
+    lower.contains("connection refused") ||
+    lower.contains("connection timed out") ||
+    lower.contains("network is unreachable") ||
+    lower.contains("no route to host") ||
+    // SSH transport failures (not auth — auth failures say "permission denied")
+    lower.contains("ssh: connect to host") ||
+    lower.contains("connection reset by peer")
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -843,6 +871,58 @@ mod tests {
         let (v, r, _) = parse_review_output("");
         assert_eq!(v, "rejected");
         assert_eq!(r, "unparseable output");
+    }
+
+    // ── is_transient_network_error ────────────────────────────────────────────
+
+    #[test]
+    fn test_transient_dns_failure_github() {
+        // Exact message from the failing phase-commit task
+        let stderr = "ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known\nfatal: Could not read from remote repository.";
+        assert!(is_transient_network_error(stderr));
+    }
+
+    #[test]
+    fn test_transient_name_or_service_not_known() {
+        let stderr = "ssh: Could not resolve hostname git.example.com: Name or service not known";
+        assert!(is_transient_network_error(stderr));
+    }
+
+    #[test]
+    fn test_transient_connection_refused() {
+        let stderr = "ssh: connect to host github.com port 22: Connection refused";
+        assert!(is_transient_network_error(stderr));
+    }
+
+    #[test]
+    fn test_transient_network_unreachable() {
+        let stderr = "fatal: unable to connect to github.com: Network is unreachable";
+        assert!(is_transient_network_error(stderr));
+    }
+
+    #[test]
+    fn test_transient_connection_timed_out() {
+        let stderr = "ssh: connect to host github.com port 22: Connection timed out";
+        assert!(is_transient_network_error(stderr));
+    }
+
+    #[test]
+    fn test_non_transient_permission_denied() {
+        // Auth failure should NOT be suppressed — the repo config is wrong
+        let stderr = "Permission denied (publickey).\nfatal: Could not read from remote repository.";
+        assert!(!is_transient_network_error(stderr));
+    }
+
+    #[test]
+    fn test_non_transient_repository_not_found() {
+        let stderr = "ERROR: Repository not found.\nfatal: Could not read from remote repository.";
+        assert!(!is_transient_network_error(stderr));
+    }
+
+    #[test]
+    fn test_non_transient_rejected_push() {
+        let stderr = "! [rejected] phase/milestone -> phase/milestone (non-fast-forward)";
+        assert!(!is_transient_network_error(stderr));
     }
 
     // ── submit_for_review ─────────────────────────────────────────────────────
