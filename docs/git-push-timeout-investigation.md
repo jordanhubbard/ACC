@@ -2,6 +2,45 @@
 
 ---
 
+## Incident 3 — DNS Resolution Failure (2026-04-25)
+
+**Affected task:** `task-2126d2448912444c988863a30db5cf6a`
+**Symptom:** Phase milestone commit failed with:
+
+```
+ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+```
+
+### Root Cause
+
+Same class of failure as Incident 2: the agent host lost DNS resolution for
+`github.com` at the moment the milestone commit attempted to push.  The error
+message `nodename nor servname provided, or not known` is the POSIX
+`getaddrinfo()` return code for `EAI_NONAME` / `EAI_AGAIN`, indicating the DNS
+resolver was unavailable or returned an error — not that GitHub itself was down
+or that credentials are invalid.
+
+Key evidence:
+- The error text is identical to Incident 2, confirming a recurring pattern of
+  transient DNS-resolution failures on this agent host rather than a permissions
+  or credential issue.
+- Prior phase/milestone commits continue to accumulate successfully, confirming
+  the remote repository and SSH key are correctly configured and only momentary
+  DNS outages are responsible for the failures.
+
+### Status
+
+The fixes documented under Incident 2 (DNS pre-flight check, push retry loop)
+address this class of failure.  This incident confirms those mitigations should
+be prioritised for deployment.  No additional code change is required beyond
+what was specified in Incident 2.
+
+---
+
 ## Incident 2 — DNS Resolution Failure (2026-04-25)
 
 **Affected task:** `task-f7fa50cf1765488a8cc32bdf86772e9b`  

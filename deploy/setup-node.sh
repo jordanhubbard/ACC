@@ -235,11 +235,11 @@ else
 fi
 
 # Install acc-node skill into Hermes
-CCC_SKILL_SRC="$WORKSPACE/skills/acc-node"
-if [ -d "$CCC_SKILL_SRC" ] && [ "$HERMES_INSTALLED" = true ]; then
+ACC_SKILL_SRC="$WORKSPACE/skills/acc-node"
+if [ -d "$ACC_SKILL_SRC" ] && [ "$HERMES_INSTALLED" = true ]; then
   SKILL_DEST="$HOME/.hermes/skills/acc-node"
   if [ ! -d "$SKILL_DEST" ]; then
-    cp -r "$CCC_SKILL_SRC" "$SKILL_DEST"
+    cp -r "$ACC_SKILL_SRC" "$SKILL_DEST"
     success "acc-node skill installed into Hermes"
   else
     success "acc-node skill already in Hermes"
