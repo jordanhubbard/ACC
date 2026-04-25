@@ -32,6 +32,11 @@ export GIT_SSH_COMMAND
 # failure before systemd kills us.
 GIT_PUSH_TIMEOUT="${ACC_REPO_SYNC_PUSH_TIMEOUT:-180}"
 
+# Number of times to retry a failed push before giving up for this cycle.
+GIT_PUSH_RETRIES="${ACC_REPO_SYNC_PUSH_RETRIES:-3}"
+# Seconds to wait between push retries.
+GIT_PUSH_RETRY_DELAY="${ACC_REPO_SYNC_PUSH_RETRY_DELAY:-10}"
+
 # Load .env if it exists
 if [ -f "$ENV_FILE" ]; then
   set -a
@@ -56,6 +61,28 @@ log() {
   echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [$AGENT_NAME] [repo-sync] $1" >> "$LOG_FILE" 2>&1
 }
 
+# ── DNS pre-flight check ──────────────────────────────────────────────────────
+# Verify github.com is resolvable before attempting any git network operation.
+# A transient DNS failure should not count as a push failure — we exit cleanly
+# so the systemd timer retries on the next cycle.
+dns_preflight() {
+  local host="${1:-github.com}"
+  if command -v getent >/dev/null 2>&1; then
+    getent hosts "$host" >/dev/null 2>&1 && return 0
+  fi
+  if command -v dig >/dev/null 2>&1; then
+    dig +short +time=5 +tries=1 "$host" >/dev/null 2>&1 && return 0
+  fi
+  if command -v nslookup >/dev/null 2>&1; then
+    nslookup "$host" >/dev/null 2>&1 && return 0
+  fi
+  # Last resort: python3 socket
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "import socket; socket.getaddrinfo('$host', 22)" >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
 # Rotate log
 if [ -f "$LOG_FILE" ]; then
   lines=$(wc -l < "$LOG_FILE")
@@ -67,6 +94,15 @@ fi
 log "Sync starting (repo: $REPO, dry_run: $DRY_RUN)"
 
 cd "$REPO"
+
+# ── DNS pre-flight ────────────────────────────────────────────────────────────
+# If we cannot resolve github.com, skip the entire network portion and let the
+# next timer cycle retry.  This prevents a transient DNS outage from showing up
+# as a push failure (which would trigger noisy alerts).
+if ! dns_preflight "github.com"; then
+  log "WARNING: DNS resolution for github.com failed — skipping sync, will retry next cycle"
+  exit 0
+fi
 
 # ── Step 1: Pull latest from origin ──────────────────────────────────────────
 BEFORE=$(git rev-parse HEAD)
@@ -136,15 +172,28 @@ else
   if [ "$AHEAD" -gt 0 ]; then
     # Wrap push with a hard timeout so a hanging SSH connection can't block the
     # script (and ultimately the systemd service) indefinitely.
-    if timeout "$GIT_PUSH_TIMEOUT" git push origin "$CURRENT_BRANCH" --quiet 2>/dev/null; then
-      log "Pushed $AHEAD commit(s) to origin/$CURRENT_BRANCH"
-    else
-      EXIT_CODE=$?
-      if [ "$EXIT_CODE" -eq 124 ]; then
-        log "WARNING: git push timed out after ${GIT_PUSH_TIMEOUT}s — will retry next cycle"
+    # Retry up to GIT_PUSH_RETRIES times on transient failures (DNS blips,
+    # momentary SSH resets) before giving up for this cycle.
+    PUSH_SUCCESS=false
+    for _attempt in $(seq 1 "$GIT_PUSH_RETRIES"); do
+      if timeout "$GIT_PUSH_TIMEOUT" git push origin "$CURRENT_BRANCH" --quiet 2>/dev/null; then
+        log "Pushed $AHEAD commit(s) to origin/$CURRENT_BRANCH (attempt ${_attempt})"
+        PUSH_SUCCESS=true
+        break
       else
-        log "WARNING: git push failed (exit $EXIT_CODE) — will retry next cycle"
+        EXIT_CODE=$?
+        if [ "$EXIT_CODE" -eq 124 ]; then
+          log "WARNING: git push timed out after ${GIT_PUSH_TIMEOUT}s (attempt ${_attempt}/${GIT_PUSH_RETRIES})"
+        else
+          log "WARNING: git push failed (exit $EXIT_CODE) (attempt ${_attempt}/${GIT_PUSH_RETRIES})"
+        fi
+        if [ "$_attempt" -lt "$GIT_PUSH_RETRIES" ]; then
+          sleep "$GIT_PUSH_RETRY_DELAY"
+        fi
       fi
+    done
+    if [ "$PUSH_SUCCESS" = false ]; then
+      log "WARNING: git push failed after ${GIT_PUSH_RETRIES} attempt(s) — will retry next cycle"
     fi
   else
     log "Nothing to push"

@@ -1,6 +1,57 @@
-# Git Push Timeout Investigation — phase/milestone
+# Git Push Failure Investigation — phase/milestone
 
-**Date:** 2026-04-25  
+---
+
+## Incident 2 — DNS Resolution Failure (2026-04-25)
+
+**Affected task:** `task-f7fa50cf1765488a8cc32bdf86772e9b`  
+**Symptom:** Phase milestone commit failed with:
+
+```
+ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known
+fatal: Could not read from remote repository.
+```
+
+### Root Cause
+
+The agent host lost DNS resolution for `github.com` at the moment the milestone
+commit tried to push.  This is a **transient network partition** (DNS resolver
+unavailable, upstream resolver timeout, or `/etc/resolv.conf` misconfiguration)
+rather than a persistent connectivity loss — the host can reach the internet but
+cannot resolve hostnames momentarily.
+
+Key evidence:
+- Error message `nodename nor servname provided, or not known` is the POSIX
+  `getaddrinfo()` return for `EAI_NONAME` / `EAI_AGAIN`, which indicates the DNS
+  resolver returned an error or was unreachable, not that GitHub itself was down.
+- The `phase/milestone` branch has accumulated many successful commits
+  (`d54824c`, `bccacc7`, `bf957d4`, …) — confirming this is not a credential or
+  permission issue.
+- Local branch `phase/milestone` is at `d54824c0` which equals
+  `refs/remotes/origin/phase/milestone` — meaning the most recent milestone
+  commit was eventually pushed (or the remote tracking ref was updated), so the
+  content is not lost.
+
+### Fix Applied
+
+1. **Pre-flight DNS check in `acc-repo-sync.sh`:** Added a `dns_preflight` step
+   that resolves `github.com` (via `getent hosts` or `dig`) before attempting a
+   fetch/push.  If DNS fails, the script logs a warning and exits with code `0`
+   (non-fatal) so the systemd timer retries on the next cycle instead of
+   accumulating error noise.
+
+2. **Retry loop around the push step:** `acc-repo-sync.sh` now retries the push
+   up to 3 times with a 10-second back-off, so a single-cycle DNS blip does not
+   cause a permanent miss.
+
+3. **`.git/config` tracking entry for `phase/milestone`:** Added an explicit
+   `[branch "phase/milestone"]` section so `git push` can resolve the upstream
+   without a fetch first (reduces the number of DNS calls needed per sync cycle).
+
+---
+
+## Incident 1 — SSH Timeout (2026-04-25)
+
 **Affected task:** `task-770121149e5f414ea8940fec81d6c7bb`  
 **Symptom:** `git push` timed out during phase milestone commit on branch `phase/milestone`
 
@@ -62,3 +113,8 @@ without the leading `/`) to eliminate the redundant path component.
    the agent host is behind an aggressive NAT or firewall that drops idle TCP
    connections before the SSH handshake completes; increasing `ServerAliveInterval`
    to `10` or switching to HTTPS with a token would be the next step.
+
+4. **DNS health:** If DNS resolution failures recur, check `/etc/resolv.conf` and
+   consider adding `8.8.8.8` as a fallback resolver, or switching the agent host
+   to use systemd-resolved with a local cache so transient upstream failures do
+   not prevent hostname lookups.
