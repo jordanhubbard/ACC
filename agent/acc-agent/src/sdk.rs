@@ -64,6 +64,11 @@ pub async fn run_agent(prompt: &str, workspace: &Path) -> Result<String, String>
     // (the dishonest-completion pattern). We give it one chance to fix.
     let mut total_tool_calls: u32 = 0;
     let mut nudged_for_no_tools = false;
+    // CCC-nkp: track tool errors so we can detect retry storms (e.g.,
+    // EPERM on TCC-blocked SMB writes that drove the c41 task to 3h).
+    let mut total_tool_errors: u32 = 0;
+    let run_started = std::time::Instant::now();
+    eprintln!("[sdk] run start workspace={}", workspace.display());
 
     for turn in 0..MAX_TURNS {
         let body = json!({
@@ -74,6 +79,7 @@ pub async fn run_agent(prompt: &str, workspace: &Path) -> Result<String, String>
             "messages": messages,
         });
 
+        let api_started = std::time::Instant::now();
         let resp = client
             .post(format!("{api_base}/v1/messages"))
             .header("x-api-key", &api_key)
@@ -83,6 +89,7 @@ pub async fn run_agent(prompt: &str, workspace: &Path) -> Result<String, String>
             .send()
             .await
             .map_err(|e| format!("API request failed: {e}"))?;
+        let api_ms = api_started.elapsed().as_millis();
 
         if resp.status() == 429 {
             let retry_after = resp
@@ -134,7 +141,7 @@ pub async fn run_agent(prompt: &str, workspace: &Path) -> Result<String, String>
             // one chance to make this right before accepting completion.
             if total_tool_calls == 0 && !nudged_for_no_tools {
                 eprintln!(
-                    "[sdk] turn {turn}: model finished without using any tools — \
+                    "[sdk] turn {turn} api={api_ms}ms: model finished without using any tools — \
                      re-prompting once for actual edits"
                 );
                 messages.push(json!({
@@ -148,7 +155,9 @@ pub async fn run_agent(prompt: &str, workspace: &Path) -> Result<String, String>
                 nudged_for_no_tools = true;
                 continue;
             }
-            break;
+            eprintln!("[sdk] turn {turn} api={api_ms}ms end_turn (no tool_use)");
+            log_run_done(run_started, total_tool_calls, total_tool_errors, turn + 1);
+            return Ok(final_text);
         }
 
         // max_tokens mid-response: continue without tool results
@@ -159,15 +168,28 @@ pub async fn run_agent(prompt: &str, workspace: &Path) -> Result<String, String>
 
         // Execute tool calls and collect results
         let mut results: Vec<Value> = Vec::new();
+        let mut turn_summary: Vec<String> = Vec::new();
         for tool_use in &tool_uses {
             let id = tool_use["id"].as_str().unwrap_or("").to_string();
             let name = tool_use["name"].as_str().unwrap_or("");
             let input = &tool_use["input"];
 
+            let tool_started = std::time::Instant::now();
             let (content, is_error) = match dispatch_tool(name, input, workspace).await {
                 Ok(out) => (out, false),
                 Err(e)  => (e,   true),
             };
+            let tool_ms = tool_started.elapsed().as_millis();
+            if is_error {
+                total_tool_errors += 1;
+                // Trim to the first ~140 chars of the error so retry storms
+                // are visible at a glance (and obvious if it's the same
+                // EPERM repeating).
+                let snippet: String = content.chars().take(140).collect();
+                turn_summary.push(format!("{name}=ERR({tool_ms}ms:{snippet})"));
+            } else {
+                turn_summary.push(format!("{name}=OK({tool_ms}ms)"));
+            }
 
             results.push(json!({
                 "type": "tool_result",
@@ -177,10 +199,32 @@ pub async fn run_agent(prompt: &str, workspace: &Path) -> Result<String, String>
             }));
         }
 
+        eprintln!(
+            "[sdk] turn {turn} api={api_ms}ms tools=[{}] errors_so_far={}",
+            turn_summary.join(", "),
+            total_tool_errors,
+        );
+
         messages.push(json!({"role": "user", "content": results}));
     }
 
+    log_run_done(run_started, total_tool_calls, total_tool_errors, MAX_TURNS);
     Ok(final_text)
+}
+
+fn log_run_done(
+    run_started: std::time::Instant,
+    total_tool_calls: u32,
+    total_tool_errors: u32,
+    turns_used: u32,
+) {
+    eprintln!(
+        "[sdk] run done elapsed={}s turns={} tool_calls={} tool_errors={}",
+        run_started.elapsed().as_secs(),
+        turns_used,
+        total_tool_calls,
+        total_tool_errors,
+    );
 }
 
 // ── Tool dispatch ─────────────────────────────────────────────────────────────
