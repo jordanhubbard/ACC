@@ -2,6 +2,75 @@
 
 ---
 
+## Incident 4 — DNS Resolution Failure (2026-04-25)
+
+**Affected task:** `task-ad5a2e21c0354aa080b2041e22d2c141`
+**Symptom:** Phase milestone commit failed with:
+
+```
+ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+```
+
+### Root Cause
+
+Identical class of failure to Incidents 2 and 3: the agent host suffered a
+transient DNS resolution failure for `github.com` at the moment the phase
+milestone commit attempted to push.  The error `nodename nor servname provided,
+or not known` is the POSIX `getaddrinfo()` return code for `EAI_NONAME` /
+`EAI_AGAIN`, indicating the DNS resolver was unavailable or returned an error —
+not that GitHub itself was down or that SSH credentials are invalid.
+
+Key evidence:
+- Error text is character-for-character identical to Incidents 2 and 3,
+  confirming this is a recurring transient DNS failure on the agent host rather
+  than a permissions or credential issue.
+- `phase/milestone` branch continues to accumulate successful commits
+  (see `git log` on `refs/heads/phase/milestone`), confirming the remote
+  repository, SSH key, and `.git/config` are all correctly configured.
+- The failure is isolated to the push step; local commits succeed, so no work
+  is lost — the commit is queued locally and will be pushed on the next cycle
+  once DNS recovers.
+
+### Status
+
+This is the fourth occurrence of the same DNS-resolution failure pattern.  The
+mitigations specified in Incident 2 (DNS pre-flight check in `acc-repo-sync.sh`,
+push retry loop, explicit `[branch "phase/milestone"]` tracking entry) are
+already implemented in `deploy/acc-repo-sync.sh` but the phase milestone commit
+path itself bypasses `acc-repo-sync.sh` — it pushes directly via the agent
+runtime.  The push therefore does not benefit from the DNS pre-flight or retry
+logic.
+
+### Recommended Next Step
+
+The phase-commit push path in the agent runtime should be hardened with the same
+guards already present in `acc-repo-sync.sh`:
+
+1. **DNS pre-flight before push:** Resolve `github.com` (via `getent`, `dig`, or
+   a short `python3 -c "import socket; socket.getaddrinfo('github.com', 22)"`)
+   before attempting `git push`.  If resolution fails, defer the push and mark
+   the milestone commit as "pending push" rather than "failed" so the retry
+   machinery picks it up on the next cycle without generating a failed-task
+   noise ticket.
+
+2. **Retry loop around push:** Wrap the `git push` in a retry loop (3 attempts,
+   10 s back-off) with an explicit timeout (e.g. `timeout 180 git push …`) so a
+   single DNS blip does not surface as a hard failure.
+
+3. **Non-fatal DNS failures:** When DNS resolution fails the phase-commit push
+   should log a warning and exit cleanly (code 0) so the scheduler does not
+   create an investigation task for what is an environmental transient.
+
+Until the agent runtime is updated, no action is needed on the repository side —
+the local commit is intact and will be pushed by the next `acc-repo-sync` cycle
+or the next successful phase-commit attempt.
+
+---
+
 ## Incident 3 — DNS Resolution Failure (2026-04-25)
 
 **Affected task:** `task-2126d2448912444c988863a30db5cf6a`
