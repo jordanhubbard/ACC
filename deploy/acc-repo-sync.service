@@ -13,5 +13,7 @@ EnvironmentFile=-%h/.acc/.env
 StandardOutput=append:%h/.acc/logs/repo-sync.log
 StandardError=append:%h/.acc/logs/repo-sync.log
 
-# Safety: don't let a stuck git command run forever
-TimeoutStartSec=120
+# Safety: don't let a stuck git command run forever.
+# Push timeout inside the script is 180 s; fetch can also take time, so allow
+# 300 s total before systemd considers the service stuck.
+TimeoutStartSec=300

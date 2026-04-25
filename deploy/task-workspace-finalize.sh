@@ -21,6 +21,16 @@ set -euo pipefail
 TASK_ID=""
 COMMIT_MSG=""
 
+# SSH options that prevent indefinite hangs on dead/slow connections.
+# ConnectTimeout caps the TCP handshake; ServerAlive* drops the link if the
+# server goes silent mid-transfer.  BatchMode=yes disables interactive prompts
+# so the push fails fast instead of blocking on a passphrase request.
+GIT_SSH_COMMAND="ssh -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o BatchMode=yes"
+export GIT_SSH_COMMAND
+
+# Hard wall-clock timeout for the push step (seconds).
+GIT_PUSH_TIMEOUT="${TASK_GIT_PUSH_TIMEOUT:-180}"
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --task-id) TASK_ID="$2"; shift 2 ;;
@@ -110,12 +120,17 @@ if [[ -z "$REMOTE_URL" ]]; then
   echo "⚠ $GIT_RESULT" >&2
 else
   echo "→ Pushing to $REMOTE_URL branch=$TASK_BRANCH" >&2
-  if git push --force-with-lease origin "$TASK_BRANCH" 2>/dev/null \
-     || git push --set-upstream origin "$TASK_BRANCH" 2>/dev/null; then
+  if timeout "$GIT_PUSH_TIMEOUT" git push --force-with-lease origin "$TASK_BRANCH" 2>/dev/null \
+     || timeout "$GIT_PUSH_TIMEOUT" git push --set-upstream origin "$TASK_BRANCH" 2>/dev/null; then
     GIT_RESULT="pushed to $TASK_BRANCH @ $SHA"
     echo "✓ $GIT_RESULT" >&2
   else
-    GIT_RESULT="commit @ $SHA — push failed (check credentials/remote)"
+    EXIT_CODE=$?
+    if [ "$EXIT_CODE" -eq 124 ]; then
+      GIT_RESULT="commit @ $SHA — git push timed out after ${GIT_PUSH_TIMEOUT}s"
+    else
+      GIT_RESULT="commit @ $SHA — push failed (check credentials/remote)"
+    fi
     echo "⚠ $GIT_RESULT" >&2
   fi
 fi

@@ -20,6 +20,18 @@ ENV_FILE="$ACC_DIR/.env"
 LOG_FILE="$ACC_DIR/logs/repo-sync.log"
 MAX_LOG_LINES=500
 
+# SSH options that prevent indefinite hangs on dead connections:
+#   ConnectTimeout=15  — abort if TCP handshake takes > 15 s
+#   ServerAliveInterval=30  — send keepalive every 30 s once connected
+#   ServerAliveCountMax=3   — drop connection after 3 missed keepalives (~90 s)
+GIT_SSH_COMMAND="ssh -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o BatchMode=yes"
+export GIT_SSH_COMMAND
+
+# Hard wall-clock timeout (seconds) for the push step.
+# Must be shorter than the systemd TimeoutStartSec (300 s) so we can log the
+# failure before systemd kills us.
+GIT_PUSH_TIMEOUT="${ACC_REPO_SYNC_PUSH_TIMEOUT:-180}"
+
 # Load .env if it exists
 if [ -f "$ENV_FILE" ]; then
   set -a
@@ -122,10 +134,18 @@ else
   # Only push if we have commits ahead of origin
   AHEAD=$(git rev-list "origin/$CURRENT_BRANCH..HEAD" --count 2>/dev/null || echo "0")
   if [ "$AHEAD" -gt 0 ]; then
-    git push origin "$CURRENT_BRANCH" --quiet 2>/dev/null || {
-      log "WARNING: git push failed — will retry next cycle"
-    }
-    log "Pushed $AHEAD commit(s) to origin/$CURRENT_BRANCH"
+    # Wrap push with a hard timeout so a hanging SSH connection can't block the
+    # script (and ultimately the systemd service) indefinitely.
+    if timeout "$GIT_PUSH_TIMEOUT" git push origin "$CURRENT_BRANCH" --quiet 2>/dev/null; then
+      log "Pushed $AHEAD commit(s) to origin/$CURRENT_BRANCH"
+    else
+      EXIT_CODE=$?
+      if [ "$EXIT_CODE" -eq 124 ]; then
+        log "WARNING: git push timed out after ${GIT_PUSH_TIMEOUT}s — will retry next cycle"
+      else
+        log "WARNING: git push failed (exit $EXIT_CODE) — will retry next cycle"
+      fi
+    fi
   else
     log "Nothing to push"
   fi

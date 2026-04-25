@@ -50,6 +50,17 @@ HTTP_TIMEOUT        = 15        # seconds for API calls
 WAKEUP_FILE         = ACC_DIR / "work-signal"    # bus-listener touches this to wake us
 SSE_RECONNECT_DELAY = 5                           # seconds between SSE reconnect attempts
 BEADS_POLL_INTERVAL = 300                         # check bd ready at most every 5 min
+GIT_PUSH_TIMEOUT    = 240       # seconds for a single git push before we give up
+
+# SSH options injected into every git-over-SSH call to prevent indefinite
+# hangs on dead/slow connections.  ConnectTimeout caps the TCP handshake;
+# ServerAlive* drops the link if the server goes silent mid-transfer.
+GIT_SSH_COMMAND = (
+    "ssh -o ConnectTimeout=15"
+    " -o ServerAliveInterval=30"
+    " -o ServerAliveCountMax=3"
+    " -o BatchMode=yes"
+)
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -673,12 +684,14 @@ def _git_push_once(item_id: str, workspace: Path, task_output: str) -> str:
 
         push = subprocess.run(
             ["git", "push", "--force-with-lease", "origin", task_branch],
-            capture_output=True, text=True, cwd=str(workspace), timeout=120,
+            capture_output=True, text=True, cwd=str(workspace), timeout=GIT_PUSH_TIMEOUT,
+            env={**os.environ, "GIT_SSH_COMMAND": GIT_SSH_COMMAND},
         )
         if push.returncode != 0:
             push = subprocess.run(
                 ["git", "push", "--set-upstream", "origin", task_branch],
-                capture_output=True, text=True, cwd=str(workspace), timeout=120,
+                capture_output=True, text=True, cwd=str(workspace), timeout=GIT_PUSH_TIMEOUT,
+                env={**os.environ, "GIT_SSH_COMMAND": GIT_SSH_COMMAND},
             )
 
         if push.returncode == 0:
@@ -691,6 +704,10 @@ def _git_push_once(item_id: str, workspace: Path, task_output: str) -> str:
 
     except subprocess.CalledProcessError as e:
         msg = f"git error: {e}"
+        log.warning(f"[{item_id}] {msg}")
+        return msg
+    except subprocess.TimeoutExpired:
+        msg = f"git push timed out after {GIT_PUSH_TIMEOUT}s — committed locally, push skipped"
         log.warning(f"[{item_id}] {msg}")
         return msg
     except Exception as e:
