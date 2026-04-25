@@ -96,7 +96,7 @@ def probe_service(name, url, headers=None, expect_in_body=None):
 def check_core_services():
     """Probe all core infrastructure services on do-host1."""
     results = []
-    results.append(probe_service("ccc-api", f"{ACC_API}/api/health", expect_in_body="ok"))
+    results.append(probe_service("acc-api", f"{ACC_API}/api/health", expect_in_body="ok"))
     results.append(probe_service("agentbus", f"{ACC_API}/api/health", expect_in_body="ok"))
     results.append(probe_service("qdrant", f"{QDRANT_URL}/healthz",
                                  headers={"api-key": QDRANT_API_KEY} if QDRANT_API_KEY else None))

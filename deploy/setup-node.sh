@@ -3,7 +3,7 @@
 # Run once on a new machine. Safe to re-run (idempotent).
 #
 # Usage:
-#   REPO_URL=git@github.com:yourorg/your-ccc-repo.git bash deploy/setup-node.sh
+#   REPO_URL=git@github.com:yourorg/your-acc-repo.git bash deploy/setup-node.sh
 #   OR (from inside an existing clone): bash deploy/setup-node.sh
 #
 # Tip: run deploy/acc-init.sh after this to configure your .env interactively.
@@ -32,7 +32,7 @@ warn()    { echo -e "${YELLOW}[setup]${NC} ⚠ $1"; }
 error()   { echo -e "${RED}[setup]${NC} ✗ $1"; exit 1; }
 
 echo ""
-echo "🐿️  CCC Agent Node Setup"
+echo "🐿️  ACC Agent Node Setup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -246,7 +246,7 @@ if [ -d "$CCC_SKILL_SRC" ] && [ "$HERMES_INSTALLED" = true ]; then
   fi
 fi
 
-# ── Seed hermes MEMORY.md with CCC fleet context ────────────────────────
+# ── Seed hermes MEMORY.md with ACC fleet context ────────────────────────
 # Seeds a typed-network MEMORY.md so a fresh hermes agent knows fleet
 # conventions without stumbling across AGENTS.md on its own.
 #
@@ -261,12 +261,12 @@ seed_hermes_memory() {
   local HERMES_DIR="$HOME/.hermes"
   local MEMORY_FILE="$HERMES_DIR/MEMORY.md"
   # Two sentinels for idempotency: old flat format and new typed format
-  local SENTINEL_OLD="## CCC Fleet Context"
+  local SENTINEL_OLD="## ACC Fleet Context"
   local SENTINEL_NEW="<!-- ccc-fleet-seed -->"
 
   if ! command -v hermes &>/dev/null; then return; fi
-  if grep -qE "(## CCC Fleet Context|<!-- ccc-fleet-seed -->)" "$MEMORY_FILE" 2>/dev/null; then
-    success "CCC fleet context already in hermes MEMORY.md — skipping"
+  if grep -qE "(## ACC Fleet Context|<!-- ccc-fleet-seed -->)" "$MEMORY_FILE" 2>/dev/null; then
+    success "ACC fleet context already in hermes MEMORY.md — skipping"
     return
   fi
 
@@ -286,19 +286,19 @@ seed_hermes_memory() {
 
 ## World Knowledge
 
-### CCC Fleet
-- This agent is part of the CCC fleet managed by ~/Src/CCC
-- Full workspace docs live in ~/Src/CCC/AGENTS.md — read on first boot
+### ACC Fleet
+- This agent is part of the ACC fleet managed by ~/Src/ACC
+- Full workspace docs live in ~/Src/ACC/AGENTS.md — read on first boot
 - Config: ~/.acc/.env — ACC_URL and ACC_AGENT_TOKEN are required before starting
-- Workqueue: ~/Src/CCC/workqueue/queue.json — polled each heartbeat cycle
+- Workqueue: ~/Src/ACC/workqueue/queue.json — polled each heartbeat cycle
 - Secrets are stored in TokenHub (~/Src/tokenhub); never hardcode credentials
 
 ### Companion Repos
 Clone these on any new command node without waiting to be asked:
-- ~/Src/CCC       — core fleet repo (already present)
+- ~/Src/ACC       — core fleet repo (already present)
 - ~/Src/tokenhub  — required: LLM router and secret store
 
-Minimum viable command node: CCC + tokenhub.
+Minimum viable command node: ACC + tokenhub.
 
 ## Beliefs
 
@@ -327,7 +327,7 @@ HERMESMEM
     sed -i.bak "s/SEED_DATE/$SEED_DATE/g" "$MEMORY_FILE" && rm -f "${MEMORY_FILE}.bak"
   fi
 
-  success "CCC fleet context seeded into $MEMORY_FILE (typed-network schema)"
+  success "ACC fleet context seeded into $MEMORY_FILE (typed-network schema)"
 }
 
 info "Seeding hermes fleet context..."
@@ -626,7 +626,7 @@ echo "  2. Run a manual pull: bash $PULL_SCRIPT"
 echo "  3. Check logs: tail -f $LOG_DIR/pull.log"
 echo "  4. Start agent runtime: hermes gateway"
 echo ""
-echo "  To register this agent with CCC:"
+echo "  To register this agent with ACC:"
 echo "  bash $WORKSPACE/deploy/register-agent.sh"
 echo ""
 echo "  Coding CLI turbocharger (if not already running):"
