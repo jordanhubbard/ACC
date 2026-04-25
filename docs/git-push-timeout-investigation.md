@@ -2,6 +2,62 @@
 
 ---
 
+## Incident 5 — DNS Resolution Failure (2026-04-26)
+
+**Affected task:** `task-fc5a1ae48f0d4e26ae25d92478636f0a`
+**Symptom:** Phase milestone commit failed with:
+
+```
+ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+```
+
+### Root Cause
+
+Fifth occurrence of the same transient DNS resolution failure class documented
+in Incidents 2–4.  `nodename nor servname provided, or not known` is the POSIX
+`getaddrinfo()` return for `EAI_NONAME` / `EAI_AGAIN`, meaning the DNS resolver
+on the agent host was unavailable or returned an error at the exact moment the
+phase-milestone commit tried to push — not a GitHub outage, not a credential or
+permission problem.
+
+Key evidence:
+- Error text is character-for-character identical to Incidents 2, 3, and 4,
+  confirming the pattern is a recurring transient DNS failure on the agent host.
+- `git log --oneline phase/milestone` continues to show healthy phase-commit
+  accumulation (`36fffb5`, `29aefe4`, `9ef3cdf`, …), confirming the remote
+  repository, SSH key, and `.git/config` are all correctly configured.
+- The local commit is intact; no work is lost.  The commit will be pushed on
+  the next successful `acc-repo-sync` cycle or phase-commit attempt.
+
+### Status
+
+This is the fifth occurrence.  The `acc-repo-sync.sh` script already contains
+the DNS pre-flight check and push retry loop (implemented after Incident 2).
+However, the **phase-commit push path in the agent runtime bypasses
+`acc-repo-sync.sh`** and pushes directly — it therefore does not benefit from
+those guards.
+
+The root fix (adding DNS pre-flight + retry to the agent-runtime phase-commit
+push path) was recommended in Incidents 3 and 4 and remains outstanding.  No
+new mitigation is required on the repository side for this incident.
+
+### Required Action
+
+The same three hardening steps called out in Incident 4 remain the correct
+long-term fix and should be applied to the agent runtime phase-commit push path:
+
+1. **DNS pre-flight before push** — resolve `github.com` before attempting
+   `git push`; defer and mark "pending push" if resolution fails.
+2. **Retry loop around push** — 3 attempts, 10 s back-off, `timeout 180 git push`.
+3. **Non-fatal DNS failures** — exit cleanly (code 0) on DNS failure so the
+   scheduler does not generate a noise investigation task.
+
+---
+
 ## Incident 4 — DNS Resolution Failure (2026-04-25)
 
 **Affected task:** `task-ad5a2e21c0354aa080b2041e22d2c141`
