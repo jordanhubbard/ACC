@@ -25,6 +25,14 @@ pub enum TaskType {
     Idea,
     Discovery,
     PhaseCommit,
+    // Extended types used by the task creation UI / beads integration.
+    // Treated as Work-equivalent by the agent poll loop.
+    Feature,
+    Bug,
+    Epic,
+    Task,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +187,31 @@ mod tests {
         let t: TaskType = serde_json::from_str(wire).unwrap();
         assert_eq!(t, TaskType::PhaseCommit);
         assert_eq!(serde_json::to_string(&t).unwrap(), wire);
+    }
+
+    #[test]
+    fn task_type_feature_bug_deserialize() {
+        assert_eq!(serde_json::from_str::<TaskType>("\"feature\"").unwrap(), TaskType::Feature);
+        assert_eq!(serde_json::from_str::<TaskType>("\"bug\"").unwrap(), TaskType::Bug);
+        assert_eq!(serde_json::from_str::<TaskType>("\"task\"").unwrap(), TaskType::Task);
+        assert_eq!(serde_json::from_str::<TaskType>("\"epic\"").unwrap(), TaskType::Epic);
+        assert_eq!(serde_json::from_str::<TaskType>("\"totally_new_type\"").unwrap(), TaskType::Unknown);
+    }
+
+    #[test]
+    fn task_list_with_feature_type_deserializes() {
+        let json = r#"{"tasks":[
+            {"id":"t-1","status":"claimed","task_type":"feature","title":"feat"},
+            {"id":"t-2","status":"claimed","task_type":"bug","title":"bugfix"},
+            {"id":"t-3","status":"claimed","task_type":"work","title":"work"}
+        ]}"#;
+        #[derive(serde::Deserialize)]
+        struct Envelope { tasks: Vec<Task> }
+        let e: Envelope = serde_json::from_str(json).unwrap();
+        assert_eq!(e.tasks.len(), 3);
+        assert_eq!(e.tasks[0].task_type, TaskType::Feature);
+        assert_eq!(e.tasks[1].task_type, TaskType::Bug);
+        assert_eq!(e.tasks[2].task_type, TaskType::Work);
     }
 
     #[test]
