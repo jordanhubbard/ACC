@@ -72,6 +72,7 @@ async fn brain_request(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         metadata: body.get("metadata").cloned().unwrap_or(json!({})),
+        failure_reason: None,
     };
 
     let request_id = state.brain.enqueue(req).await;

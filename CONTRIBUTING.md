@@ -243,17 +243,60 @@ network mount.  Several git defaults behave poorly on CIFS:
 | `core.preloadIndex` | Parallel stat storm saturates the SMB2 connection | `false` |
 | `index.threads` | Parallel index I/O is unsafe on CIFS | `1` |
 | `gc.auto` | Background GC writes large pack files; stalls on full share | `0` |
+| `fetch.writeCommitGraph` | Large object writes amplify CIFS write pressure | `false` |
 
-These are already applied to `.git/config`.  If you clone a fresh copy,
-re-apply them:
+### One-time post-clone setup
+
+These tunables are **local** (stored in `.git/config`, not committed).  Every
+fresh clone — by a human or an automated agent — requires two setup steps:
+
+**Step 1 — Apply the six CIFS tunables** using the provided script:
 
 ```bash
-git config core.trustctime     false
-git config core.checkStat      minimal
-git config core.preloadIndex   false
-git config index.threads       1
-git config gc.auto             0
-git config fetch.writeCommitGraph false
+bash scripts/apply-cifs-git-config.sh
+```
+
+The script is idempotent; running it more than once is harmless.
+
+**Step 2 — Wire the tracked `.gitconfig` into your local git config.**
+
+The repository ships a `.gitconfig` at the repo root that contains
+project-wide aliases and hook settings.  Git does **not** load this file
+automatically on clone; you must add an `include.path` entry to
+`.git/config` once per clone:
+
+```bash
+# Run from the repo root
+git config --local include.path ../.gitconfig
+```
+
+> **Why is this a manual step?**  Git intentionally does not auto-apply
+> `include.path` entries from a committed config file because doing so would
+> allow a compromised repo to silently rewrite your local git behaviour.  The
+> `include.path` directive must live in the _local_ `.git/config` — which is
+> outside version control — and must be added explicitly after each clone.
+
+After both steps your `.git/config` should contain entries similar to:
+
+```ini
+[core]
+    trustctime = false
+    checkStat = minimal
+    preloadIndex = false
+[index]
+    threads = 1
+[gc]
+    auto = 0
+[fetch]
+    writeCommitGraph = false
+[include]
+    path = ../.gitconfig
+```
+
+Verify with:
+
+```bash
+git config --local --list | grep -E "trustctime|checkstat|preloadindex|threads|gc\.auto|writecommitgraph|include"
 ```
 
 ---

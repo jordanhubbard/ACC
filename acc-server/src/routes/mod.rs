@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod git_phase_commit;
 pub mod health;
 pub mod queue;
 pub mod agents;

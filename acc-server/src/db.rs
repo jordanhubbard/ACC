@@ -120,6 +120,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             token_hash TEXT,
             confirmed_at TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            role TEXT,
             data TEXT NOT NULL DEFAULT '{}'
         );
 
@@ -302,8 +303,6 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         set_schema_version(conn, 6)?;
     }
 
-    set_schema_version(conn, CURRENT_VERSION)?;
-    tracing::info!("Database schema migrated to version {}", CURRENT_VERSION);
     Ok(())
 }
 
@@ -548,20 +547,21 @@ pub fn auth_all_token_hashes(conn: &Connection) -> Vec<String> {
     result
 }
 
-/// Load all token-hash → role mappings from the auth DB's `user_tokens` table
+/// Load all token-hash → role mappings from the auth DB's `users` table
 /// for users that have a role set.
 /// Returns a `HashMap<token_hash, role>`.
 pub fn auth_all_token_roles(conn: &Connection) -> HashMap<String, String> {
-    let mut stmt = match conn.prepare("SELECT token_hash, role FROM users WHERE role IS NOT NULL") {
+    let mut stmt = match conn.prepare("SELECT token_hash, role FROM users WHERE role IS NOT NULL AND token_hash IS NOT NULL") {
         Ok(s) => s,
         Err(_) => return HashMap::new(),
     };
-    match stmt.query_map([], |row| {
+    let x = match stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     }) {
         Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
         Err(_) => HashMap::new(),
-    }
+    };
+    x
 }
 
 #[cfg(test)]

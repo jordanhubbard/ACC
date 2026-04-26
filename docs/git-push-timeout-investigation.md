@@ -5,7 +5,7 @@
 This document tracks a series of incidents in which `git push` operations
 timed out or failed during milestone-commit automation.  Each incident is
 described with its observed symptoms, root cause, resolution, and any
-preventive measures adopted.  Incident 6 is the most recent occurrence.
+preventive measures adopted.  Incident 9 is the most recent occurrence.
 
 ---
 
@@ -1029,7 +1029,11 @@ scenarios.
 ## References
 
 - `docs/git-index-write-failure-investigation.md` — sibling investigation
-  covering the accfs-full / index-write failure class
+  covering the accfs-full / index-write failure class, CIFS D-state hang
+  root-cause analysis, and the canonical CIFS-safe git tunable settings
+  (`core.trustctime`, `core.checkStat`, `core.preloadIndex`, `index.threads`,
+  `gc.auto`, `fetch.writeCommitGraph`) with re-apply commands and verification
+  one-liners
 - `scripts/phase-commit.sh` — milestone commit automation script
 - `getaddrinfo(3)` man page — EAI_* error code definitions
 - libcurl error codes: <https://curl.se/libcurl/c/libcurl-errors.html>

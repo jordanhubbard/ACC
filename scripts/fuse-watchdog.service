@@ -1,0 +1,32 @@
+[Unit]
+Description=FUSE watchdog — abort stalled FUSE connections
+Documentation=https://github.com/{OWNER}/CCC
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+
+WorkingDirectory=/home/AGENT_USER/.acc
+
+ExecStart=/bin/bash /home/AGENT_USER/.acc/shared/acc/scripts/fuse-watchdog --one-shot
+
+# Tunables — override defaults set in the script
+Environment=FUSE_CONN_DIR=/sys/fs/fuse/connections
+Environment=FUSE_WAITING_THRESHOLD=16
+Environment=FUSE_POLL_INTERVAL=5
+Environment=DRY_RUN=false
+
+# Load per-node overrides when present
+EnvironmentFile=-/home/AGENT_USER/.acc/.env
+
+# Don't let a stuck poll run indefinitely
+TimeoutStartSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fuse-watchdog
+
+[Install]
+WantedBy=multi-user.target

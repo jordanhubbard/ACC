@@ -137,7 +137,40 @@ async fn execute_item(cfg: &Config, client: &Client, item: &serde_json::Value) {
     )).await;
 
     // Execute
-    let (output, exit_code) = if is_hermes_task(item) {
+    let (output, exit_code) = if is_phase_commit_item(item) {
+        log(cfg, &format!("[{item_id}] routing to run_git_phase_commit"));
+        let phase = item["phase"].as_str().unwrap_or("unknown");
+        let project_id = item["project_id"].as_str().unwrap_or("");
+        let n_blocked = item["blocked_by"].as_array().map(|a| a.len()).unwrap_or(0);
+        let branch = format!("phase/{phase}");
+        let commit_msg = format!(
+            "phase commit: {phase} ({n_blocked} tasks reviewed and approved)"
+        );
+        match crate::tasks::run_git_phase_commit(&workspace_local, &branch, &commit_msg).await {
+            Ok(out) => {
+                log(cfg, &format!("[{item_id}] phase_commit pushed {branch}"));
+                (out, 0)
+            }
+            Err(crate::tasks::PhaseCommitError::Transient(e)) => {
+                log(cfg, &format!("[{item_id}] phase_commit transient failure: {e}"));
+                if !project_id.is_empty() {
+                    let path = format!("/api/projects/{project_id}/phase-commit-failed");
+                    let body = serde_json::json!({"reason": &e});
+                    let _ = client.request_json("POST", &path, Some(&body)).await;
+                }
+                (format!("(transient) {e}"), 1)
+            }
+            Err(crate::tasks::PhaseCommitError::Hard(e)) => {
+                log(cfg, &format!("[{item_id}] phase_commit hard failure: {e}"));
+                if !project_id.is_empty() {
+                    let path = format!("/api/projects/{project_id}/phase-commit-failed");
+                    let body = serde_json::json!({"reason": &e});
+                    let _ = client.request_json("POST", &path, Some(&body)).await;
+                }
+                (e, 1)
+            }
+        }
+    } else if is_hermes_task(item) {
         log(cfg, &format!("[{item_id}] routing to acc-agent hermes"));
         run_hermes_driver(cfg, item, &item_id, &task_env, &workspace_local).await
     } else {
@@ -672,6 +705,11 @@ fn is_quenched(cfg: &Config) -> bool {
         return chrono::Utc::now() < until;
     }
     false
+}
+
+fn is_phase_commit_item(item: &serde_json::Value) -> bool {
+    item["task_type"].as_str() == Some("phase_commit")
+        || item["type"].as_str() == Some("phase_commit")
 }
 
 fn is_hermes_task(item: &serde_json::Value) -> bool {

@@ -280,6 +280,57 @@ Minimal setup: CCC + tokenhub only.
 
 ---
 
+## Git Configuration (CIFS Workspaces)
+
+ACC workspaces are typically hosted on a CIFS/SMB2 share (`accfs`).  Git's
+defaults are not safe on CIFS; two separate — but complementary — setup steps
+are required **once per clone**:
+
+### Step 1 — Apply the six CIFS-safe tunables
+
+```bash
+bash scripts/apply-cifs-git-config.sh
+```
+
+This writes local (non-committed) settings into `.git/config`:
+
+| Setting | Value | Reason |
+|---------|-------|--------|
+| `core.trustctime` | `false` | CIFS ctime is unreliable |
+| `core.checkStat` | `minimal` | Avoids network round-trips per file |
+| `core.preloadIndex` | `false` | Prevents parallel stat storm over SMB2 |
+| `index.threads` | `1` | Serialises index I/O; safer on CIFS |
+| `gc.auto` | `0` | Background GC stalls on slow/full CIFS shares |
+| `fetch.writeCommitGraph` | `false` | Reduces large object write pressure |
+
+The script is idempotent — safe to re-run.
+
+### Step 2 — Wire the tracked `.gitconfig` into your local git config
+
+The repo ships a `.gitconfig` at the repo root containing project-wide
+aliases and hook settings.  Git does **not** load this automatically —
+you must add an `include.path` entry to `.git/config` once per clone:
+
+```bash
+# Run from the repo root
+git config --local include.path ../.gitconfig
+```
+
+> **Why manual?** Git intentionally requires `include.path` to live in the
+> _local_ `.git/config` (not committed) so that a cloned repo cannot silently
+> rewrite your git behaviour.  The stanza will not be present in a fresh clone
+> until you add it.
+
+After both steps, verify with:
+
+```bash
+git config --local --list | grep -E "trustctime|checkstat|preloadindex|threads|gc\.auto|writecommitgraph|include"
+```
+
+Full details, background, and post-mortem history: [CONTRIBUTING.md §CIFS / SMB2 Filesystem Notes](CONTRIBUTING.md#cifs--smb2-filesystem-notes).
+
+---
+
 ## Generated Assets
 
 Generated files (images, PDFs, charts, etc.) go under `assets/<project-name>/`. Never dump to the repo root.

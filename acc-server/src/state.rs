@@ -48,8 +48,10 @@ pub struct AppState {
     pub blobs_path: String,
     /// Path to the dead-letter queue JSONL file.
     pub dlq_path: String,
-    /// Per-token role map: token (plaintext) → role string.
-    /// Used to gate role-restricted endpoints at runtime.
+    /// Per-token role map: SHA-256(token) → role string.
+    /// Populated from the auth DB on startup and kept in sync by create_user /
+    /// delete_user.  Consulted by `is_role_authed` to gate role-restricted
+    /// endpoints at runtime.
     pub user_token_roles: std::sync::RwLock<std::collections::HashMap<String, String>>,
     /// Watchdog state: tracks abandoned-work detection and alerts.
     pub watchdog: crate::routes::watchdog::WatchdogState,
@@ -136,6 +138,286 @@ impl AppState {
         }
 
         false
+    }
+
+    /// Compute the SHA-256 hex digest of a bearer token string.
+    fn hash_bearer(token: &str) -> String {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    /// Returns true if the request is authenticated **and** the token's assigned
+    /// role matches `required_role`.
+    ///
+    /// Admin (agent) tokens satisfy any role requirement — they are considered
+    /// super-users.  User tokens are checked against `user_token_roles` (keyed
+    /// by SHA-256 hash).  An empty `required_role` string is accepted by any
+    /// authenticated token (equivalent to `is_authed`).
+    ///
+    /// Returns false when:
+    ///   * The request is not authenticated at all, or
+    ///   * The token is a valid user token but its role does not match
+    ///     `required_role`.
+    pub fn is_role_authed(&self, headers: &axum::http::HeaderMap, required_role: &str) -> bool {
+        // Admin (config) tokens are super-users — they pass every role gate.
+        if self.is_admin_authed(headers) {
+            return true;
+        }
+
+        let token = self.bearer_token(headers);
+        if token.is_empty() {
+            return false;
+        }
+
+        let token_hash = Self::hash_bearer(token);
+
+        // Verify the token is a known user token first (defence-in-depth).
+        {
+            use subtle::ConstantTimeEq;
+            let user_hashes = self.user_token_hashes.read().unwrap();
+            let known = user_hashes.iter().any(|h| {
+                let a: &[u8] = token_hash.as_bytes();
+                let b: &[u8] = h.as_bytes();
+                a.len() == b.len() && bool::from(a.ct_eq(b))
+            });
+            if !known {
+                return false;
+            }
+        }
+
+        // An empty required_role means "any authenticated user".
+        if required_role.is_empty() {
+            return true;
+        }
+
+        // Check that this token's role matches the required role.
+        let roles = self.user_token_roles.read().unwrap();
+        roles
+            .get(&token_hash)
+            .map(|r| r.as_str() == required_role)
+            .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::routes::auth::hash_token;
+    use axum::http::{HeaderMap, HeaderValue};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    fn auth_header(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+        );
+        headers
+    }
+
+    /// Build a minimal AppState suitable for auth method unit tests.
+    /// `admin_tokens`  — set of plaintext agent/admin tokens.
+    /// `user_tokens`   — vec of (plaintext_token, optional_role).
+    fn make_state(
+        admin_tokens: Vec<&str>,
+        user_tokens: Vec<(&str, Option<&str>)>,
+    ) -> AppState {
+        let auth_tokens: HashSet<String> = admin_tokens.iter().map(|t| t.to_string()).collect();
+
+        let mut hashes: HashSet<String> = HashSet::new();
+        let mut roles: HashMap<String, String> = HashMap::new();
+        for (tok, role) in &user_tokens {
+            let h = hash_token(tok);
+            hashes.insert(h.clone());
+            if let Some(r) = role {
+                roles.insert(h, r.to_string());
+            }
+        }
+
+        // We need a real (in-memory) auth DB and fleet DB to satisfy AppState's
+        // fields, but they are not exercised by the auth method tests below.
+        let auth_conn = crate::db::open_auth(":memory:").unwrap();
+        let auth_db = Arc::new(tokio::sync::Mutex::new(auth_conn));
+        let fleet_conn = crate::db::open_fleet(":memory:").unwrap();
+        let fleet_db = Arc::new(tokio::sync::Mutex::new(fleet_conn));
+
+        AppState {
+            auth_tokens,
+            user_token_hashes: std::sync::RwLock::new(hashes),
+            user_token_roles: std::sync::RwLock::new(roles),
+            auth_db,
+            fleet_db,
+            queue_path: String::new(),
+            agents_path: String::new(),
+            secrets_path: String::new(),
+            bus_log_path: String::new(),
+            projects_path: String::new(),
+            queue: tokio::sync::RwLock::new(QueueData::default()),
+            agents: tokio::sync::RwLock::new(serde_json::Value::Object(
+                serde_json::Map::new(),
+            )),
+            secrets: tokio::sync::RwLock::new(serde_json::Map::new()),
+            projects: tokio::sync::RwLock::new(Vec::new()),
+            brain: Arc::new(crate::brain::BrainQueue::new()),
+            bus_tx: tokio::sync::broadcast::channel(4).0,
+            bus_seq: std::sync::atomic::AtomicU64::new(0),
+            start_time: std::time::SystemTime::now(),
+            fs_root: String::new(),
+            supervisor: None,
+            soul_store: tokio::sync::RwLock::new(HashMap::new()),
+            blob_store: tokio::sync::RwLock::new(HashMap::new()),
+            blobs_path: String::new(),
+            dlq_path: String::new(),
+            watchdog: crate::routes::watchdog::WatchdogState::new(),
+        }
+    }
+
+    // ── is_role_authed — admin token tests ───────────────────────────────────
+
+    /// Admin tokens satisfy any role gate (super-user rule).
+    #[test]
+    fn admin_token_satisfies_any_role() {
+        let state = make_state(vec!["admin-tok"], vec![]);
+        let headers = auth_header("admin-tok");
+        assert!(state.is_role_authed(&headers, "admin"));
+        assert!(state.is_role_authed(&headers, "user"));
+        assert!(state.is_role_authed(&headers, ""));
+        assert!(state.is_role_authed(&headers, "anything"));
+    }
+
+    /// Admin token also satisfies an empty required_role.
+    #[test]
+    fn admin_token_satisfies_empty_role() {
+        let state = make_state(vec!["admin-tok"], vec![]);
+        let headers = auth_header("admin-tok");
+        assert!(state.is_role_authed(&headers, ""));
+    }
+
+    // ── is_role_authed — user token role match ───────────────────────────────
+
+    /// User token with role "admin" is accepted when "admin" is required.
+    #[test]
+    fn user_token_correct_role_accepted() {
+        let state = make_state(vec![], vec![("user-tok-1", Some("admin"))]);
+        let headers = auth_header("user-tok-1");
+        assert!(state.is_role_authed(&headers, "admin"));
+    }
+
+    /// User token with role "user" is accepted when "user" is required.
+    #[test]
+    fn user_token_user_role_accepted() {
+        let state = make_state(vec![], vec![("user-tok-2", Some("user"))]);
+        let headers = auth_header("user-tok-2");
+        assert!(state.is_role_authed(&headers, "user"));
+    }
+
+    // ── is_role_authed — user token role mismatch ────────────────────────────
+
+    /// User token with role "user" is rejected when "admin" is required.
+    #[test]
+    fn user_token_wrong_role_rejected() {
+        let state = make_state(vec![], vec![("user-tok-3", Some("user"))]);
+        let headers = auth_header("user-tok-3");
+        assert!(!state.is_role_authed(&headers, "admin"));
+    }
+
+    /// User token with no role assigned is rejected for any non-empty required role.
+    #[test]
+    fn user_token_no_role_rejected_for_specific_role() {
+        let state = make_state(vec![], vec![("user-tok-4", None)]);
+        let headers = auth_header("user-tok-4");
+        assert!(!state.is_role_authed(&headers, "admin"));
+        assert!(!state.is_role_authed(&headers, "user"));
+    }
+
+    /// User token with no role is accepted when required_role is empty
+    /// (empty means "any authenticated user").
+    #[test]
+    fn user_token_no_role_accepted_for_empty_required_role() {
+        let state = make_state(vec![], vec![("user-tok-5", None)]);
+        let headers = auth_header("user-tok-5");
+        assert!(state.is_role_authed(&headers, ""));
+    }
+
+    // ── is_role_authed — unknown / missing token ─────────────────────────────
+
+    /// An unknown token is rejected even if a role is provided.
+    #[test]
+    fn unknown_token_rejected() {
+        let state = make_state(vec!["admin-tok"], vec![("known-user", Some("admin"))]);
+        let headers = auth_header("completely-unknown-token");
+        assert!(!state.is_role_authed(&headers, "admin"));
+        assert!(!state.is_role_authed(&headers, ""));
+    }
+
+    /// A missing Authorization header is rejected.
+    #[test]
+    fn missing_auth_header_rejected() {
+        let state = make_state(vec!["admin-tok"], vec![("known-user", Some("user"))]);
+        let headers = HeaderMap::new(); // no Authorization header
+        assert!(!state.is_role_authed(&headers, "user"));
+        assert!(!state.is_role_authed(&headers, ""));
+    }
+
+    // ── is_role_authed — runtime reload of user_token_roles ─────────────────
+
+    /// After a new role mapping is inserted into user_token_roles at runtime
+    /// (simulating a server-restart reload or a live create_user call), the
+    /// updated role is immediately visible to is_role_authed.
+    #[test]
+    fn runtime_role_update_is_visible() {
+        // Start with a user token that has no role.
+        let state = make_state(vec![], vec![("reload-tok", None)]);
+        let headers = auth_header("reload-tok");
+
+        // Before the reload, the token has no role → rejected for "admin".
+        assert!(!state.is_role_authed(&headers, "admin"));
+
+        // Simulate a runtime reload: insert the hash→role mapping.
+        let token_hash = hash_token("reload-tok");
+        state
+            .user_token_roles
+            .write()
+            .unwrap()
+            .insert(token_hash, "admin".to_string());
+
+        // After the in-memory update, the same token now passes the "admin" gate.
+        assert!(state.is_role_authed(&headers, "admin"));
+    }
+
+    /// Removing a role mapping from user_token_roles at runtime (e.g. delete_user)
+    /// immediately revokes role access for that token.
+    #[test]
+    fn runtime_role_removal_revokes_access() {
+        let state = make_state(vec![], vec![("revoke-tok", Some("admin"))]);
+        let headers = auth_header("revoke-tok");
+
+        // Token starts with "admin" role.
+        assert!(state.is_role_authed(&headers, "admin"));
+
+        // Simulate removal (e.g. delete_user or role downgrade).
+        let token_hash = hash_token("revoke-tok");
+        state.user_token_roles.write().unwrap().remove(&token_hash);
+
+        // Role access is revoked immediately.
+        assert!(!state.is_role_authed(&headers, "admin"));
+    }
+
+    // ── is_authed — existing behaviour is unchanged ──────────────────────────
+
+    /// is_authed still works for both admin and user tokens.
+    #[test]
+    fn is_authed_still_works() {
+        let state = make_state(vec!["admin-tok"], vec![("user-tok", Some("user"))]);
+
+        assert!(state.is_authed(&auth_header("admin-tok")));
+        assert!(state.is_authed(&auth_header("user-tok")));
+        assert!(!state.is_authed(&auth_header("bad-tok")));
     }
 }
 

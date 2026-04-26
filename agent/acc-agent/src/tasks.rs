@@ -26,7 +26,7 @@ use crate::peers;
 ///   git error, …); the caller should file an investigation task so a human
 ///   can look into it.
 #[derive(Debug)]
-enum PhaseCommitError {
+pub(crate) enum PhaseCommitError {
     Transient(String),
     Hard(String),
 }
@@ -892,7 +892,7 @@ fn is_transient_network_error(stderr: &str) -> bool {
         || lower.contains("503")
 }
 
-async fn run_git_phase_commit(workspace: &PathBuf, branch: &str, commit_msg: &str) -> Result<String, PhaseCommitError> {
+pub(crate) async fn run_git_phase_commit(workspace: &PathBuf, branch: &str, commit_msg: &str) -> Result<String, PhaseCommitError> {
     let ws = workspace.to_str().unwrap_or(".");
 
     // Apply CIFS-safe git configuration before any index-touching operation.
@@ -1182,6 +1182,80 @@ fn parse_task_type(s: &str) -> Option<TaskType> {
 
 fn to_value<T: serde::Serialize>(v: T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
+}
+
+// ── WorkspaceMutex / WorkspaceLockGuard ───────────────────────────────────────
+//
+// Serialises concurrent git operations on a single workspace directory.
+//
+// Multiple tokio tasks (`execute_task`, `execute_phase_commit_task`, …) may
+// attempt to touch the same on-disk workspace at the same time.  A plain
+// `tokio::sync::Mutex` would work for a single fixed workspace, but the
+// agent manages *many* workspaces concurrently and we only want to serialise
+// operations on the *same* path, not across all paths.
+//
+// `WorkspaceMutex` is a thin handle that wraps a lazily-created, path-keyed
+// entry in a process-wide registry of `tokio::sync::Mutex<()>` values.
+// Each distinct canonical path gets its own mutex; paths that map to
+// different directories never block each other.
+//
+// Usage:
+//
+//   let mtx = WorkspaceMutex::for_path(&workspace);
+//   let _guard = mtx.lock().await;   // blocks until the previous holder drops
+//   // ... git operations ...
+//   // guard drops here, releasing the mutex for the next waiter
+//
+// `WorkspaceLockGuard` is the RAII guard returned by `lock()`.  It holds
+// an `OwnedMutexGuard<()>` and is `Send` + `'static`, making it safe to
+// store across `.await` points and to pass between tasks.
+
+/// Global registry mapping workspace paths to their per-path mutexes.
+fn workspace_registry() -> &'static Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
+        OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A lightweight, cloneable handle to the per-workspace mutex for a given path.
+///
+/// Cheap to clone — all clones refer to the same underlying mutex.
+#[derive(Clone)]
+pub struct WorkspaceMutex {
+    inner: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl WorkspaceMutex {
+    /// Return the `WorkspaceMutex` for `path`.
+    ///
+    /// If this is the first call for `path`, a new mutex is inserted into the
+    /// global registry.  Subsequent calls for the same path return a handle
+    /// that shares the same underlying mutex.
+    pub fn for_path(path: &PathBuf) -> Self {
+        let mut reg = workspace_registry().lock().expect("workspace registry poisoned");
+        let inner = reg
+            .entry(path.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        WorkspaceMutex { inner }
+    }
+
+    /// Acquire exclusive access to this workspace.
+    ///
+    /// Waits until no other task holds a `WorkspaceLockGuard` for the same
+    /// path, then returns a guard that releases the mutex on drop.
+    pub async fn lock(&self) -> WorkspaceLockGuard {
+        let guard = self.inner.clone().lock_owned().await;
+        WorkspaceLockGuard { _guard: guard }
+    }
+}
+
+/// RAII guard that holds exclusive access to a workspace mutex.
+///
+/// Dropping this value releases the mutex so that the next `.lock().await`
+/// caller can proceed.
+pub struct WorkspaceLockGuard {
+    _guard: tokio::sync::OwnedMutexGuard<()>,
 }
 
 #[cfg(test)]
@@ -1981,5 +2055,229 @@ mod tests {
             dir.path().join("task-workspaces").join("task-42"),
             "with a task_id, fallback should be acc_dir/task-workspaces/<task_id>"
         );
+    }
+
+    // ── WorkspaceMutex / WorkspaceLockGuard ───────────────────────────────────
+    //
+    // Two behavioural contracts are verified here:
+    //
+    //   (a) SERIAL CONTRACT — a second `.lock().await` on the same path blocks
+    //       until the first guard is dropped.  This is the core safety property:
+    //       two concurrent git operations on the same workspace directory must
+    //       not interleave.
+    //
+    //   (b) INDEPENDENCE CONTRACT — two `WorkspaceMutex` handles for *different*
+    //       paths do not block each other.  Holding a lock on /path/A must not
+    //       prevent /path/B from being acquired concurrently.
+    //
+    // Both tests use `tokio::time::timeout` as a hard deadline so that a
+    // regression (e.g. a deadlock or spurious blocking across paths) surfaces
+    // as a test failure rather than a hung CI job.
+
+    /// (a) Serial contract: a second lock on the same path must wait until
+    /// the first guard is explicitly dropped before it can be acquired.
+    ///
+    /// Sequence:
+    ///   1. Task A acquires the lock; sets `flag = true`.
+    ///   2. Task B attempts to acquire the same lock; it must block.
+    ///   3. Task A drops the guard.
+    ///   4. Task B unblocks, reads `flag` (must be true), sets `flag = false`.
+    ///   5. The main task joins both and verifies `flag == false`.
+    ///
+    /// If the blocking behaviour is broken (both tasks run concurrently),
+    /// the ordering of writes to `flag` becomes non-deterministic and the
+    /// assertion is likely to fail.  The timeout guards against deadlocks.
+    #[tokio::test]
+    async fn test_workspace_mutex_second_lock_blocks_until_guard_dropped() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use tokio::time::{Duration, timeout};
+
+        let path = PathBuf::from("/tmp/test-workspace-serial-lock");
+        let flag = Arc::new(AtomicBool::new(false));
+
+        // ── Task A: acquire lock, set flag, sleep briefly, then drop ─────────
+        let mtx_a = WorkspaceMutex::for_path(&path);
+        let flag_a = flag.clone();
+        let task_a = tokio::spawn(async move {
+            let _guard = mtx_a.lock().await;
+            flag_a.store(true, Ordering::SeqCst);
+            // Hold the lock long enough for task B to be definitely waiting.
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            // _guard dropped here
+        });
+
+        // Give task A a head-start so it acquires the lock first.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // ── Task B: must block on lock() until task A drops its guard ─────────
+        let mtx_b = WorkspaceMutex::for_path(&path);
+        let flag_b = flag.clone();
+        let task_b = tokio::spawn(async move {
+            // This .await must not complete until task A has dropped _guard.
+            let _guard = mtx_b.lock().await;
+            // By the time we get here, task A has already set flag = true and
+            // released the lock.  Verify the sequencing.
+            assert!(
+                flag_b.load(Ordering::SeqCst),
+                "flag must be true when task B acquires the lock; \
+                 if false, task B ran before task A set it → lock did not serialise"
+            );
+            flag_b.store(false, Ordering::SeqCst);
+        });
+
+        // Allow up to 2 s for both tasks to complete; a deadlock surfaces here.
+        timeout(Duration::from_secs(2), async {
+            task_a.await.expect("task A panicked");
+            task_b.await.expect("task B panicked");
+        })
+        .await
+        .expect("test timed out — possible deadlock in WorkspaceMutex");
+
+        // Final state: task B ran last and set flag back to false.
+        assert!(
+            !flag.load(Ordering::SeqCst),
+            "flag must be false after task B ran"
+        );
+    }
+
+    /// (b) Independence contract: locks on different paths do not block each other.
+    ///
+    /// Both tasks acquire their respective locks, increment a shared counter,
+    /// sleep briefly, then release.  Because the paths are different, both
+    /// tasks must be able to hold their locks *simultaneously*.  We verify
+    /// this by requiring the entire concurrent section to complete well within
+    /// the time it would take if the locks were shared (i.e., if they were
+    /// independent, the wall time ≈ sleep_duration, not 2 × sleep_duration).
+    ///
+    /// A timeout that is tighter than 2 × sleep_duration but looser than
+    /// 1 × sleep_duration is used as the deadline.
+    #[tokio::test]
+    async fn test_workspace_mutex_different_paths_are_independent() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use tokio::time::{Duration, Instant, timeout};
+
+        let path_a = PathBuf::from("/tmp/test-workspace-independent-A");
+        let path_b = PathBuf::from("/tmp/test-workspace-independent-B");
+
+        // Must be different paths — the whole point of this test.
+        assert_ne!(path_a, path_b);
+
+        let concurrent_holders = Arc::new(AtomicU32::new(0));
+        let max_concurrent = Arc::new(AtomicU32::new(0));
+
+        let sleep_ms: u64 = 60;
+
+        let mtx_a = WorkspaceMutex::for_path(&path_a);
+        let ch_a = concurrent_holders.clone();
+        let mx_a = max_concurrent.clone();
+        let task_a = tokio::spawn(async move {
+            let _guard = mtx_a.lock().await;
+            let n = ch_a.fetch_add(1, Ordering::SeqCst) + 1;
+            mx_a.fetch_max(n, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+            ch_a.fetch_sub(1, Ordering::SeqCst);
+        });
+
+        let mtx_b = WorkspaceMutex::for_path(&path_b);
+        let ch_b = concurrent_holders.clone();
+        let mx_b = max_concurrent.clone();
+        let task_b = tokio::spawn(async move {
+            let _guard = mtx_b.lock().await;
+            let n = ch_b.fetch_add(1, Ordering::SeqCst) + 1;
+            mx_b.fetch_max(n, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+            ch_b.fetch_sub(1, Ordering::SeqCst);
+        });
+
+        let start = Instant::now();
+        // Deadline: 1.5× sleep_ms.  If the locks were *not* independent (i.e.
+        // the second task blocked on the first), the wall time would be ≥ 2×
+        // sleep_ms and the timeout would fire.
+        let deadline = Duration::from_millis(sleep_ms * 3 / 2);
+        timeout(deadline, async {
+            task_a.await.expect("task A panicked");
+            task_b.await.expect("task B panicked");
+        })
+        .await
+        .expect("test timed out — locks on different paths appear to be blocking each other");
+
+        let elapsed = start.elapsed();
+        // Sanity-check: the wall time must be at least sleep_ms (neither task
+        // skipped its sleep — no false passes due to the sleep being skipped).
+        assert!(
+            elapsed >= Duration::from_millis(sleep_ms),
+            "elapsed time {elapsed:?} is suspiciously short; tasks may not have slept"
+        );
+
+        // Both tasks must have been holding their locks at the same time.
+        assert_eq!(
+            max_concurrent.load(Ordering::SeqCst),
+            2,
+            "max concurrent holders must be 2 (both tasks ran with lock held simultaneously); \
+             got {} — locks may not be independent",
+            max_concurrent.load(Ordering::SeqCst)
+        );
+    }
+
+    /// Cloning a WorkspaceMutex produces a handle that refers to the same
+    /// underlying mutex: a lock acquired through the clone blocks the original
+    /// and vice versa.
+    #[tokio::test]
+    async fn test_workspace_mutex_clone_shares_underlying_mutex() {
+        use tokio::time::{Duration, timeout};
+
+        let path = PathBuf::from("/tmp/test-workspace-clone-shared");
+        let original = WorkspaceMutex::for_path(&path);
+        let cloned = original.clone();
+
+        // Acquire via original.
+        let guard = original.lock().await;
+
+        // Attempt to acquire via clone — must time out because original holds it.
+        let try_lock = timeout(Duration::from_millis(50), cloned.lock()).await;
+        assert!(
+            try_lock.is_err(),
+            "clone should share the mutex with the original; \
+             acquiring through clone while original holds the guard should block"
+        );
+
+        // Release original guard; clone should now succeed immediately.
+        drop(guard);
+        let try_lock2 = timeout(Duration::from_millis(200), cloned.lock()).await;
+        assert!(
+            try_lock2.is_ok(),
+            "after dropping the original guard, clone.lock() should succeed"
+        );
+    }
+
+    /// `WorkspaceMutex::for_path` called twice with the same path returns
+    /// handles that share the same underlying mutex (verified by the same
+    /// blocking behaviour as the clone test above).
+    #[tokio::test]
+    async fn test_workspace_mutex_for_path_same_path_shares_mutex() {
+        use tokio::time::{Duration, timeout};
+
+        let path = PathBuf::from("/tmp/test-workspace-same-path-shared");
+
+        let handle1 = WorkspaceMutex::for_path(&path);
+        let handle2 = WorkspaceMutex::for_path(&path);
+
+        // Both handles must resolve to the same underlying mutex: a pointer
+        // comparison of the Arc is the most direct proof.
+        assert!(
+            Arc::ptr_eq(&handle1.inner, &handle2.inner),
+            "two handles for the same path must share the same Arc<Mutex<()>>"
+        );
+
+        // Cross-verify with behavioural test: handle1 holds; handle2 blocks.
+        let guard1 = handle1.lock().await;
+        let try2 = timeout(Duration::from_millis(50), handle2.lock()).await;
+        assert!(
+            try2.is_err(),
+            "handle2 should block while handle1 holds the lock for the same path"
+        );
+        drop(guard1);
     }
 }

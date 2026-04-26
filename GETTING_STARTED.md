@@ -202,6 +202,24 @@ cd CCC
 make init   # configure a local dev instance
 ```
 
+After cloning, run the following **one-time post-clone steps** to configure
+git for the CIFS-backed `accfs` volume and activate the tracked `.gitconfig`:
+
+```bash
+# 1. Apply the six CIFS-safe git tunables (idempotent — safe to re-run)
+bash scripts/apply-cifs-git-config.sh
+
+# 2. Wire the repo's shared .gitconfig into your local git config
+#    (must be done once per clone; git does not load this automatically)
+git config --local include.path ../.gitconfig
+```
+
+> **Why step 2?**  The repository ships a `.gitconfig` at the repo root
+> containing project-wide aliases and hook configuration.  Git requires
+> `include.path` to be in the _local_ `.git/config` (which is not committed)
+> and will not apply it automatically on clone.  Skipping this step means
+> project-standard aliases and hooks will be silently absent.
+
 The API server is a Rust binary (`acc-server`). The dashboard is a single-page app embedded in the binary and served at `/`.
 
 ```bash

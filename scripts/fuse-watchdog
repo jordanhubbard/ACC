@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# fuse-watchdog — Poll /sys/fs/fuse/connections and abort stalled connections.
+#
+# Continuously monitors the `waiting` counter exposed by the kernel FUSE layer
+# for every connection under /sys/fs/fuse/connections/.  When the counter
+# reaches or exceeds the configured threshold, writes "1" to that connection's
+# `abort` file, forcing all queued FUSE requests to return EIO and unblocking
+# any processes stuck in D-state on the mount.
+#
+# Designed as a lightweight, long-running daemon suitable for deployment via
+# systemd, cron, or a supervisor process.  All tunables are exposed as
+# environment variables so no config file is required.
+#
+# Usage:
+#   sudo scripts/fuse-watchdog [OPTIONS]
+#
+# Options:
+#   --conn-dir <path>        Directory to poll for FUSE connections
+#                            (default: /sys/fs/fuse/connections)
+#   --threshold <n>          Abort when `waiting` >= n (default: 16)
+#   --interval <seconds>     Poll interval in seconds (default: 5)
+#   --one-shot               Poll once and exit (useful for cron)
+#   --dry-run                Log actions without writing to `abort`
+#   -h, --help               Show this help and exit
+#
+# Environment variables (override defaults without flags):
+#   FUSE_CONN_DIR            Same as --conn-dir
+#   FUSE_WAITING_THRESHOLD   Same as --threshold
+#   FUSE_POLL_INTERVAL       Same as --interval
+#   DRY_RUN                  Set to "true" to enable dry-run mode
+#
+# Exit codes:
+#   0   Clean shutdown via SIGTERM/SIGINT (or --one-shot with no errors)
+#   1   Fatal startup error (missing sysfs directory, not root, etc.)
+#
+# Prerequisites:
+#   - Must run as root — writing to /sys/fs/fuse/connections/*/abort requires
+#     CAP_SYS_ADMIN.
+#   - The `fuse` kernel module must be loaded (modprobe fuse).
+#
+# See also:
+#   scripts/fix_fuse_mount.sh          — one-shot FUSE stall remediation
+#   scripts/cifs-mount-health.sh       — broader mount diagnostics
+#   docs/accfs.md                      — AccFS architecture
+
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Defaults (overridable via environment variables or CLI flags)
+# ─────────────────────────────────────────────────────────────────────────────
+CONN_DIR="${FUSE_CONN_DIR:-/sys/fs/fuse/connections}"
+THRESHOLD="${FUSE_WAITING_THRESHOLD:-16}"
+INTERVAL="${FUSE_POLL_INTERVAL:-5}"
+ONE_SHOT=false
+DRY_RUN="${DRY_RUN:-false}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Argument parsing
+# ─────────────────────────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --conn-dir)   CONN_DIR="$2";   shift 2 ;;
+    --threshold)  THRESHOLD="$2";  shift 2 ;;
+    --interval)   INTERVAL="$2";   shift 2 ;;
+    --one-shot)   ONE_SHOT=true;   shift   ;;
+    --dry-run)    DRY_RUN=true;    shift   ;;
+    -h|--help)
+      sed -n '/^# fuse-watchdog/,/^[^#]/{ /^[^#]/d; s/^# \?//; p }' "$0"
+      exit 0
+      ;;
+    *) log_fatal "Unknown argument: $1"; exit 1 ;;
+  esac
+done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Structured log helpers
+# ─────────────────────────────────────────────────────────────────────────────
+_ts()       { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+log_info()  { echo "[fuse-watchdog] INFO  $(_ts) $*"; }
+log_warn()  { echo "[fuse-watchdog] WARN  $(_ts) $*" >&2; }
+log_fatal() { echo "[fuse-watchdog] FATAL $(_ts) $*" >&2; }
+log_abort() { echo "[fuse-watchdog] ABORT $(_ts) $*"; }
+sep()       { echo "────────────────────────────────────────────────────────────"; }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIGTERM / SIGINT trap — clean shutdown
+# ─────────────────────────────────────────────────────────────────────────────
+_RUNNING=true
+
+_shutdown() {
+  log_info "Signal received — shutting down gracefully."
+  _RUNNING=false
+}
+
+trap '_shutdown' SIGTERM SIGINT
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Startup validation
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+  log_fatal "fuse-watchdog must run as root (writing to sysfs abort requires CAP_SYS_ADMIN)."
+  exit 1
+fi
+
+if [[ ! -d "$CONN_DIR" ]]; then
+  log_fatal "FUSE connections directory not found: ${CONN_DIR}"
+  log_fatal "Ensure the 'fuse' kernel module is loaded: modprobe fuse"
+  exit 1
+fi
+
+if ! [[ "$THRESHOLD" =~ ^[0-9]+$ ]] || [[ "$THRESHOLD" -lt 1 ]]; then
+  log_fatal "FUSE_WAITING_THRESHOLD must be a positive integer (got: '${THRESHOLD}')."
+  exit 1
+fi
+
+if ! [[ "$INTERVAL" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "$INTERVAL" == "0" ]]; then
+  log_fatal "FUSE_POLL_INTERVAL must be a positive number in seconds (got: '${INTERVAL}')."
+  exit 1
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Startup banner
+# ─────────────────────────────────────────────────────────────────────────────
+sep
+log_info "fuse-watchdog starting."
+log_info "  conn dir  : ${CONN_DIR}"
+log_info "  threshold : ${THRESHOLD} queued requests"
+log_info "  interval  : ${INTERVAL}s"
+log_info "  one-shot  : ${ONE_SHOT}"
+log_info "  dry-run   : ${DRY_RUN}"
+sep
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Poll function — inspect all connections once
+# Returns 0 if any connection was aborted (or would be in dry-run), else 1.
+# ─────────────────────────────────────────────────────────────────────────────
+_poll_connections() {
+  local any_aborted=1  # 1 = nothing aborted yet
+
+  for conn_dir in "${CONN_DIR}"/*/; do
+    [[ -d "$conn_dir" ]] || continue
+
+    local waiting_file="${conn_dir}waiting"
+    local abort_file="${conn_dir}abort"
+
+    # Both files must exist for a valid, active FUSE connection.
+    if [[ ! -f "$waiting_file" ]]; then
+      log_warn "  No 'waiting' file in ${conn_dir} — skipping."
+      continue
+    fi
+    if [[ ! -f "$abort_file" ]]; then
+      log_warn "  No 'abort' file in ${conn_dir} — skipping."
+      continue
+    fi
+
+    # Read the waiting counter; guard against transient read errors.
+    local waiting
+    if ! waiting=$(cat "$waiting_file" 2>/dev/null); then
+      log_warn "  Could not read ${waiting_file} — connection may have closed."
+      continue
+    fi
+
+    # Strip whitespace
+    waiting="${waiting//[[:space:]]/}"
+
+    # Validate the value is numeric
+    if ! [[ "$waiting" =~ ^[0-9]+$ ]]; then
+      log_warn "  Unexpected value in ${waiting_file}: '${waiting}' — skipping."
+      continue
+    fi
+
+    log_info "  conn=${conn_dir%/}  waiting=${waiting}  threshold=${THRESHOLD}"
+
+    if [[ "$waiting" -ge "$THRESHOLD" ]]; then
+      log_abort "  Threshold met (waiting=${waiting} >= ${THRESHOLD}) — aborting connection: ${conn_dir%/}"
+
+      if [[ "$DRY_RUN" == "true" ]]; then
+        log_abort "  [DRY-RUN] Would write 1 to ${abort_file}"
+        any_aborted=0
+      else
+        if echo 1 > "$abort_file" 2>/dev/null; then
+          log_abort "  Wrote 1 to ${abort_file} — queued FUSE requests will return EIO."
+          any_aborted=0
+        else
+          log_warn "  Failed to write to ${abort_file} (connection may already be inactive)."
+        fi
+      fi
+    fi
+  done
+
+  return "$any_aborted"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main loop
+# ─────────────────────────────────────────────────────────────────────────────
+ITERATIONS=0
+
+while [[ "$_RUNNING" == "true" ]]; do
+  ITERATIONS=$(( ITERATIONS + 1 ))
+  log_info "Poll #${ITERATIONS}"
+
+  _poll_connections || true   # non-zero return (nothing aborted) is not an error
+
+  if [[ "$ONE_SHOT" == "true" ]]; then
+    log_info "One-shot mode — exiting after single poll."
+    break
+  fi
+
+  # Interruptible sleep: use a subprocess so SIGTERM/SIGINT can wake us.
+  if [[ "$_RUNNING" == "true" ]]; then
+    sleep "${INTERVAL}" &
+    _SLEEP_PID=$!
+    # Wait for sleep; if the trap fires, _RUNNING becomes false and the next
+    # iteration of the while condition exits the loop cleanly.
+    wait "$_SLEEP_PID" 2>/dev/null || true
+  fi
+done
+
+sep
+log_info "fuse-watchdog stopped after ${ITERATIONS} poll(s)."
+sep
+
+exit 0

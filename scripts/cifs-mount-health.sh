@@ -89,6 +89,33 @@ else
 
   CACHE=$(echo "$MOUNT_ENTRY" | grep -oP 'cache=\K\w+' || echo "unknown")
   info "  cache=${CACHE} — 'strict' means writeback flush must succeed; 'none' avoids dirty-page stalls"
+
+  # ── Recommended git-on-CIFS stability options ──────────────────────────────
+  ECHO_INTERVAL=$(echo "$MOUNT_ENTRY" | grep -oP 'echo_interval=\K[0-9]+' || true)
+  if [[ -z "$ECHO_INTERVAL" ]]; then
+    warn "  echo_interval not set — recommend echo_interval=30 to detect dead connections faster"
+  else
+    ok "  echo_interval=${ECHO_INTERVAL}"
+  fi
+
+  ECHO_RETRIES=$(echo "$MOUNT_ENTRY" | grep -oP 'echo_retries=\K[0-9]+' || true)
+  if [[ -z "$ECHO_RETRIES" ]]; then
+    warn "  echo_retries not set — recommend echo_retries=5 to tolerate brief network blips"
+  else
+    ok "  echo_retries=${ECHO_RETRIES}"
+  fi
+
+  if echo "$MOUNT_ENTRY" | grep -qw 'noplock'; then
+    ok "  noplock is set — opportunistic lock requests disabled (safe for git on CIFS)"
+  else
+    warn "  noplock not set — oplocks can cause stale-cache and corruption on CIFS; recommend adding 'noplock'"
+  fi
+
+  if echo "$MOUNT_ENTRY" | grep -qw 'noserverino'; then
+    ok "  noserverino is set — local inode numbers used (avoids git stat mismatches on CIFS)"
+  else
+    warn "  noserverino not set — server-supplied inodes can cause git index mismatches; recommend adding 'noserverino'"
+  fi
 fi
 
 # ── Check 2: Mount responsiveness (timed probe) ───────────────────────────────
@@ -165,20 +192,25 @@ fi
 
 # ── Check 5: D-state processes ────────────────────────────────────────────────
 echo ""
-info "Check 5: Processes in D-state (uninterruptible sleep)"
+info "Check 5: git/CIFS processes in D-state (uninterruptible sleep)"
 
-DSTATE_PROCS=$(cat /proc/*/status 2>/dev/null \
-  | awk '/^Name:/{name=$2} /^Pid:/{pid=$2} /^State:.*D /{print pid, name}' \
+DSTATE_PROCS=$(awk '/^Name:/{name=$2} /^Pid:/{pid=$2} /^State:.*D /{print pid, name}' \
+  /proc/*/status 2>/dev/null \
+  | awk '$2 ~ /^(git|cifs|smb|mount\.cifs)/' \
   | head -20 || true)
 
 if [[ -z "$DSTATE_PROCS" ]]; then
-  ok "No D-state processes found"
+  ok "No git/CIFS D-state processes found"
 else
-  warn "D-state processes detected:"
+  warn "git/CIFS D-state processes detected:"
   while IFS= read -r proc; do
-    echo "    PID $proc"
+    pid=$(echo "$proc" | awk '{print $1}')
+    name=$(echo "$proc" | awk '{print $2}')
+    wchan=$(cat "/proc/${pid}/wchan" 2>/dev/null || echo "unknown")
+    echo "    PID ${pid}  name=${name}  wchan=${wchan}"
   done <<< "$DSTATE_PROCS"
   warn "  → These are likely blocked on CIFS I/O"
+  warn "  → wchan shows the kernel function where each process is sleeping"
   warn "  → They will recover when the server responds or the mount is remounted"
   warn "  → If persistent: check server health at 100.89.199.14"
 fi
@@ -202,7 +234,8 @@ if [[ -n "$GIT_REPOS" ]]; then
 
     # Check critical CIFS settings
     for setting in "core.trustctime=false" "core.checkStat=minimal" \
-                   "core.preloadIndex=false" "index.threads=1" "gc.auto=0"; do
+                   "core.preloadIndex=false" "index.threads=1" "gc.auto=0" \
+                   "fetch.writeCommitGraph=false"; do
       key="${setting%=*}"
       expected_val="${setting#*=}"
       actual_val=$(git -C "$repo_root" config --local "$key" 2>/dev/null || echo "")

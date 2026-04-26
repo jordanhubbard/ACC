@@ -245,15 +245,62 @@ if [[ "$IS_CIFS" == "true" ]]; then
 fi
 
 # ── 5. Checkout / create branch ──────────────────────────────────────────────
+# git checkout can itself stall on a CIFS/FUSE mount and leave a zero-byte
+# index.lock behind (the root cause of task-4676eb6f51534a1ea66d14a630962811,
+# documented as Incident 8 in docs/git-index-write-failure-investigation.md).
+# We guard against this by:
+#   a) Unconditionally removing any index.lock immediately before the checkout
+#      (not just when [[ -f ]] is true).  This closes the TOCTOU race window
+#      where a lock is created between the step-2 pre-flight and the checkout
+#      call.  See Incident 8 for details.
+#   b) Running checkout under `timeout` so a D-state hang is bounded.
+#   c) Removing any stale index.lock left behind if checkout fails/times out,
+#      then aborting with a clear error message.
+#
+# CHECKOUT_TIMEOUT defaults to 60 s — generous enough for a normal local
+# checkout but short enough to surface a CIFS stall promptly.
+CHECKOUT_TIMEOUT="${GIT_CHECKOUT_TIMEOUT:-60}"
+
 log "Switching to branch '${BRANCH}'…"
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 
 if [[ "$CURRENT_BRANCH" != "$BRANCH" ]]; then
+  # Pre-checkout: unconditionally remove any stale index.lock before calling
+  # git checkout.  Using an unconditional rm -f (rather than a [[ -f ]] guard)
+  # closes the TOCTOU race window where a lock created between the earlier
+  # pre-flight check (step 2) and this checkout call would otherwise survive.
+  # This is safe because:
+  #   • A zero-byte lock left by a previous killed/D-state process is always
+  #     stale — git creates it with O_EXCL; if the creating process is gone
+  #     (killed or OOM) it can never be the active writer.
+  #   • If a concurrent live git process exists, it will re-create the lock
+  #     immediately and the checkout below will fail with a clear error, which
+  #     is the correct behaviour.
+  # See: docs/git-index-write-failure-investigation.md (Incident 8)
+  rm -f "${GIT_DIR}/index.lock"
+
+  checkout_exit=0
   if git rev-parse --verify "$BRANCH" > /dev/null 2>&1; then
-    git checkout "$BRANCH"
+    timeout "${CHECKOUT_TIMEOUT}" git checkout "$BRANCH" || checkout_exit=$?
   else
-    git checkout -B "$BRANCH"
+    timeout "${CHECKOUT_TIMEOUT}" git checkout -B "$BRANCH" || checkout_exit=$?
   fi
+
+  # Post-checkout: clean up any lock the timed-out / failed checkout left behind.
+  if [[ $checkout_exit -ne 0 ]]; then
+    rm -f "${GIT_DIR}/index.lock"
+    if [[ $checkout_exit -eq 124 ]]; then
+      die "git checkout '${BRANCH}' timed out after ${CHECKOUT_TIMEOUT}s.
+  This typically means the CIFS/FUSE mount is stalled.
+  → Check D-state processes: ps aux | awk '\$8==\"D\"{print}'
+  → Run: bash scripts/cifs-mount-health.sh
+  → Run: bash scripts/fuse-watchdog --one-shot
+  → See: docs/git-index-write-failure-investigation.md"
+    else
+      die "git checkout '${BRANCH}' failed with exit code ${checkout_exit}"
+    fi
+  fi
+
   log "  On branch: $BRANCH ✓"
 else
   log "  Already on branch: $BRANCH ✓"

@@ -6,3 +6,8 @@
 
 # Memory git snapshot — daily at midnight, commit MEMORY.md to git history
 0 0 * * * bash WORKSPACE/scripts/memory-git-commit.sh >> LOG_DIR/memory-commit.log 2>&1
+
+# CIFS/AccFS mount health check — every 15 minutes (INFRA-2)
+# Checks disk space, stale lock files, D-state processes, and mount responsiveness.
+# Emits WARN when free space < 1 GiB, CRIT when < 512 MiB.
+*/15 * * * * root bash WORKSPACE/scripts/cifs-mount-health.sh --mount-path /home/jkh/.acc/shared >> /var/log/accfs-health.log 2>&1

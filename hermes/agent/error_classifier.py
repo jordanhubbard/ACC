@@ -832,3 +832,223 @@ def _extract_message(error: Exception, body: dict) -> str:
             return msg.strip()[:500]
     # Fallback to str(error)
     return str(error)[:500]
+
+
+# ── Transient network error detection ───────────────────────────────────
+
+# OSError errno values that represent transient network conditions.
+# These arise from the OS/kernel (socket layer) rather than the application
+# protocol, so they're always retriable.
+_TRANSIENT_ERRNOS = frozenset({
+    11,   # EAGAIN  — resource temporarily unavailable (non-blocking socket)
+    104,  # ECONNRESET — connection reset by peer
+    110,  # ETIMEDOUT — connection timed out
+    111,  # ECONNREFUSED — connection refused (transient; server may be starting)
+    113,  # EHOSTUNREACH — no route to host (transient routing issue)
+    101,  # ENETUNREACH — network unreachable (transient)
+    32,   # EPIPE — broken pipe (remote closed connection)
+})
+
+# errno symbolic names mirrored for portability (values differ on some OSes)
+try:
+    import errno as _errno_mod
+    _TRANSIENT_ERRNOS = frozenset({
+        _errno_mod.EAGAIN,
+        _errno_mod.ECONNRESET,
+        _errno_mod.ETIMEDOUT,
+        _errno_mod.ECONNREFUSED,
+        _errno_mod.EPIPE,
+    } | (
+        {_errno_mod.EHOSTUNREACH} if hasattr(_errno_mod, "EHOSTUNREACH") else set()
+    ) | (
+        {_errno_mod.ENETUNREACH} if hasattr(_errno_mod, "ENETUNREACH") else set()
+    ))
+except Exception:
+    pass  # Fallback to hardcoded set above
+
+# Exception *type names* (checked via type(e).__name__) that are always
+# transient transport errors regardless of which SDK produced them.
+_TRANSIENT_TYPE_NAMES = frozenset({
+    # httpx transport errors
+    "ConnectTimeout",
+    "ReadTimeout",
+    "WriteTimeout",
+    "PoolTimeout",
+    "ConnectError",
+    "ReadError",
+    "WriteError",
+    "RemoteProtocolError",
+    "LocalProtocolError",
+    "NetworkError",
+    "TransportError",
+    "TimeoutException",
+    # aiohttp / requests transport errors
+    "ServerDisconnectedError",
+    "ServerTimeoutError",
+    "ClientConnectorError",
+    "ClientOSError",
+    "ServerConnectionError",
+    # OpenAI / Anthropic SDK connection errors
+    "APIConnectionError",
+    "APITimeoutError",
+    # Python stdlib
+    "ConnectionResetError",
+    "ConnectionAbortedError",
+    "ConnectionRefusedError",
+    "BrokenPipeError",
+    "TimeoutError",
+})
+
+# Non-transient HTTP status codes: definitive client errors or billing
+# blocks that will not resolve on retry with the same request/credential.
+_NON_TRANSIENT_STATUS_CODES = frozenset({
+    400,  # Bad request — malformed payload
+    401,  # Unauthorized — bad credential (may be rotatable, but not transient)
+    403,  # Forbidden — access denied
+    404,  # Not found — wrong endpoint or model
+    405,  # Method not allowed
+    406,  # Not acceptable
+    409,  # Conflict
+    410,  # Gone
+    413,  # Payload too large (needs compression, not retry)
+    415,  # Unsupported media type
+    422,  # Unprocessable entity
+    # Note: 429 (rate limit) and 402 (billing) are NOT in this set —
+    # they are handled by the retry loop with backoff/credential rotation.
+})
+
+
+def is_transient_network_error(exc: Optional[Exception]) -> bool:
+    """Return True if *exc* represents a transient network error safe to retry.
+
+    A transient network error is one that arises from the transport layer
+    (socket, connection, timeout) and is not caused by a permanent problem
+    with the request payload, credentials, or server-side policy.
+
+    Transient examples (→ True):
+    - Python built-ins: ``ConnectionError``, ``TimeoutError``
+    - ``OSError`` with EAGAIN, ECONNRESET, ETIMEDOUT, ECONNREFUSED, EPIPE
+    - httpx: ``ConnectTimeout``, ``ReadTimeout``, ``ConnectError``, etc.
+    - requests: ``Timeout``, ``ConnectTimeout``, ``ConnectionError``
+    - OpenAI / Anthropic SDK: ``APIConnectionError``, ``APITimeoutError``
+
+    Non-transient examples (→ False):
+    - ``ValueError``, ``TypeError``, ``AttributeError`` (programming errors)
+    - ``APIStatusError`` / any exception with a 4xx status code that is
+      deterministically non-retryable (400, 401, 403, 404, 422 …)
+    - Billing errors (402 with "insufficient credits")
+    - ``None`` input
+
+    The function also walks the ``__cause__`` / ``__context__`` chain up to
+    five levels deep, so a transport error wrapped inside a higher-level
+    SDK exception is still detected.
+
+    Args:
+        exc: The exception to inspect, or ``None``.
+
+    Returns:
+        ``True`` if the exception (or a chained cause) looks like a
+        transient network problem; ``False`` otherwise.
+    """
+    if exc is None:
+        return False
+
+    # Walk the cause chain.  Keep a seen-set to guard against circular
+    # __cause__ references (Python allows them).
+    seen: set[int] = set()
+    current: Optional[Exception] = exc
+    depth = 0
+    while current is not None and depth < 6:
+        eid = id(current)
+        if eid in seen:
+            break
+        seen.add(eid)
+        depth += 1
+
+        if _is_single_exception_transient(current):
+            return True
+
+        # Walk cause chain
+        cause = getattr(current, "__cause__", None)
+        if cause is None:
+            cause = getattr(current, "__context__", None)
+        if cause is current:
+            break
+        current = cause  # type: ignore[assignment]
+
+    return False
+
+
+def _is_single_exception_transient(exc: Exception) -> bool:
+    """Check a single exception (no chaining) for transient network markers."""
+
+    # ── 1. Check HTTP status code — non-transient status codes bail early ──
+    status = _extract_status_code(exc)
+    if status is not None:
+        # Definitive non-transient 4xx codes
+        if status in _NON_TRANSIENT_STATUS_CODES:
+            return False
+        # 5xx and 429/402 are NOT classified here — they may be handled by
+        # the retry/failover loop but are not *network* errors per se.
+        # We return False for those too — only transport-layer exceptions
+        # count as "network errors" for this predicate.
+        return False
+
+    # ── 2. isinstance checks for well-known base classes ──────────────────
+    # Python built-in transport exceptions
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        # OSError: check errno — only transient errnos count
+        if isinstance(exc, OSError) and exc.errno is not None:
+            if exc.errno in _TRANSIENT_ERRNOS:
+                return True
+            # OSError with a non-transient errno (e.g. ENOENT) is not transient
+            return False
+        # Plain TimeoutError / ConnectionError (no errno) → transient
+        if isinstance(exc, (TimeoutError, ConnectionError)):
+            return True
+
+    # httpx transport-layer base class
+    try:
+        import httpx as _httpx
+        if isinstance(exc, (_httpx.TransportError, _httpx.TimeoutException,
+                            _httpx.NetworkError)):
+            return True
+        # httpx.HTTPStatusError carries a status_code — already handled above
+        # via _extract_status_code, so we don't need to special-case it here.
+    except ImportError:
+        pass
+
+    # requests transport/timeout base class
+    try:
+        import requests as _requests
+        if isinstance(exc, (_requests.exceptions.Timeout,
+                            _requests.exceptions.ConnectionError)):
+            return True
+    except ImportError:
+        pass
+
+    # OpenAI SDK connection/timeout errors
+    try:
+        import openai as _openai
+        if isinstance(exc, (_openai.APIConnectionError, _openai.APITimeoutError)):
+            return True
+    except ImportError:
+        pass
+
+    # Anthropic SDK connection/timeout errors
+    try:
+        import anthropic as _anthropic
+        if isinstance(exc, (_anthropic.APIConnectionError, _anthropic.APITimeoutError)):
+            return True
+    except ImportError:
+        pass
+
+    # ── 3. Type-name heuristic (duck-typing for unknown SDK wrappers) ──────
+    # Some libraries (aiohttp, httpcore, opencode) define their own transport
+    # exception hierarchies that don't inherit from stdlib or httpx.  A
+    # name-based check catches these without importing every possible library.
+    type_name = type(exc).__name__
+    if type_name in _TRANSIENT_TYPE_NAMES:
+        return True
+
+    return False

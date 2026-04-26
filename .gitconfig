@@ -1,0 +1,54 @@
+# .gitconfig — shared, version-controlled git configuration for the ACC repo
+#
+# PURPOSE
+#   This file is committed to the repository and contains project-wide git
+#   settings (aliases, hook paths, etc.) that every contributor should share.
+#
+# HOW IT IS APPLIED — IMPORTANT
+#   Git does NOT load this file automatically.  Unlike a global ~/.gitconfig or
+#   a system-level /etc/gitconfig, a repo-root .gitconfig is treated as an
+#   ordinary text file by git unless you explicitly tell your *local*
+#   .git/config to include it.
+#
+#   After every fresh clone, run this one-time command from the repo root:
+#
+#     git config --local include.path ../.gitconfig
+#
+#   This adds an [include] stanza to .git/config (which is NOT committed).
+#   Without it, none of the settings below will take effect for that clone.
+#
+# RELATIONSHIP TO apply-cifs-git-config.sh
+#   scripts/apply-cifs-git-config.sh writes six CIFS/SMB2-safe tunables
+#   (core.trustctime, core.checkStat, core.preloadIndex, index.threads,
+#   gc.auto, fetch.writeCommitGraph) directly to .git/config as local
+#   settings.  Those settings are separate from — and complementary to —
+#   the project-wide settings in this file.  Both steps are required on
+#   every fresh clone:
+#
+#     # Step 1 — apply CIFS-safe tunables (idempotent)
+#     bash scripts/apply-cifs-git-config.sh
+#
+#     # Step 2 — wire this shared config into local git
+#     git config --local include.path ../.gitconfig
+#
+#   See CONTRIBUTING.md §"CIFS / SMB2 Filesystem Notes" and
+#   GETTING_STARTED.md §"Developer Path" for the full post-clone checklist.
+#
+# NOTE FOR CURRENT WORKSPACE
+#   The [include] stanza is already present in this workspace's .git/config
+#   because it was added when this clone was first set up.  New contributors
+#   cloning the repo will need to add it manually using the command above.
+
+[core]
+	trustctime = false
+	checkStat = minimal
+
+[index]
+	preloadIndex = false
+	threads = 1
+
+[gc]
+	auto = 0
+
+[fetch]
+	writeCommitGraph = false

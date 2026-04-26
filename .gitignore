@@ -122,10 +122,20 @@ grievances/
 HEARTBEAT.md
 workqueue/WORKQUEUE_AGENT_NATASHA.md
 
-# Rust build artifacts
-target/
+# Rust build artifacts — never commit compiled objects or incremental caches
+# Top-level and workspace-member target/ directories
+/target/
 **/target/
-agent/target/
+# Explicit artefact extensions (belt-and-suspenders: caught by target/ above,
+# but guards against any rogue out-of-tree build dirs)
+**/*.rlib
+**/*.rmeta
+**/*.rcgu.o
+**/*.d
+**/*.pdb
+# Incremental compilation state
+**/target/debug/incremental/
+**/target/release/incremental/
 __pycache__/
 
 # Dashboard / ClawChat WASM build outputs (source lives on hub, not in this repo)

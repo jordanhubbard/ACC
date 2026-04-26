@@ -5,8 +5,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Documented the `apply-cifs-git-config.sh` ↔ `.gitconfig` include relationship
+  across all contributor-facing files to eliminate a recurring onboarding gap:
+  - **`.gitconfig`** — added a header comment explaining that Git does not load
+    this file automatically, showing the required `git config --local
+    include.path ../.gitconfig` one-liner, clarifying how it complements (but is
+    separate from) the six CIFS tunables written by `apply-cifs-git-config.sh`,
+    and noting that the `[include]` stanza already present in the current
+    workspace's `.git/config` is absent from every fresh clone.
+  - **`README.md`** — added a "Git Configuration (CIFS Workspaces)" section with
+    a two-step post-clone checklist (run `apply-cifs-git-config.sh`, then add the
+    `include.path` stanza), a settings table, and a cross-reference to
+    `CONTRIBUTING.md`.
+  - **`CHANGELOG.md`** (this entry) — records the documentation change so the gap
+    is visible in release history.
+  - Full contributor workflow details remain in `CONTRIBUTING.md §"CIFS / SMB2
+    Filesystem Notes"` and `GETTING_STARTED.md §"Developer Path"` (both already
+    contained the two-step checklist and rationale).
+
 ### Fixed
 - Removed stale `.git/index.lock` file that was blocking phase milestone commits (task-4676eb6f51534a1ea66d14a630962811); killed orphaned `git diff`/`git status` processes that were holding the lock.
+- **`scripts/phase-commit.sh`** — wrapped `git checkout -B phase/milestone` in a
+  `timeout` (default 60 s, overridable via `GIT_CHECKOUT_TIMEOUT`) so a CIFS/FUSE
+  stall during branch switch no longer hangs indefinitely and leaves a stale
+  `index.lock` that blocks all subsequent phase-commit invocations.  Added
+  pre-checkout and post-checkout `index.lock` cleanup so the script self-heals
+  from the exact failure mode observed in task-4676eb6f51534a1ea66d14a630962811.
 
 ### Added
 - probe suite: Probe 8 — GitHub ↔ Beads two-way sync tests (#12, ACC-4fi)

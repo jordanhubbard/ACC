@@ -28,6 +28,7 @@ pub struct BrainRequest {
     pub callback_url: Option<String>,
     #[serde(default)]
     pub metadata: Value,
+    pub failure_reason: Option<String>,
 }
 
 fn default_max_tokens() -> u32 {
@@ -259,8 +260,77 @@ impl BrainQueue {
                         "ts": attempt_ts,
                         "error": e.to_string(),
                     }));
-                    req.status = "pending".to_string(); // retry next tick
-                    warn!("brain: {} tokenhub error: {} — will retry", id, e);
+
+                    // Parse "HTTP <status>: <body>" produced by call_model_once,
+                    // or treat non-HTTP errors (network failures) as status 0.
+                    let (http_status, http_body): (u16, &str) = e
+                        .strip_prefix("HTTP ")
+                        .and_then(|rest| {
+                            let mut parts = rest.splitn(2, ": ");
+                            let status = parts.next()?.parse::<u16>().ok()?;
+                            let body = parts.next().unwrap_or("");
+                            Some((status, body))
+                        })
+                        .unwrap_or((0, e.as_str()));
+
+                    match classify_error(http_status, http_body) {
+                        ErrorKind::Transient => {
+                            let attempt_count = req.attempts.len();
+                            if attempt_count >= max_transient_attempts() {
+                                // Retry cap exceeded — escalate to failed so the
+                                // request doesn't loop indefinitely.
+                                req.status = "failed".to_string();
+                                req.failure_reason = Some(format!(
+                                    "max retry attempts ({}) exceeded; last error: {}",
+                                    max_transient_attempts(),
+                                    e
+                                ));
+                                req.completed_at = Some(chrono::Utc::now().to_rfc3339());
+
+                                let failed = req.clone();
+                                let req_id = id.to_string();
+                                drop(state);
+
+                                let mut state2 = self.state.write().await;
+                                state2.queue.retain(|r| r.id != req_id);
+                                state2.completed.push(failed);
+                                drop(state2);
+
+                                warn!(
+                                    "brain: {} exceeded max retry attempts ({}) — marked failed; last error: {}",
+                                    req_id,
+                                    max_transient_attempts(),
+                                    e
+                                );
+                                return;
+                            }
+                            req.status = "pending".to_string(); // retry next tick
+                            warn!(
+                                "brain: {} tokenhub error: {} — will retry (attempt {}/{})",
+                                id, e, attempt_count, max_transient_attempts()
+                            );
+                        }
+                        ErrorKind::Hard => {
+                            req.status = "failed".to_string();
+                            req.failure_reason = Some(e.to_string());
+                            req.completed_at = Some(chrono::Utc::now().to_rfc3339());
+
+                            let failed = req.clone();
+                            let req_id = id.to_string();
+                            drop(state); // release lock before re-acquiring
+
+                            let mut state2 = self.state.write().await;
+                            state2.queue.retain(|r| r.id != req_id);
+                            state2.completed.push(failed);
+                            drop(state2);
+
+                            warn!(
+                                "brain: {} hard error (HTTP {}): {} — marked failed",
+                                req_id, http_status, e
+                            );
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -272,6 +342,7 @@ impl BrainQueue {
         messages: &[Value],
         max_tokens: u32,
     ) -> Result<(String, u32), String> {
+        let mut last_err = String::from("all models failed");
         for model in &self.models {
             match self
                 .call_model_once(client, model, messages, max_tokens)
@@ -279,10 +350,36 @@ impl BrainQueue {
             {
                 Ok((text, tokens)) if !text.is_empty() => return Ok((text, tokens)),
                 Ok(_) => warn!("brain: empty response from {}", model),
-                Err(e) => warn!("brain: {} failed: {} — trying next", model, e),
+                Err(e) => {
+                    // Classify the error immediately so that a hard error from
+                    // any model (e.g. 401 Unauthorized) short-circuits the loop
+                    // rather than being silently overwritten by a subsequent
+                    // model's transient error (e.g. 503), which would cause
+                    // process_request to treat the whole call as retryable.
+                    let (http_status, http_body): (u16, &str) = e
+                        .strip_prefix("HTTP ")
+                        .and_then(|rest| {
+                            let mut parts = rest.splitn(2, ": ");
+                            let status = parts.next()?.parse::<u16>().ok()?;
+                            let body = parts.next().unwrap_or("");
+                            Some((status, body))
+                        })
+                        .unwrap_or((0, e.as_str()));
+
+                    if classify_error(http_status, http_body) == ErrorKind::Hard {
+                        warn!(
+                            "brain: {} hard error (HTTP {}): {} — aborting model loop",
+                            model, http_status, e
+                        );
+                        return Err(e);
+                    }
+
+                    warn!("brain: {} failed: {} — trying next", model, e);
+                    last_err = e;
+                }
             }
         }
-        Err("all models failed".to_string())
+        Err(last_err)
     }
 
     async fn call_model_once(
@@ -320,6 +417,64 @@ impl BrainQueue {
             .to_string();
         let tokens = data["usage"]["total_tokens"].as_u64().unwrap_or(0) as u32;
         Ok((text, tokens))
+    }
+}
+
+// ── Retry cap ────────────────────────────────────────────────────────────
+
+/// Maximum number of attempts (including the first) before a transiently-
+/// failing request is escalated to `failed` instead of re-queued as
+/// `pending`.  Prevents a persistent 429 / 5xx from looping indefinitely
+/// and growing the `attempts` array without bound.
+///
+/// Overridable at runtime via the `BRAIN_MAX_ATTEMPTS` environment variable.
+pub fn max_transient_attempts() -> usize {
+    std::env::var("BRAIN_MAX_ATTEMPTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10)
+}
+
+// ── Error classification ──────────────────────────────────────────────────
+
+/// Whether an error is worth retrying.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// Temporary failure – the request should be retried (e.g. network
+    /// timeouts, rate-limits, and transient server errors).
+    Transient,
+    /// Permanent failure – retrying will not help (e.g. bad credentials or
+    /// a malformed request rejected by the server).
+    Hard,
+}
+
+/// Classify an HTTP response into [`ErrorKind`] using the following rules:
+///
+/// | status | rule |
+/// |--------|------|
+/// | `0`    | Network / connection error → [`ErrorKind::Transient`] |
+/// | `429`  | Rate-limited → [`ErrorKind::Transient`] |
+/// | `5xx`  | Server error → [`ErrorKind::Transient`] |
+/// | `401` / `403` | Auth error → [`ErrorKind::Hard`] |
+/// | other `4xx` | Bad request → [`ErrorKind::Hard`] |
+/// | anything else | Treat as [`ErrorKind::Hard`] |
+///
+/// The `body` parameter is reserved for future use (e.g. inspecting
+/// vendor-specific error codes) and does not currently affect the result.
+pub fn classify_error(status: u16, _body: &str) -> ErrorKind {
+    match status {
+        // Network / connection failure (no HTTP response received)
+        0 => ErrorKind::Transient,
+        // Rate-limited
+        429 => ErrorKind::Transient,
+        // Transient server errors
+        500..=599 => ErrorKind::Transient,
+        // Auth errors – retrying with the same credentials will not help
+        401 | 403 => ErrorKind::Hard,
+        // Any other 4xx – the request itself is malformed/rejected
+        400..=499 => ErrorKind::Hard,
+        // Unexpected status codes default to hard so we don't loop forever
+        _ => ErrorKind::Hard,
     }
 }
 
