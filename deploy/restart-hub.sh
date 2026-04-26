@@ -9,6 +9,12 @@ ACC_DIR="${ACC_DIR:-$HOME/.acc}"
 LOG_DIR="${LOG_DIR:-$ACC_DIR/logs}"
 WORKSPACE="${WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
 
+# Source cargo env when invoked from a non-login shell (e.g. ssh + bash -c)
+if [ -f "$HOME/.cargo/env" ] && ! command -v cargo >/dev/null 2>&1; then
+    # shellcheck disable=SC1091
+    source "$HOME/.cargo/env"
+fi
+
 if [ -z "$WORKSPACE" ] || [ ! -f "${WORKSPACE}/Cargo.toml" ]; then
     echo "[restart-hub] ERROR: cannot locate workspace (run from inside the repo, or set WORKSPACE=)" >&2
     exit 1
