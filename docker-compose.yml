@@ -9,7 +9,6 @@
 # Notes:
 # - acc-data/ is a bind-mount dir for runtime data (queue, registry, secrets)
 # - logs/ is a shared bind-mount for all service logs
-# - The WASM dashboard dist is bind-mounted from dist/ (pre-built, committed to repo)
 #
 # Override ACC_OWNER/ACC_REPO to use your own fork:
 #   ACC_OWNER=myorg ACC_REPO=my-acc docker compose up
@@ -58,6 +57,32 @@ services:
       - ./deploy/nginx/dashboard.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - acc-api
+    networks:
+      - acc-net
+
+  # ── Hermes gateway (vendored from jordanhubbard/hermes-agent) ─────────────
+  # Handles all messaging platform integrations (Slack, Signal, Telegram, etc.)
+  # and exposes the hermes agent runtime to the ACC task queue.
+  # Config: ./hermes-data/.hermes/ (bind-mounted to /root/.hermes inside)
+  hermes:
+    build:
+      context: ./hermes
+      dockerfile: Dockerfile
+    container_name: acc-hermes
+    restart: unless-stopped
+    env_file:
+      - ./acc-data/.env
+      - ./hermes-data/.env          # SLACK_BOT_TOKEN, SIGNAL_*, etc.
+    environment:
+      - ACC_URL=http://acc-api:8789
+      - CCC_URL=http://acc-api:8789  # alias used by ccc_integration plugin
+      - HERMES_PLUGINS=ccc_integration,acc_shared_memory
+    volumes:
+      - ./hermes-data:/root/.hermes  # hermes config, sessions, skills, memory
+      - ./logs:/data/logs
+    depends_on:
+      acc-api:
+        condition: service_healthy
     networks:
       - acc-net
 

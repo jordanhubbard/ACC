@@ -1,5 +1,4 @@
 pub mod auth;
-pub mod blobs;
 pub mod health;
 pub mod queue;
 pub mod agents;
@@ -24,6 +23,11 @@ pub mod conversations;
 pub mod metrics;
 pub mod models;
 pub mod requests;
+pub mod soul;
+pub mod blobs;
+pub mod watchdog;
+pub mod github;
+pub mod logs;
 
 use axum::{
     http::StatusCode,

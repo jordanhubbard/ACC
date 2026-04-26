@@ -1,0 +1,19 @@
+[package]
+name = "acc"
+version = "0.1.0"
+edition = "2021"
+description = "ACC fleet CLI — tasks, projects, agents, bus"
+
+[[bin]]
+name = "acc"
+path = "src/main.rs"
+
+[dependencies]
+acc-client   = { path = "../acc-client" }
+acc-model    = { path = "../acc-model" }
+clap         = { version = "4",    features = ["derive", "env"] }
+tokio.workspace        = true
+futures-util.workspace = true
+serde.workspace        = true
+serde_json.workspace   = true
+anyhow       = "1"

@@ -1,296 +1,209 @@
-/// Declare every recognised bus MIME type in one place.
-///
-/// The `media_types!` macro expands to:
-///   • An enum `MediaType` whose variants are listed here.
-///   • `MediaType::from_mime(s: &str) -> Option<MediaType>` — parses the
-///     canonical MIME string and returns the matching variant.
-///   • `MediaType::as_mime(&self) -> &'static str` — the canonical MIME
-///     string for a variant.
-///   • `MediaType::is_binary(&self) -> bool` — true when the payload should
-///     be treated as opaque bytes (base64-encoded on the wire).
-///
-/// Syntax: `media_types! { VariantName => "mime/string" [binary], … }`
-/// The `binary` flag is optional; omitting it means the type is text.
+/// Shared MediaType enum — single source of truth for all supported media types
+/// on the AgentBus. Every message with content MUST carry a `mime` field matching
+/// one of these variants. Unknown variants are routed to the dead-letter queue.
+
 macro_rules! media_types {
-    (
-        $( $variant:ident => $mime:literal $(, binary: $bin:tt)? );*
-        $(;)?
-    ) => {
-        /// Every MIME type that the bus blob endpoint recognises.
-        #[derive(Debug, Clone, PartialEq, Eq)]
+    ($(($variant:ident, $mime:literal, $binary:expr)),* $(,)?) => {
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         pub enum MediaType {
-            $( $variant, )*
+            $($variant,)*
+            Unknown(String),
         }
 
         impl MediaType {
-            /// Parse a MIME string and return the matching variant, or `None`
-            /// if the string is not registered in the `media_types!` table.
-            pub fn from_mime(s: &str) -> Option<MediaType> {
-                match s {
-                    $( $mime => Some(MediaType::$variant), )*
-                    _ => None,
-                }
-            }
-
-            /// Return the canonical MIME string for this variant.
-            pub fn as_mime(&self) -> &'static str {
+            pub fn as_str(&self) -> &str {
                 match self {
-                    $( MediaType::$variant => $mime, )*
+                    $(MediaType::$variant => $mime,)*
+                    MediaType::Unknown(s) => s.as_str(),
                 }
             }
 
-            /// Return `true` when payload bytes should be treated as binary
-            /// (i.e. base64-encoded on the bus wire format).
+            /// True for audio, video, image, and binary types that require base64 encoding.
             pub fn is_binary(&self) -> bool {
                 match self {
-                    $(
-                        MediaType::$variant => {
-                            // The `binary` flag drives this arm.
-                            // If no flag was given the value is `false`.
-                            media_types!(@bin $( $bin )?)
-                        }
-                    )*
+                    $(MediaType::$variant => $binary,)*
+                    MediaType::Unknown(_) => true,
                 }
             }
-        }
-    };
 
-    // Helper: emit the boolean value for the `binary` flag.
-    (@bin true)  => { true  };
-    (@bin false) => { false };
-    (@bin)       => { false };   // flag omitted → not binary
+            pub fn is_known(&self) -> bool {
+                !matches!(self, MediaType::Unknown(_))
+            }
+
+            /// All canonical MIME strings (used for JSON schema generation).
+            pub fn all_known() -> &'static [&'static str] {
+                &[$($mime,)*]
+            }
+        }
+
+        impl std::str::FromStr for MediaType {
+            type Err = std::convert::Infallible;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Ok(match s {
+                    $($mime => MediaType::$variant,)*
+                    other => MediaType::Unknown(other.to_string()),
+                })
+            }
+        }
+
+        impl std::fmt::Display for MediaType {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+        impl serde::Serialize for MediaType {
+            fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+                ser.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for MediaType {
+            fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+                let s = String::deserialize(de)?;
+                Ok(s.parse().unwrap_or_else(|_| unreachable!()))
+            }
+        }
+    }
 }
 
 media_types! {
-    // ── Text / structured ─────────────────────────────────────────────────
-    TextPlain           => "text/plain";
-    TextHtml            => "text/html";
-    TextCsv             => "text/csv";
-    TextMarkdown        => "text/markdown";
-    ApplicationJson     => "application/json";
-    ApplicationXml      => "application/xml";
-    ApplicationYaml     => "application/yaml";
-
-    // ── Images ───────────────────────────────────────────────────────────
-    ImagePng            => "image/png",         binary: true;
-    ImageJpeg           => "image/jpeg",        binary: true;
-    ImageGif            => "image/gif",         binary: true;
-    ImageWebp           => "image/webp",        binary: true;
-    ImageSvgXml         => "image/svg+xml";
-    ImageAvif           => "image/avif",        binary: true;
-
-    // ── Audio ────────────────────────────────────────────────────────────
-    AudioMpeg           => "audio/mpeg",        binary: true;
-    AudioOgg            => "audio/ogg",         binary: true;
-    AudioWav            => "audio/wav",         binary: true;
-    AudioWebm           => "audio/webm",        binary: true;
-    AudioFlac           => "audio/flac",        binary: true;
-    AudioAac            => "audio/aac",         binary: true;
-
-    // ── Video ────────────────────────────────────────────────────────────
-    VideoMp4            => "video/mp4",         binary: true;
-    VideoWebm           => "video/webm",        binary: true;
-    VideoOgg            => "video/ogg",         binary: true;
-    VideoMov            => "video/quicktime",   binary: true;
-
-    // ── Binary / archives ─────────────────────────────────────────────────
-    ApplicationOctetStream => "application/octet-stream", binary: true;
-    ApplicationZip      => "application/zip",   binary: true;
-    ApplicationPdf      => "application/pdf",   binary: true;
-
-    // ── 3D model formats ─────────────────────────────────────────────────
-    // glTF JSON (.gltf) — text-based, human-readable JSON scene descriptor.
-    ModelGltfJson       => "model/gltf+json";
-    // glTF Binary (.glb) — single-file binary container.
-    ModelGltfBinary     => "model/gltf-binary", binary: true;
-    // Wavefront OBJ (.obj) — plain-text geometry.
-    ModelObj            => "model/obj";
-    // Universal Scene Description Zip (.usdz) — Apple/Pixar binary package.
-    ModelUsd            => "model/vnd.usdz+zip", binary: true;
-    // STL (.stl) — typically binary (binary STL is the common interchange form).
-    ModelStl            => "model/stl",         binary: true;
-    // Stanford PLY (.ply) — may be ASCII or binary; treat as binary on the wire.
-    ModelPly            => "model/ply",         binary: true;
+    // ── Text ──────────────────────────────────────────────────────────────────
+    (TextPlain,        "text/plain",                false),
+    (TextMarkdown,     "text/markdown",             false),
+    (TextHtml,         "text/html",                 false),
+    (ApplicationJson,  "application/json",          false),
+    // ── Audio ─────────────────────────────────────────────────────────────────
+    (AudioWav,         "audio/wav",                 true),
+    (AudioMp3,         "audio/mp3",                 true),
+    (AudioOgg,         "audio/ogg",                 true),
+    (AudioFlac,        "audio/flac",                true),
+    // ── Video ─────────────────────────────────────────────────────────────────
+    (VideoMp4,         "video/mp4",                 true),
+    (VideoWebm,        "video/webm",                true),
+    (VideoOgg,         "video/ogg",                 true),
+    // ── 2D Graphics ───────────────────────────────────────────────────────────
+    (ImagePng,         "image/png",                 true),
+    (ImageJpeg,        "image/jpeg",                true),
+    (ImageGif,         "image/gif",                 true),
+    (ImageWebp,        "image/webp",                true),
+    (ImageSvg,         "image/svg+xml",             false), // SVG is XML text
+    // ── 3D Models ─────────────────────────────────────────────────────────────
+    (ModelGltfJson,    "model/gltf+json",           false), // glTF JSON
+    (ModelGltfBinary,  "model/gltf-binary",         true),  // glTF binary (GLB)
+    (ModelObj,         "model/obj",                 false), // Wavefront OBJ (text)
+    (ModelUsdz,        "model/vnd.usdz+zip",        true),  // USDZ container
+    (ModelStl,         "model/stl",                 true),  // STL (binary or ASCII)
+    (ModelPly,         "model/ply",                 true),  // PLY polygon file
+    (ModelVrml,        "model/vrml",                false), // VRML (text)
+    (ModelFbx,         "model/fbx",                 true),  // FBX binary container
+    // ── Binary ────────────────────────────────────────────────────────────────
+    (OctetStream,      "application/octet-stream",  true),
 }
 
-// ── Unit tests ────────────────────────────────────────────────────────────────
+/// Blob metadata — stored server-side in memory, persisted on-demand.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlobMeta {
+    pub id: String,
+    pub mime_type: MediaType,
+    pub size_bytes: u64,
+    pub uploaded_by: String,
+    pub uploaded_at: String,
+    pub expires_at: Option<String>,
+    pub allowed_agents: Vec<String>,
+    pub total_chunks: usize,
+    pub chunks_received: usize,
+    pub complete: bool,
+}
+
+/// Dead-letter queue entry — messages that failed dispatch or had unknown types.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DlqEntry {
+    pub id: String,
+    pub ts: String,
+    pub error: String,
+    pub message: serde_json::Value,
+    pub retry_count: u32,
+}
 
 #[cfg(test)]
 mod tests {
-    use super::MediaType;
-
-    // ── round-trip: from_mime → as_mime ──────────────────────────────────────
+    use super::*;
 
     #[test]
-    fn text_plain_round_trips() {
-        let mt = MediaType::from_mime("text/plain").expect("text/plain must be recognised");
-        assert_eq!(mt.as_mime(), "text/plain");
+    fn test_all_known_types_round_trip() {
+        for mime in MediaType::all_known() {
+            let parsed: MediaType = mime.parse().unwrap();
+            assert!(parsed.is_known(), "{mime} should be known");
+            assert_eq!(parsed.as_str(), *mime);
+        }
     }
 
     #[test]
-    fn image_png_round_trips() {
-        let mt = MediaType::from_mime("image/png").expect("image/png must be recognised");
-        assert_eq!(mt.as_mime(), "image/png");
+    fn test_unknown_type_recognized() {
+        let mt: MediaType = "application/x-custom".parse().unwrap();
+        assert!(!mt.is_known());
+        assert!(mt.is_binary()); // unknown treated as binary for safety
+        assert_eq!(mt.as_str(), "application/x-custom");
     }
 
     #[test]
-    fn audio_ogg_round_trips() {
-        let mt = MediaType::from_mime("audio/ogg").expect("audio/ogg must be recognised");
-        assert_eq!(mt.as_mime(), "audio/ogg");
-    }
-
-    #[test]
-    fn video_mp4_round_trips() {
-        let mt = MediaType::from_mime("video/mp4").expect("video/mp4 must be recognised");
-        assert_eq!(mt.as_mime(), "video/mp4");
-    }
-
-    // ── unknown MIME types return None ───────────────────────────────────────
-
-    #[test]
-    fn unknown_mime_returns_none() {
-        assert!(MediaType::from_mime("application/x-unknown-type").is_none());
-    }
-
-    #[test]
-    fn empty_mime_returns_none() {
-        assert!(MediaType::from_mime("").is_none());
-    }
-
-    // ── is_binary classifications ─────────────────────────────────────────────
-
-    #[test]
-    fn text_plain_is_not_binary() {
+    fn test_binary_classification() {
         assert!(!MediaType::TextPlain.is_binary());
-    }
-
-    #[test]
-    fn application_json_is_not_binary() {
+        assert!(!MediaType::TextMarkdown.is_binary());
+        assert!(!MediaType::TextHtml.is_binary());
         assert!(!MediaType::ApplicationJson.is_binary());
-    }
-
-    #[test]
-    fn image_png_is_binary() {
-        assert!(MediaType::ImagePng.is_binary());
-    }
-
-    #[test]
-    fn audio_mpeg_is_binary() {
-        assert!(MediaType::AudioMpeg.is_binary());
-    }
-
-    #[test]
-    fn video_mp4_is_binary() {
+        assert!(!MediaType::ImageSvg.is_binary()); // SVG is text
+        assert!(MediaType::AudioWav.is_binary());
+        assert!(MediaType::AudioMp3.is_binary());
+        assert!(MediaType::AudioOgg.is_binary());
+        assert!(MediaType::AudioFlac.is_binary());
         assert!(MediaType::VideoMp4.is_binary());
+        assert!(MediaType::VideoWebm.is_binary());
+        assert!(MediaType::VideoOgg.is_binary());
+        assert!(MediaType::ImagePng.is_binary());
+        assert!(MediaType::ImageJpeg.is_binary());
+        assert!(MediaType::ImageGif.is_binary());
+        assert!(MediaType::ImageWebp.is_binary());
+        assert!(MediaType::OctetStream.is_binary());
+        // 3-D model types
+        assert!(!MediaType::ModelGltfJson.is_binary()); // JSON text
+        assert!(MediaType::ModelGltfBinary.is_binary());
+        assert!(!MediaType::ModelObj.is_binary());      // OBJ is text
+        assert!(MediaType::ModelUsdz.is_binary());
+        assert!(MediaType::ModelStl.is_binary());
+        assert!(MediaType::ModelPly.is_binary());
+        assert!(!MediaType::ModelVrml.is_binary());     // VRML is text
+        assert!(MediaType::ModelFbx.is_binary());
     }
 
     #[test]
-    fn application_zip_is_binary() {
-        assert!(MediaType::ApplicationZip.is_binary());
-    }
-
-    // ── 3D model variants: from_mime ─────────────────────────────────────────
-
-    #[test]
-    fn model_gltf_json_from_mime() {
-        let mt = MediaType::from_mime("model/gltf+json")
-            .expect("model/gltf+json must be recognised");
-        assert_eq!(mt, MediaType::ModelGltfJson);
-        assert_eq!(mt.as_mime(), "model/gltf+json");
+    fn test_serde_round_trip() {
+        let mt = MediaType::ImagePng;
+        let json = serde_json::to_string(&mt).unwrap();
+        assert_eq!(json, r#""image/png""#);
+        let back: MediaType = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, MediaType::ImagePng);
     }
 
     #[test]
-    fn model_gltf_binary_from_mime() {
-        let mt = MediaType::from_mime("model/gltf-binary")
-            .expect("model/gltf-binary must be recognised");
-        assert_eq!(mt, MediaType::ModelGltfBinary);
-        assert_eq!(mt.as_mime(), "model/gltf-binary");
+    fn test_serde_unknown_round_trip() {
+        let json = r#""application/x-wasm""#;
+        let mt: MediaType = serde_json::from_str(json).unwrap();
+        assert!(!mt.is_known());
+        let back = serde_json::to_string(&mt).unwrap();
+        assert_eq!(back, json);
     }
 
     #[test]
-    fn model_obj_from_mime() {
-        let mt = MediaType::from_mime("model/obj")
-            .expect("model/obj must be recognised");
-        assert_eq!(mt, MediaType::ModelObj);
-        assert_eq!(mt.as_mime(), "model/obj");
+    fn test_display() {
+        assert_eq!(format!("{}", MediaType::VideoMp4), "video/mp4");
+        assert_eq!(format!("{}", MediaType::ImageSvg), "image/svg+xml");
     }
 
     #[test]
-    fn model_usd_from_mime() {
-        let mt = MediaType::from_mime("model/vnd.usdz+zip")
-            .expect("model/vnd.usdz+zip must be recognised");
-        assert_eq!(mt, MediaType::ModelUsd);
-        assert_eq!(mt.as_mime(), "model/vnd.usdz+zip");
-    }
-
-    #[test]
-    fn model_stl_from_mime() {
-        let mt = MediaType::from_mime("model/stl")
-            .expect("model/stl must be recognised");
-        assert_eq!(mt, MediaType::ModelStl);
-        assert_eq!(mt.as_mime(), "model/stl");
-    }
-
-    #[test]
-    fn model_ply_from_mime() {
-        let mt = MediaType::from_mime("model/ply")
-            .expect("model/ply must be recognised");
-        assert_eq!(mt, MediaType::ModelPly);
-        assert_eq!(mt.as_mime(), "model/ply");
-    }
-
-    // ── 3D model variants: is_binary ─────────────────────────────────────────
-    //
-    // Text-format types (is_binary == false):
-    //   model/gltf+json  — human-readable JSON scene descriptor
-    //   model/obj        — plain-text Wavefront geometry
-    //   model/vrml       — plain-text ASCII VRML 97 scene
-    //
-    // Binary-format types (is_binary == true):
-    //   model/gltf-binary  — single-file GLB container
-    //   model/vnd.usdz+zip — Apple/Pixar USDZ zip archive
-    //   model/stl          — binary STL (common interchange form)
-    //   model/ply          — PLY treated as binary on the wire
-
-    /// glTF JSON is a text format — it must NOT be flagged as binary.
-    #[test]
-    fn model_gltf_json_is_not_binary() {
-        assert!(!MediaType::ModelGltfJson.is_binary(),
-            "model/gltf+json is a text-based JSON format and must not be is_binary");
-    }
-
-    /// GLB is a binary container — it MUST be flagged as binary.
-    #[test]
-    fn model_gltf_binary_is_binary() {
-        assert!(MediaType::ModelGltfBinary.is_binary(),
-            "model/gltf-binary is a binary format and must be is_binary");
-    }
-
-    /// OBJ is plain-text — it must NOT be flagged as binary.
-    #[test]
-    fn model_obj_is_not_binary() {
-        assert!(!MediaType::ModelObj.is_binary(),
-            "model/obj is a text format and must not be is_binary");
-    }
-
-    /// USDZ is a zip archive — it MUST be flagged as binary.
-    #[test]
-    fn model_usd_is_binary() {
-        assert!(MediaType::ModelUsd.is_binary(),
-            "model/vnd.usdz+zip is a binary zip archive and must be is_binary");
-    }
-
-    /// STL (binary form) must be flagged as binary.
-    #[test]
-    fn model_stl_is_binary() {
-        assert!(MediaType::ModelStl.is_binary(),
-            "model/stl is treated as binary on the bus wire and must be is_binary");
-    }
-
-    /// PLY is treated as binary on the bus wire.
-    #[test]
-    fn model_ply_is_binary() {
-        assert!(MediaType::ModelPly.is_binary(),
-            "model/ply is treated as binary on the bus wire and must be is_binary");
+    fn test_count_known_types() {
+        assert_eq!(MediaType::all_known().len(), 25);
     }
 }

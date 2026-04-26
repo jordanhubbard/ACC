@@ -14,6 +14,36 @@ use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 
+// ── Project helpers ───────────────────────────────────────────────────────────
+
+/// A minimal project record used by the mock hub.
+///
+/// All fields mirror the server's JSON shape so that `acc-client`'s
+/// `ProjectsApi::get` can deserialise them without issue.
+#[derive(Debug, Clone)]
+pub struct MockProject {
+    pub id: String,
+    pub name: String,
+    pub slug: Option<String>,
+    pub agentfs_path: Option<String>,
+}
+
+impl MockProject {
+    pub fn to_json(&self) -> Value {
+        let mut obj = json!({
+            "id": self.id,
+            "name": self.name,
+        });
+        if let Some(ref s) = self.slug {
+            obj["slug"] = Value::String(s.clone());
+        }
+        if let Some(ref p) = self.agentfs_path {
+            obj["agentfs_path"] = Value::String(p.clone());
+        }
+        obj
+    }
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -38,6 +68,8 @@ pub struct HubState {
     pub task_create_status: u16,
     /// HTTP status code for PUT /api/tasks/:id/review-result (default 200)
     pub review_result_status: u16,
+    /// Projects returned by GET /api/projects/:id, keyed by project id.
+    pub projects: HashMap<String, MockProject>,
 }
 
 impl Default for HubState {
@@ -53,6 +85,7 @@ impl Default for HubState {
             created_tasks: Arc::new(Mutex::new(vec![])),
             task_create_status: 201,
             review_result_status: 200,
+            projects: HashMap::new(),
         }
     }
 }
@@ -131,8 +164,11 @@ fn build_router(state: S) -> Router {
         .route("/api/exec/:id/result",          post(ok))
         // SSE stream (bus listener)
         .route("/bus/stream",                   get(sse_stream))
+        .route("/api/bus/stream",               get(sse_stream))
         // Peer discovery
         .route("/api/agents/names",             get(agent_names))
+        // Project lookup — used by resolve_workspace
+        .route("/api/projects/:id",             get(project_get))
         .with_state(state)
 }
 
@@ -218,4 +254,20 @@ async fn request_claim(State(st): State<S>, Path(id): Path<String>) -> impl Into
         json!({"error": "already_claimed"})
     };
     (sc, Json(body)).into_response()
+}
+
+async fn project_get(State(st): State<S>, Path(id): Path<String>) -> impl IntoResponse {
+    let s = st.read().await;
+    match s.projects.get(&id) {
+        Some(p) => (
+            StatusCode::OK,
+            Json(json!({ "project": p.to_json() })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "not_found"})),
+        )
+            .into_response(),
+    }
 }

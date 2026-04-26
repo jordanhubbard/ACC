@@ -465,7 +465,7 @@ renderTable();
 document.getElementById('gen-time').textContent = 'Generated ' + new Date().toLocaleString();
 
 // ── SquirrelBus ───────────────────────────────────────────────────────────────
-const BUS_API    = process.env.RCC_HOST_PUBLIC ? `http://${process.env.RCC_HOST_PUBLIC}` : 'http://localhost:8788';
+const BUS_API    = process.env.RCC_HOST_PUBLIC ? `http://${process.env.RCC_HOST_PUBLIC}` : 'http://localhost:8789';
 const BUS_EMOJIS = {{ rocky: '🐿️', bullwinkle: '🫎', natasha: '🕵️', jkh: '👤' }};
 const TYPE_COLORS = {{ text: '#58a6ff', memo: '#3fb950', blob: '#a371f7', heartbeat: '#8b949e', queue_sync: '#d29922', ping: '#3fb950', pong: '#3fb950', event: '#f85149', handoff: '#f0883e' }};
 

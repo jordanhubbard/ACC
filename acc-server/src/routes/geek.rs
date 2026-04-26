@@ -6,7 +6,7 @@ use axum::{
     routing::get,
     Router,
 };
-use futures_util::stream::{self, StreamExt};
+use futures_util::stream;
 use serde_json::{json, Value};
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -138,7 +138,7 @@ async fn topology(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 async fn geek_stream(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
-    let mut bus_rx = state.bus_tx.subscribe();
+    let bus_rx = state.bus_tx.subscribe();
 
     let stream = stream::unfold((bus_rx, true), move |(mut rx, first)| {
         async move {

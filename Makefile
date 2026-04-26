@@ -8,8 +8,7 @@
 #   make sync          # git push + broadcast rcc.update to all agents
 
 .PHONY: help deps deps-check env sync \
-        init register build test release clean \
-        restart-hub \
+        init register setup-git build build-cli install-cli test release clean \
         docker-build docker-up docker-down docker-logs
 
 help: ## Show this help
@@ -121,22 +120,36 @@ init: ## Interactive setup: configure this node
 register: ## Register this agent with the CCC hub
 	@bash deploy/register-agent.sh
 
+setup-git: ## Apply CIFS-safe git settings to this repo (run once per clone / new agent)
+	@bash scripts/setup-git-cifs.sh
+
 # ── Build ──────────────────────────────────────────────────────────────────
 
-build: ## Build all Rust binaries (acc-agent, acc-server)
-	@cargo build --release --manifest-path agent/Cargo.toml
-	@cargo build --release --manifest-path acc-server/Cargo.toml
+build: ## Build all Rust binaries (acc-agent, acc-server, acc CLI)
+	@cargo build --release -p acc-agent -p acc-server
+	@bash scripts/install-acc.sh --build-only
 
-# ── Hub management ─────────────────────────────────────────────────────────
+# ── Restart ────────────────────────────────────────────────────────────────
 
-restart-hub: ## Stop and restart acc-server on the hub (uses cd / before nohup)
+restart-hub: ## Rebuild and restart acc-server on THIS node (hub only, needs sudo)
 	@bash deploy/restart-hub.sh
+
+restart-agent: ## Rebuild and restart acc-agent on THIS node (supervisor relaunches)
+	@bash deploy/restart-agent.sh
+
+restart-fleet: ## Restart acc-agent on every online agent in the fleet (from workstation)
+	@bash deploy/restart-fleet.sh
+
+build-cli: ## Build the acc CLI binary (installs Rust via rustup if needed)
+	@bash scripts/install-acc.sh --build-only
+
+install-cli: ## Build and install acc CLI to $$HOME/.local/bin/acc (installs Rust if needed)
+	@bash scripts/install-acc.sh
 
 # ── Testing ────────────────────────────────────────────────────────────────
 
 test: ## Run all Rust tests
-	@cargo test --manifest-path agent/Cargo.toml
-	@cargo test --manifest-path acc-server/Cargo.toml
+	@cargo test --workspace
 
 # ── Release ────────────────────────────────────────────────────────────────
 
@@ -168,4 +181,5 @@ docker-logs: ## Tail logs from all CCC containers
 clean: ## Remove build artifacts
 	@cargo clean --manifest-path agent/Cargo.toml
 	@cargo clean --manifest-path acc-server/Cargo.toml
+	@cargo clean --manifest-path acc-cli/Cargo.toml
 	@echo "Cleaned build artifacts."

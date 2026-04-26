@@ -62,6 +62,11 @@ pub async fn run(args: &[String]) {
         i += 1;
     }
 
+    // ACC_PROXY_PORT env var overrides CLI default (set in .env for port conflicts)
+    if let Some(env_port) = std::env::var("ACC_PROXY_PORT").ok().and_then(|v| v.parse().ok()) {
+        port = env_port;
+    }
+
     let upstream = upstream.trim_end_matches('/').to_string();
 
     let client = Client::builder()
@@ -112,7 +117,13 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request) -> Respons
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or("/");
-    let url = format!("{}{}", state.upstream, path_and_query);
+    // Avoid double /v1 when NVIDIA_API_BASE already includes the version prefix
+    let effective_path = if state.upstream.ends_with("/v1") && path_and_query.starts_with("/v1/") {
+        &path_and_query[3..]
+    } else {
+        path_and_query
+    };
+    let url = format!("{}{}", state.upstream, effective_path);
 
     let method: reqwest::Method = match parts.method.as_str().parse() {
         Ok(m) => m,
@@ -160,14 +171,20 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request) -> Respons
         .unwrap_or_else(|_| error_response(500, "response build error"))
 }
 
-/// Parse the request body and, if it contains a "messages" array, ensure every
-/// assistant message's tool_use blocks have matching tool_result blocks in the
-/// immediately following user message. Injects synthetic tool_result messages
-/// where they are missing. Returns the (possibly rewritten) body bytes.
+/// Parse the request body and apply two fixes before forwarding:
+///
+/// 1. Convert any OpenAI-format `tool_calls` in assistant messages to Anthropic
+///    `tool_use` content blocks.  This is the root cause of the
+///    "Unable to convert openai tool calls" HTTP 500s from NVIDIA LiteLLM when
+///    a conversation history contains Anthropic `tooluse_*` IDs wrapped in the
+///    OpenAI `{type:"function", function:{name, arguments}}` envelope.
+///
+/// 2. Inject synthetic `tool_result` user messages for any assistant `tool_use`
+///    blocks that are not followed by a matching `tool_result` (Bedrock 400 fix).
 fn sanitize_body(body: Bytes) -> Bytes {
     let mut payload: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
-        Err(_) => return body, // not JSON — pass through unchanged
+        Err(_) => return body,
     };
 
     let messages = match payload.get_mut("messages").and_then(|m| m.as_array_mut()) {
@@ -175,16 +192,77 @@ fn sanitize_body(body: Bytes) -> Bytes {
         None => return body,
     };
 
+    // Step 1: normalize OpenAI-format tool_calls → Anthropic tool_use
+    let normalized = normalize_openai_tool_calls(messages);
+    if normalized > 0 {
+        eprintln!("[proxy] normalized {normalized} OpenAI-format tool_calls → Anthropic tool_use");
+    }
+
+    // Step 2: inject synthetic tool_results for any orphaned tool_use blocks
     let injected = inject_missing_tool_results(messages);
-    if injected == 0 {
+    if injected > 0 {
+        eprintln!("[proxy] injected {injected} synthetic tool_result(s) for orphaned tool_use blocks");
+    }
+
+    if normalized == 0 && injected == 0 {
         return body;
     }
 
-    eprintln!("[proxy] sanitized {injected} orphaned tool_use block(s) — injected synthetic tool_result(s)");
     match serde_json::to_vec(&payload) {
         Ok(b) => Bytes::from(b),
         Err(_) => body,
     }
+}
+
+/// Convert assistant messages that carry OpenAI-format `tool_calls` arrays into
+/// Anthropic-native `content` arrays with `tool_use` blocks.
+///
+/// OpenAI shape:
+///   { role: "assistant", content: null, tool_calls: [{ id, type: "function",
+///     function: { name, arguments: "<json string>" } }] }
+///
+/// Anthropic shape:
+///   { role: "assistant", content: [{ type: "tool_use", id, name, input: {...} }] }
+fn normalize_openai_tool_calls(messages: &mut Vec<Value>) -> usize {
+    let mut converted = 0;
+    for msg in messages.iter_mut() {
+        if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+            continue;
+        }
+        let tool_calls = match msg.get("tool_calls").and_then(|tc| tc.as_array()) {
+            Some(tc) if !tc.is_empty() => tc.clone(),
+            _ => continue,
+        };
+
+        let mut content_blocks: Vec<Value> = Vec::new();
+
+        // Preserve any existing text content
+        if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
+            if !text.is_empty() {
+                content_blocks.push(json!({"type": "text", "text": text}));
+            }
+        }
+
+        for tc in &tool_calls {
+            let id   = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let name = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()).unwrap_or("");
+            let args = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()).unwrap_or("{}");
+            let input: Value = serde_json::from_str(args).unwrap_or(json!({}));
+            content_blocks.push(json!({
+                "type":  "tool_use",
+                "id":    id,
+                "name":  name,
+                "input": input,
+            }));
+        }
+
+        if let Some(obj) = msg.as_object_mut() {
+            obj.remove("tool_calls");
+            obj.insert("content".into(), json!(content_blocks));
+            converted += 1;
+        }
+    }
+    converted
 }
 
 /// Walk the messages array and inject synthetic tool_result user messages for
@@ -293,6 +371,65 @@ fn error_response(status: u16, msg: &str) -> Response {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_normalize_openai_tool_calls_to_anthropic() {
+        let mut msgs = vec![
+            json!({"role": "user", "content": "run something"}),
+            json!({
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "tooluse_Zx9feJ3w3ME71La2q8dHhv",
+                    "type": "function",
+                    "function": {
+                        "name": "terminal",
+                        "arguments": "{\"command\": \"echo hello\"}"
+                    }
+                }]
+            }),
+        ];
+        let n = normalize_openai_tool_calls(&mut msgs);
+        assert_eq!(n, 1);
+        // tool_calls removed
+        assert!(msgs[1].get("tool_calls").is_none());
+        // content now has a tool_use block
+        let content = msgs[1]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "tool_use");
+        assert_eq!(content[0]["id"], "tooluse_Zx9feJ3w3ME71La2q8dHhv");
+        assert_eq!(content[0]["name"], "terminal");
+        assert_eq!(content[0]["input"]["command"], "echo hello");
+    }
+
+    #[test]
+    fn test_normalize_preserves_text_content() {
+        let mut msgs = vec![
+            json!({
+                "role": "assistant",
+                "content": "I'll run that for you.",
+                "tool_calls": [{
+                    "id": "tu_1",
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": "{}"}
+                }]
+            }),
+        ];
+        normalize_openai_tool_calls(&mut msgs);
+        let content = msgs[0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "I'll run that for you.");
+        assert_eq!(content[1]["type"], "tool_use");
+    }
+
+    #[test]
+    fn test_normalize_skips_native_anthropic() {
+        let mut msgs = vec![
+            json!({"role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {}}
+            ]}),
+        ];
+        assert_eq!(normalize_openai_tool_calls(&mut msgs), 0);
+    }
 
     #[test]
     fn test_strip_headers_list() {

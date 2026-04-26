@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
     response::{IntoResponse, Json},
-    routing::{get, patch, post},
+    routing::{get, post},
     Router,
 };
 use serde_json::{json, Value};
@@ -35,7 +35,202 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/projects/:owner/:repo", get(get_project))
         .route("/api/projects/:id", get(get_project_by_id).patch(update_project).delete(delete_project))
         .route("/api/projects/:id/import-beads", post(import_beads))
+        .route("/api/projects/:id/clean", post(mark_project_clean))
+        .route("/api/projects/:id/refresh", post(refresh_project_workspace))
+        .route("/api/projects/:id/phase-commit-failed", post(report_phase_commit_failure))
         .merge(metrics::router())
+}
+
+/// Set agentfs_dirty on a project. Used by:
+///   - POST /api/projects/:id/clean       → set false (milestone-commit task)
+///   - tasks::complete_task on completion → set true (any task touched AgentFS)
+///
+/// Returns true if the project existed and the field was set.
+pub async fn set_agentfs_dirty(state: &Arc<AppState>, project_id: &str, dirty: bool) -> bool {
+    let mut projects = read_projects(state).await;
+    let mut found = false;
+    for p in projects.iter_mut() {
+        if p.get("id").and_then(|v| v.as_str()) == Some(project_id) {
+            if let Some(obj) = p.as_object_mut() {
+                obj.insert("agentfs_dirty".to_string(), json!(dirty));
+                obj.insert("updatedAt".to_string(), json!(chrono::Utc::now().to_rfc3339()));
+            }
+            found = true;
+            break;
+        }
+    }
+    if found {
+        write_projects(state, projects).await;
+    }
+    found
+}
+
+// ── POST /api/projects/:id/clean ──────────────────────────────────────────
+//
+// Marks the project's AgentFS state as clean (committed and pushed to git).
+// Called by the milestone-commit task after a successful push.
+async fn mark_project_clean(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !state.is_authed(&headers) {
+        return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response();
+    }
+    if !set_agentfs_dirty(&state, &id, false).await {
+        return (axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Project not found"}))).into_response();
+    }
+    // Successful phase_commit also resets the consecutive-failure counter.
+    let _ = set_phase_commit_failures(&state, &id, 0).await;
+    let _ = state.bus_tx.send(
+        json!({"type":"projects:agentfs_clean","project_id":id}).to_string()
+    );
+    (axum::http::StatusCode::OK, Json(json!({"ok":true,"project_id":id,"agentfs_dirty":false}))).into_response()
+}
+
+// ── POST /api/projects/:id/refresh ────────────────────────────────────────
+//
+// Pull origin/<default> into the project's AgentFS workspace so agents
+// see the latest upstream state. Refuses when agentfs_dirty=true to
+// avoid clobbering uncommitted local edits.
+async fn refresh_project_workspace(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !state.is_authed(&headers) {
+        return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response();
+    }
+    let projects = read_projects(&state).await;
+    let project = projects.iter().find(|p| p.get("id").and_then(|v| v.as_str()) == Some(&id));
+    let project = match project {
+        Some(p) => p.clone(),
+        None => return (axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Project not found"}))).into_response(),
+    };
+    let path = project.get("agentfs_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if path.is_empty() {
+        return (axum::http::StatusCode::CONFLICT, Json(json!({"error":"project has no agentfs_path"}))).into_response();
+    }
+    let dirty = project.get("agentfs_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+    if dirty {
+        return (axum::http::StatusCode::CONFLICT, Json(json!({
+            "error":"agentfs_dirty",
+            "message":"refusing to refresh — uncommitted changes in AgentFS. phase_commit first."
+        }))).into_response();
+    }
+
+    match git_pull_workspace(&path).await {
+        Ok(summary) => {
+            let _ = state.bus_tx.send(json!({
+                "type":"projects:refreshed","project_id":id,"summary":summary
+            }).to_string());
+            (axum::http::StatusCode::OK, Json(json!({"ok":true,"project_id":id,"summary":summary}))).into_response()
+        }
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":e}))).into_response(),
+    }
+}
+
+/// Run `git fetch origin && git merge --ff-only origin/<branch>` in `path`.
+/// Returns a short status string. Errors propagate stderr text on failure.
+pub async fn git_pull_workspace(path: &str) -> Result<String, String> {
+    if !std::path::Path::new(path).join(".git").exists() {
+        return Err(format!("not a git workspace: {path}"));
+    }
+    // Determine current branch (usually main)
+    let branch_out = tokio::process::Command::new("git")
+        .args(["-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
+        .output().await
+        .map_err(|e| format!("git rev-parse: {e}"))?;
+    let branch = if branch_out.status.success() {
+        String::from_utf8_lossy(&branch_out.stdout).trim().to_string()
+    } else {
+        "main".to_string()
+    };
+
+    let fetch = tokio::process::Command::new("git")
+        .args(["-C", path, "fetch", "origin", "--quiet"])
+        .output().await
+        .map_err(|e| format!("git fetch: {e}"))?;
+    if !fetch.status.success() {
+        return Err(format!("fetch failed: {}", String::from_utf8_lossy(&fetch.stderr)));
+    }
+
+    let merge = tokio::process::Command::new("git")
+        .args(["-C", path, "merge", "--ff-only", &format!("origin/{branch}"), "--quiet"])
+        .output().await
+        .map_err(|e| format!("git merge: {e}"))?;
+    if merge.status.success() {
+        Ok(format!("fast-forwarded {branch}"))
+    } else {
+        let stderr = String::from_utf8_lossy(&merge.stderr).to_string();
+        if stderr.contains("Already up to date") || stderr.is_empty() {
+            Ok("already up to date".to_string())
+        } else {
+            Err(format!("merge --ff-only failed (likely diverged): {stderr}"))
+        }
+    }
+}
+
+/// Set the consecutive phase_commit failure counter on a project.
+/// Used by both the failure reporter (increment) and /clean (reset to 0).
+pub async fn set_phase_commit_failures(state: &Arc<AppState>, project_id: &str, value: i64) -> bool {
+    let mut projects = read_projects(state).await;
+    let mut found = false;
+    for p in projects.iter_mut() {
+        if p.get("id").and_then(|v| v.as_str()) == Some(project_id) {
+            if let Some(obj) = p.as_object_mut() {
+                obj.insert("phase_commit_consecutive_failures".to_string(), json!(value));
+                obj.insert("updatedAt".to_string(), json!(chrono::Utc::now().to_rfc3339()));
+            }
+            found = true;
+            break;
+        }
+    }
+    if found { write_projects(state, projects).await; }
+    found
+}
+
+/// Read the current consecutive phase_commit failure counter for a project.
+pub async fn get_phase_commit_failures(state: &Arc<AppState>, project_id: &str) -> i64 {
+    let projects = read_projects(state).await;
+    projects.iter()
+        .find(|p| p.get("id").and_then(|v| v.as_str()) == Some(project_id))
+        .and_then(|p| p.get("phase_commit_consecutive_failures").and_then(|v| v.as_i64()))
+        .unwrap_or(0)
+}
+
+// ── POST /api/projects/:id/phase-commit-failed ────────────────────────────
+//
+// Agents call this when their phase_commit attempt fails (push failed,
+// merge failed, etc). The dispatch loop reads the counter and stops
+// auto-filing phase_commits after 3 consecutive failures so we don't
+// pile up a queue of doomed attempts.
+async fn report_phase_commit_failure(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    if !state.is_authed(&headers) {
+        return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response();
+    }
+    let cur = get_phase_commit_failures(&state, &id).await;
+    let next = cur + 1;
+    if !set_phase_commit_failures(&state, &id, next).await {
+        return (axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Project not found"}))).into_response();
+    }
+    let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let _ = state.bus_tx.send(json!({
+        "type":"projects:phase_commit_failed",
+        "project_id":id,
+        "consecutive_failures":next,
+        "reason":reason,
+    }).to_string());
+    (axum::http::StatusCode::OK, Json(json!({
+        "ok":true,
+        "project_id":id,
+        "consecutive_failures":next,
+    }))).into_response()
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────
@@ -287,6 +482,7 @@ async fn create_project(
         "agentfs_path": agentfs_path.clone(),
         "git_url":      git_url.clone().map(Value::String).unwrap_or(Value::Null),
         "clone_status": clone_status,
+        "agentfs_dirty": false,
         "description":  body.get("description").cloned().unwrap_or(json!("")),
         "repoUrl":      body.get("repoUrl").cloned().unwrap_or(json!(null)),
         "slackChannels": body.get("slackChannels").cloned().unwrap_or(json!([])),
@@ -391,13 +587,32 @@ async fn delete_project(
         return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response();
     }
     let hard = params.get("hard").map(|v| v == "true").unwrap_or(false);
-    let mut projects = read_projects(&state).await;
+    let force = params.get("force").map(|v| v == "true").unwrap_or(false);
+    let projects = read_projects(&state).await;
     let idx = projects.iter().position(|p| {
         p.get("id").and_then(|v| v.as_str()) == Some(&id)
     });
     match idx {
         None => (axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Project not found"}))).into_response(),
         Some(i) => {
+            // Dirty-bit gate: refuse delete (soft or hard) when AgentFS
+            // has unpushed changes, unless force=true is set. Caller is
+            // expected to either (a) run the milestone-commit task to
+            // push and mark clean, or (b) explicitly accept loss with
+            // force=true.
+            let agentfs_dirty = projects[i]
+                .get("agentfs_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+            if agentfs_dirty && !force {
+                return (
+                    axum::http::StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": "agentfs_dirty",
+                        "message": "Project has unpushed AgentFS changes. Run the milestone-commit task to push, or pass force=true to discard.",
+                        "project_id": id,
+                    })),
+                ).into_response();
+            }
+            let mut projects = projects;
             if hard {
                 let removed = projects.remove(i);
                 write_projects(&state, projects).await;

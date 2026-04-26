@@ -8,6 +8,7 @@
 /// Migrations are additive — run in order, each runs exactly once.
 use rusqlite::{Connection, Result, params};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
 
 const CURRENT_VERSION: i64 = 6;
@@ -119,8 +120,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             token_hash TEXT,
             confirmed_at TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-            data TEXT NOT NULL DEFAULT '{}',
-            role TEXT NOT NULL DEFAULT 'collaborator'
+            data TEXT NOT NULL DEFAULT '{}'
         );
 
         CREATE TABLE IF NOT EXISTS lessons (
@@ -292,17 +292,12 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 6 {
-        // v6: add 'role' column to users in the main (non-auth) schema.
-        // The auth DB gets its own migration in open_auth().
-        let exists: bool = conn.query_row(
+        let col_exists: bool = conn.query_row(
             "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='role'",
-            [],
-            |r| r.get::<_, i64>(0),
+            [], |r| r.get::<_, i64>(0),
         ).unwrap_or(0) > 0;
-        if !exists {
-            conn.execute_batch(
-                "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'collaborator';"
-            )?;
+        if !col_exists {
+            conn.execute_batch("ALTER TABLE users ADD COLUMN role TEXT;")?;
         }
         set_schema_version(conn, 6)?;
     }
@@ -506,7 +501,7 @@ pub fn insert_bus_message(conn: &Connection, msg: &Value) -> Result<()> {
 // ── Auth DB (always-on, separate from the optional ACC_DB_PATH database) ─────
 
 /// Open (or create) the auth database at `path`.
-/// Schema: users(id, username, token_hash, role, created_at, last_seen).
+/// Schema: users(id, username, token_hash, created_at, last_seen).
 pub fn open_auth(path: &str) -> Result<Connection> {
     if let Some(parent) = Path::new(path).parent() {
         std::fs::create_dir_all(parent).ok();
@@ -518,22 +513,18 @@ pub fn open_auth(path: &str) -> Result<Connection> {
             id          TEXT PRIMARY KEY,
             username    TEXT NOT NULL UNIQUE,
             token_hash  TEXT NOT NULL,
-            role        TEXT NOT NULL DEFAULT 'collaborator',
             created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-            last_seen   TEXT
+            last_seen   TEXT,
+            role        TEXT
         );
     ")?;
-    // Idempotent migration: add role column if this is an existing database that
-    // predates v6 and therefore has the old schema without the role column.
+    // Post-create migration: add role column to pre-existing databases that lack it.
     let role_exists: bool = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='role'",
-        [],
-        |r| r.get::<_, i64>(0),
+        [], |r| r.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
     if !role_exists {
-        conn.execute_batch(
-            "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'collaborator';"
-        )?;
+        conn.execute_batch("ALTER TABLE users ADD COLUMN role TEXT;")?;
     }
     tracing::info!("Auth database opened: {}", path);
     Ok(conn)
@@ -557,22 +548,20 @@ pub fn auth_all_token_hashes(conn: &Connection) -> Vec<String> {
     result
 }
 
-/// Load all (token_hash, role) pairs from the auth DB.
-/// Used to seed the in-memory role cache on startup.
-pub fn auth_all_token_roles(conn: &Connection) -> Vec<(String, String)> {
-    let mut stmt = match conn.prepare("SELECT token_hash, role FROM users") {
+/// Load all token-hash → role mappings from the auth DB's `user_tokens` table
+/// for users that have a role set.
+/// Returns a `HashMap<token_hash, role>`.
+pub fn auth_all_token_roles(conn: &Connection) -> HashMap<String, String> {
+    let mut stmt = match conn.prepare("SELECT token_hash, role FROM users WHERE role IS NOT NULL") {
         Ok(s) => s,
-        Err(_) => return vec![],
+        Err(_) => return HashMap::new(),
     };
-    // Collect into an owned Vec before `stmt` is dropped so that the
-    // MappedRows iterator (which borrows `stmt`) does not outlive it.
-    let pairs: Vec<(String, String)> = match stmt.query_map([], |row| {
+    match stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     }) {
         Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-        Err(_) => vec![],
-    };
-    pairs
+        Err(_) => HashMap::new(),
+    }
 }
 
 #[cfg(test)]
@@ -598,80 +587,74 @@ mod tests {
         assert_eq!((q, a, s, p), (0, 0, 0, 0));
     }
 
+    /// v6 migration adds a `role` column to the `users` table.
+    #[test]
+    fn test_v6_migration_adds_role_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        init_schema(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+        // The role column must exist after migration.
+        let role_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='role'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
+        assert!(role_exists, "role column should exist on users table after v6 migration");
+    }
+
+    /// `open_auth` creates the auth DB with a `role` column included from the start.
     #[test]
     fn test_open_auth_has_role_column() {
-        let conn = open_auth(":memory:").unwrap();
-        let has_role: bool = conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='role'",
-            [],
-            |r| r.get::<_, i64>(0),
-        ).unwrap() > 0;
-        assert!(has_role, "auth users table must have a 'role' column");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.db").to_string_lossy().to_string();
+        let conn = open_auth(&path).unwrap();
+        let role_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='role'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
+        assert!(role_exists, "role column should exist in auth DB users table");
     }
 
+    /// `auth_all_token_roles` returns `HashMap<String, String>` with correct pairs.
     #[test]
-    fn test_open_auth_role_defaults_to_collaborator() {
-        let conn = open_auth(":memory:").unwrap();
-        conn.execute(
-            "INSERT INTO users (id, username, token_hash) VALUES ('u1', 'alice', 'hash1')",
-            [],
-        ).unwrap();
-        let role: String = conn.query_row(
-            "SELECT role FROM users WHERE username='alice'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(role, "collaborator");
-    }
+    fn test_auth_all_token_roles() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth_roles.db").to_string_lossy().to_string();
+        let conn = open_auth(&path).unwrap();
 
-    #[test]
-    fn test_open_auth_idempotent_role_migration() {
-        // Simulate a legacy DB that already has role column — open_auth must not fail.
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        // Insert two users: one with a role, one without.
         conn.execute_batch("
-            CREATE TABLE users (
-                id TEXT PRIMARY KEY,
-                username TEXT NOT NULL UNIQUE,
-                token_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'collaborator',
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-                last_seen TEXT
-            );
+            INSERT INTO users (id, username, token_hash, role)
+                VALUES ('u1', 'alice', 'hash_alice', 'admin');
+            INSERT INTO users (id, username, token_hash, role)
+                VALUES ('u2', 'bob',   'hash_bob',   NULL);
+            INSERT INTO users (id, username, token_hash, role)
+                VALUES ('u3', 'carol', 'hash_carol', 'user');
         ").unwrap();
-        // Calling open_auth on the same in-memory DB isn't possible after the fact,
-        // so test the migration guard logic directly.
-        let role_exists: bool = conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='role'",
-            [],
-            |r| r.get::<_, i64>(0),
-        ).unwrap() > 0;
-        assert!(role_exists);
+
+        let roles = auth_all_token_roles(&conn);
+
+        assert_eq!(roles.len(), 2, "only users with a non-NULL role should appear");
+        assert_eq!(roles.get("hash_alice").map(String::as_str), Some("admin"));
+        assert_eq!(roles.get("hash_carol").map(String::as_str), Some("user"));
+        assert!(!roles.contains_key("hash_bob"), "bob has no role and must be absent");
     }
 
+    /// `auth_all_token_roles` returns an empty HashMap when no roles are set.
     #[test]
     fn test_auth_all_token_roles_empty() {
-        let conn = open_auth(":memory:").unwrap();
-        let pairs = auth_all_token_roles(&conn);
-        assert!(pairs.is_empty());
-    }
-
-    #[test]
-    fn test_auth_all_token_roles_returns_inserted() {
-        let conn = open_auth(":memory:").unwrap();
-        conn.execute(
-            "INSERT INTO users (id, username, token_hash, role) VALUES ('u1','bob','hash_b','owner')",
-            [],
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO users (id, username, token_hash, role) VALUES ('u2','carol','hash_c','collaborator')",
-            [],
-        ).unwrap();
-        let pairs = auth_all_token_roles(&conn);
-        assert_eq!(pairs.len(), 2);
-        let owner = pairs.iter().find(|(h, _)| h == "hash_b").unwrap();
-        assert_eq!(owner.1, "owner");
-        let collab = pairs.iter().find(|(h, _)| h == "hash_c").unwrap();
-        assert_eq!(collab.1, "collaborator");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth_empty.db").to_string_lossy().to_string();
+        let conn = open_auth(&path).unwrap();
+        let roles = auth_all_token_roles(&conn);
+        assert!(roles.is_empty(), "should return empty HashMap when no roles exist");
     }
 }

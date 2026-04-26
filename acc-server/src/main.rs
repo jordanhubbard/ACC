@@ -1,16 +1,29 @@
-use acc_server::{brain, build_app, config, db, routes, state, AppState};
+use acc_server::{brain, build_app, config, db, dispatch, routes, state, AppState};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "acc_server=info,tower_http=info".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // Tracing setup: stderr fmt layer always; journald layer when systemd
+    // is reachable (Linux only; silently skipped elsewhere). The journald
+    // layer is what makes acc-server log lines visible via
+    // `journalctl -u acc-server -f` for the consolidated dashboard
+    // viewer (CCC-zkc).
+    let env_filter = tracing_subscriber::EnvFilter::new(
+        std::env::var("RUST_LOG").unwrap_or_else(|_| "acc_server=info,tower_http=info".into()),
+    );
+    let fmt_layer = tracing_subscriber::fmt::layer();
+    let registry = tracing_subscriber::registry().with(env_filter).with(fmt_layer);
+    match tracing_journald::layer() {
+        Ok(journald) => {
+            registry.with(journald).init();
+        }
+        Err(_) => {
+            // Not on systemd (macOS, container without /run/systemd, etc.)
+            registry.init();
+        }
+    }
 
     let cfg = config::load();
     let port = cfg.port;
@@ -45,7 +58,7 @@ async fn main() {
     let initial_hashes: std::collections::HashSet<String> =
         db::auth_all_token_hashes(&auth_conn).into_iter().collect();
     let initial_roles: std::collections::HashMap<String, String> =
-        db::auth_all_token_roles(&auth_conn).into_iter().collect();
+        db::auth_all_token_roles(&auth_conn);
     tracing::info!("Auth DB: {} user(s) loaded", initial_hashes.len());
     let auth_db = Arc::new(tokio::sync::Mutex::new(auth_conn));
 
@@ -69,13 +82,12 @@ async fn main() {
     let app_state = Arc::new(AppState {
         auth_tokens: cfg.auth_tokens,
         user_token_hashes: std::sync::RwLock::new(initial_hashes),
-        user_token_roles: std::sync::RwLock::new(initial_roles),
         auth_db,
         fleet_db: fleet_db.clone(),
         queue_path: cfg.queue_path,
         agents_path: cfg.agents_path,
         secrets_path: cfg.secrets_path,
-        bus_log_path: cfg.bus_log_path,
+        bus_log_path: cfg.bus_log_path.clone(),
         projects_path: cfg.projects_path,
         queue: RwLock::new(state::QueueData::default()),
         agents: RwLock::new(serde_json::Value::Object(serde_json::Map::new())),
@@ -83,11 +95,18 @@ async fn main() {
         projects: tokio::sync::RwLock::new(Vec::new()),
         brain: Arc::new(brain::BrainQueue::new()),
         bus_tx: tokio::sync::broadcast::channel(256).0,
-        bus_seq: std::sync::atomic::AtomicU64::new(0),
+        bus_seq: std::sync::atomic::AtomicU64::new(
+            acc_server::routes::bus::initial_bus_seq(&cfg.bus_log_path),
+        ),
         start_time: std::time::SystemTime::now(),
         fs_root,
         supervisor: supervisor_handle,
-        max_blob_bytes: 100 * 1024 * 1024,
+        soul_store: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        blob_store: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        blobs_path: format!("{}/blobs", cfg.data_dir),
+        dlq_path: format!("{}/bus-dlq.jsonl", cfg.data_dir),
+        user_token_roles: std::sync::RwLock::new(initial_roles),
+        watchdog: routes::watchdog::WatchdogState::new(),
     });
 
     state::load_all(&app_state).await;
@@ -147,6 +166,11 @@ async fn main() {
 
     let scanner_state = app_state.clone();
     tokio::spawn(routes::projects::run_beads_scanner(scanner_state));
+
+    tokio::spawn(dispatch::run(app_state.clone()));
+
+    let watchdog_state = app_state.clone();
+    tokio::spawn(routes::watchdog::run_watchdog(watchdog_state));
 
     {
         let db = fleet_db.clone();

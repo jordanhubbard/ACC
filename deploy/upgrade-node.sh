@@ -86,6 +86,8 @@ fi
 info "Updating git repo..."
 cd "$WORKSPACE"
 
+GIT_BEFORE_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
+
 if [ "$DRY_RUN" = true ]; then
   info "  [DRY-RUN] would git fetch + merge --ff-only origin/main"
 else
@@ -104,6 +106,18 @@ fi
 
 CCC_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 success "Git updated — ccc_version: $CCC_VERSION"
+
+# ── 2b. Rebuild source-built binaries if sources changed ──────────────────
+info "Checking for source changes to rebuild..."
+BEFORE_SHA="$GIT_BEFORE_SHA" \
+AFTER_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")" \
+WORKSPACE="$WORKSPACE" \
+ACC_DIR="$ACC_DIR" \
+LOG_DIR="$LOG_DIR" \
+IS_HUB="${IS_HUB:-false}" \
+DRY_RUN="$DRY_RUN" \
+  bash "$WORKSPACE/deploy/rebuild-changed.sh" || \
+    warn "rebuild-changed.sh failed (non-fatal)"
 
 # ── 3. Run migrations ─────────────────────────────────────────────────────
 if [ "$NO_MIGRATIONS" = false ]; then

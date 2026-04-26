@@ -6,11 +6,16 @@ mod config;
 mod exec_registry;
 mod hermes;
 mod json;
+mod log_init;
 mod migrate;
 mod peers;
 mod proxy;
 mod queue;
+mod sdk;
+mod services;
+mod supervise;
 mod tasks;
+mod upgrade;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -20,6 +25,11 @@ fn main() {
     }
     let sub = args[1].as_str();
     let rest = &args[2..];
+    // Initialize tracing once per process. Long-running daemons (bus,
+    // queue, tasks, hermes, supervise, proxy, upgrade) get journald +
+    // stderr; short-lived subcommands (migrate, agent, json) get only
+    // stderr to avoid journal noise.
+    log_init::init(sub);
     match sub {
         "migrate" => migrate::run(rest),
         "agent" => agent::run(rest),
@@ -30,6 +40,8 @@ fn main() {
         "hermes" => tokio_run(hermes::run(rest)),
         "proxy" => tokio_run(proxy::run(rest)),
         "tasks" => tokio_run(tasks::run(rest)),
+        "supervise" => tokio_run(supervise::run(rest)),
+        "upgrade" => tokio_run(upgrade::run_cli(rest)),
         cmd => {
             eprintln!("Unknown command: {cmd}");
             std::process::exit(1);
@@ -56,7 +68,8 @@ fn print_help() {
     eprintln!("  acc-agent queue   (long-running daemon: queue worker)");
     eprintln!("  acc-agent hermes  (hermes session driver)");
     eprintln!("  acc-agent proxy   (long-running daemon: NVIDIA header-strip proxy)");
-    eprintln!("  acc-agent tasks  [--max=N]  (long-running daemon: fleet task worker)");
+    eprintln!("  acc-agent tasks     [--max=N]    (long-running daemon: fleet task worker)");
+    eprintln!("  acc-agent supervise [--dry-run]  (master supervisor: spawns all children)");
     eprintln!();
     eprintln!("MIGRATE:");
     eprintln!("  is-applied <name>            exit 0 if applied, 1 if not");
@@ -89,4 +102,8 @@ fn print_help() {
     eprintln!("PROXY:");
     eprintln!("  --port <n>    listen port (default: 9099)");
     eprintln!("  --target <u>  upstream URL (default: NVIDIA_API_BASE env var)");
+    eprintln!();
+    eprintln!("UPGRADE:");
+    eprintln!("  (no flags) — run pending migrations, restart services, post heartbeat");
+    eprintln!("  --dry-run    show what would run without making changes");
 }

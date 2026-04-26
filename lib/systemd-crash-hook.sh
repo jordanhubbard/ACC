@@ -12,7 +12,7 @@ TS=$(date +%s%3N)
 MC="mc"
 MINIO_ALIAS="${MINIO_ALIAS:-local}"
 QUEUE_PATH="${OPENCLAW_WORKSPACE:-~/.openclaw/workspace}/workqueue/queue.json"
-DASHBOARD_URL="http://localhost:8788/api/crash-report"
+DASHBOARD_URL="http://localhost:8789/api/crash-report"
 AUTH_TOKEN="${CCC_AGENT_TOKEN:-}"
 LOG_DIR="/tmp"
 

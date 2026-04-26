@@ -145,8 +145,8 @@ async fn trigger_deploy(
     let log_path = format!("/tmp/model-deploy-{}.log", deploy_id);
     let log_path_clone = log_path.clone();
     let deploy_id_clone = deploy_id.clone();
-    let model_id_clone = model_id.clone();
-    let agents_clone = agents.clone();
+    let _model_id_clone = model_id.clone();
+    let _agents_clone = agents.clone();
 
     tokio::spawn(async move {
         let log_file = std::fs::File::create(&log_path_clone).ok();

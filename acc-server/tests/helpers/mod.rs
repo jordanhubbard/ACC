@@ -18,15 +18,9 @@ pub struct TestServer {
 }
 
 impl TestServer {
-    /// Create a test server with the default blob size limit (100 MiB).
     pub async fn new() -> Self {
-        Self::with_limit(100 * 1024 * 1024).await
-    }
-
-    /// Create a test server with an explicit maximum blob size in bytes.
-    pub async fn with_limit(max_blob_bytes: u64) -> Self {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let state = make_state(&tmp, max_blob_bytes).await;
+        let state = make_state(&tmp).await;
         let app = build_app(state);
         TestServer { app, token: TEST_TOKEN, tmp }
     }
@@ -36,15 +30,13 @@ impl TestServer {
     }
 }
 
-pub async fn make_state(tmp: &TempDir, max_blob_bytes: u64) -> Arc<AppState> {
+pub async fn make_state(tmp: &TempDir) -> Arc<AppState> {
     let dir = tmp.path();
 
     let auth_conn = db::open_auth(":memory:").expect("open auth db");
     let initial_hashes: HashSet<String> = db::auth_all_token_hashes(&auth_conn)
         .into_iter()
         .collect();
-    let initial_roles: std::collections::HashMap<String, String> =
-        db::auth_all_token_roles(&auth_conn).into_iter().collect();
     let auth_db = Arc::new(tokio::sync::Mutex::new(auth_conn));
 
     let fleet_db = db::open_fleet(":memory:").expect("open fleet db");
@@ -53,7 +45,6 @@ pub async fn make_state(tmp: &TempDir, max_blob_bytes: u64) -> Arc<AppState> {
     Arc::new(AppState {
         auth_tokens: HashSet::from([TEST_TOKEN.to_string()]),
         user_token_hashes: std::sync::RwLock::new(initial_hashes),
-        user_token_roles: std::sync::RwLock::new(initial_roles),
         auth_db,
         fleet_db,
         queue_path:    dir.join("queue.json").to_string_lossy().into_owned(),
@@ -71,7 +62,12 @@ pub async fn make_state(tmp: &TempDir, max_blob_bytes: u64) -> Arc<AppState> {
         start_time: std::time::SystemTime::now(),
         fs_root:  dir.join("fs").to_string_lossy().into_owned(),
         supervisor: None,
-        max_blob_bytes,
+        soul_store: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        blob_store: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        blobs_path: dir.join("blobs").to_string_lossy().into_owned(),
+        dlq_path:   dir.join("bus-dlq.jsonl").to_string_lossy().into_owned(),
+        user_token_roles: std::sync::RwLock::new(std::collections::HashMap::new()),
+        watchdog: acc_server::routes::watchdog::WatchdogState::new(),
     })
 }
 

@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACC Fleet Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+  [x-cloak] { display: none !important; }
+  .tab-active { @apply border-b-2 border-indigo-500 text-indigo-600; }
+  .status-open      { @apply bg-blue-100 text-blue-800; }
+  .status-in_progress { @apply bg-green-100 text-green-800; }
+  .status-claimed   { @apply bg-yellow-100 text-yellow-800; }
+  .status-closed    { @apply bg-gray-100 text-gray-600; }
+  .status-completed { @apply bg-emerald-100 text-emerald-800; }
+  .status-blocked   { @apply bg-red-100 text-red-800; }
+  .priority-0 { @apply bg-red-100 text-red-800; }
+  .priority-1 { @apply bg-orange-100 text-orange-800; }
+  .priority-2 { @apply bg-yellow-100 text-yellow-800; }
+  .priority-3 { @apply bg-blue-100 text-blue-800; }
+  .priority-4 { @apply bg-gray-100 text-gray-500; }
+  .clone-ready   { @apply bg-emerald-100 text-emerald-800; }
+  .clone-pending { @apply bg-yellow-100 text-yellow-800; }
+  .clone-cloning { @apply bg-blue-100 text-blue-800; }
+  .clone-failed  { @apply bg-red-100 text-red-800; }
+  .clone-none    { @apply bg-gray-100 text-gray-500; }
+  .online-true   { @apply bg-emerald-100 text-emerald-800; }
+  .online-false  { @apply bg-gray-100 text-gray-500; }
+</style>
+</head>
+<body class="bg-gray-50 min-h-screen" x-data="dashboard()" x-init="init()" x-cloak>
+
+<!-- Token modal -->
+<div x-show="!token" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
+    <h2 class="text-2xl font-bold text-gray-900 mb-2">ACC Fleet Dashboard</h2>
+    <p class="text-gray-500 mb-6 text-sm">Enter your API token to continue. It will be saved in your browser.</p>
+    <input type="password" x-model="tokenInput" placeholder="Bearer token"
+      @keydown.enter="saveToken()"
+      class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4">
+    <button @click="saveToken()" class="w-full bg-indigo-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-indigo-700 transition">
+      Connect
+    </button>
+    <p x-show="tokenError" class="text-red-500 text-xs mt-3" x-text="tokenError"></p>
+  </div>
+</div>
+
+<!-- Main layout -->
+<div x-show="token">
+
+  <!-- Header -->
+  <header class="bg-gray-900 text-white px-6 py-3 flex items-center justify-between shadow-lg">
+    <div class="flex items-center gap-3">
+      <span class="text-xl font-bold tracking-tight">ACC</span>
+      <span class="text-gray-400 text-sm font-light">Fleet Dashboard</span>
+    </div>
+    <div class="flex items-center gap-4">
+      <span x-show="toast" x-text="toast"
+        class="text-xs px-3 py-1 rounded-full"
+        :class="toastType === 'error' ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/20 text-emerald-300'"></span>
+      <span class="text-gray-400 text-xs" x-text="serverUrl"></span>
+      <button @click="logout()" class="text-gray-400 hover:text-white text-xs transition">Sign out</button>
+    </div>
+  </header>
+
+  <!-- Tab bar -->
+  <nav class="bg-white border-b border-gray-200 px-6 flex gap-1">
+    <template x-for="t in tabs" :key="t.id">
+      <button @click="tab = t.id; loadTab(t.id)"
+        class="px-4 py-3 text-sm font-medium text-gray-600 hover:text-indigo-600 transition border-b-2 border-transparent"
+        :class="tab === t.id ? 'border-indigo-500 text-indigo-600' : ''"
+        x-text="t.label">
+      </button>
+    </template>
+  </nav>
+
+  <!-- Content -->
+  <main class="p-6 max-w-7xl mx-auto">
+
+    <!-- ── PROJECTS ── -->
+    <div x-show="tab === 'projects'">
+      <div class="flex items-center justify-between mb-4">
+        <h1 class="text-lg font-semibold text-gray-900">Projects</h1>
+        <button @click="openProjectModal(null)"
+          class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+          + New Project
+        </button>
+      </div>
+      <div x-show="loading.projects" class="text-gray-400 text-sm py-8 text-center">Loading…</div>
+      <div x-show="!loading.projects" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">Name</th>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">Git URL</th>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">Clone</th>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">Status</th>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">AgentFS</th>
+              <th class="px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            <template x-for="p in projects" :key="p.id">
+              <tr class="hover:bg-gray-50">
+                <td class="px-4 py-3 font-medium text-gray-900" x-text="p.name"></td>
+                <td class="px-4 py-3 text-gray-500 font-mono text-xs max-w-xs truncate" x-text="p.git_url || '—'"></td>
+                <td class="px-4 py-3">
+                  <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                    :class="'clone-' + (p.clone_status || 'none')"
+                    x-text="p.clone_status || 'none'"></span>
+                </td>
+                <td class="px-4 py-3">
+                  <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                    :class="p.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-500'"
+                    x-text="p.status || 'active'"></span>
+                </td>
+                <td class="px-4 py-3 text-gray-400 font-mono text-xs" x-text="p.agentfs_path || '—'"></td>
+                <td class="px-4 py-3 text-right">
+                  <div class="flex items-center justify-end gap-2">
+                    <button @click="importBeads(p)"
+                      class="text-xs text-indigo-600 hover:text-indigo-800 font-medium transition" title="Import beads as tasks">
+                      Import beads
+                    </button>
+                    <button @click="openProjectModal(p)"
+                      class="text-xs text-gray-500 hover:text-gray-900 transition">Edit</button>
+                    <button @click="deleteProject(p)"
+                      class="text-xs text-red-400 hover:text-red-600 transition">Delete</button>
+                  </div>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="projects.length === 0">
+              <td colspan="6" class="px-4 py-8 text-center text-gray-400 text-sm">No projects yet. Create one to get started.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── TASKS ── -->
+    <div x-show="tab === 'tasks'">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
+          <h1 class="text-lg font-semibold text-gray-900">Tasks</h1>
+          <select x-model="taskFilter.status" @change="loadTasks()"
+            class="border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-400">
+            <option value="">All statuses</option>
+            <option value="open">Open</option>
+            <option value="in_progress">In progress</option>
+            <option value="claimed">Claimed</option>
+            <option value="blocked">Blocked</option>
+            <option value="closed">Closed</option>
+            <option value="completed">Completed</option>
+          </select>
+          <select x-model="taskFilter.project_id" @change="loadTasks()"
+            class="border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-400">
+            <option value="">All projects</option>
+            <template x-for="p in projects" :key="p.id">
+              <option :value="p.id" x-text="p.name"></option>
+            </template>
+          </select>
+        </div>
+        <button @click="openTaskModal(null)"
+          class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+          + New Task
+        </button>
+      </div>
+      <div x-show="loading.tasks" class="text-gray-400 text-sm py-8 text-center">Loading…</div>
+      <div x-show="!loading.tasks" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">Title</th>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">Project</th>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">Status</th>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">Priority</th>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">Type</th>
+              <th class="text-left px-4 py-3 text-gray-500 font-medium">Assignee</th>
+              <th class="px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            <template x-for="t in tasks" :key="t.id">
+              <tr class="hover:bg-gray-50">
+                <td class="px-4 py-3 font-medium text-gray-900 max-w-xs">
+                  <div x-text="t.title" class="truncate"></div>
+                  <div x-show="t.description" x-text="t.description" class="text-xs text-gray-400 truncate mt-0.5"></div>
+                </td>
+                <td class="px-4 py-3 text-gray-500 text-xs" x-text="projectName(t.project_id)"></td>
+                <td class="px-4 py-3">
+                  <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                    :class="'status-' + t.status"
+                    x-text="t.status"></span>
+                </td>
+                <td class="px-4 py-3">
+                  <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                    :class="'priority-' + t.priority"
+                    x-text="priorityLabel(t.priority)"></span>
+                </td>
+                <td class="px-4 py-3 text-gray-500 text-xs" x-text="t.task_type || 'work'"></td>
+                <td class="px-4 py-3 text-gray-500 text-xs" x-text="t.claimed_by || '—'"></td>
+                <td class="px-4 py-3 text-right">
+                  <div class="flex items-center justify-end gap-2">
+                    <button @click="openTaskModal(t)"
+                      class="text-xs text-gray-500 hover:text-gray-900 transition">Edit</button>
+                    <button @click="deleteTask(t)"
+                      class="text-xs text-red-400 hover:text-red-600 transition">Delete</button>
+                  </div>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="tasks.length === 0">
+              <td colspan="7" class="px-4 py-8 text-center text-gray-400 text-sm">No tasks found.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-2 text-xs text-gray-400 text-right" x-show="tasks.length > 0">
+        <span x-text="tasks.length"></span> task(s) shown
+      </div>
+    </div>
+
+    <!-- ── AGENTS ── -->
+    <div x-show="tab === 'agents'">
+      <div class="flex items-center justify-between mb-4">
+        <h1 class="text-lg font-semibold text-gray-900">Agents</h1>
+        <button @click="loadAgents()"
+          class="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition">
+          Refresh
+        </button>
+      </div>
+      <div x-show="loading.agents" class="text-gray-400 text-sm py-8 text-center">Loading…</div>
+      <div x-show="!loading.agents" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <template x-for="a in agents" :key="a.name">
+          <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+            <div class="flex items-start justify-between mb-3">
+              <div>
+                <h3 class="font-semibold text-gray-900" x-text="a.name"></h3>
+                <p class="text-xs text-gray-400 mt-0.5" x-text="a.capabilities?.tailscale_ip || a.ssh_host || '—'"></p>
+              </div>
+              <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                :class="a.online ? 'online-true' : 'online-false'"
+                x-text="a.onlineStatus || (a.online ? 'online' : 'offline')"></span>
+            </div>
+            <dl class="space-y-1.5 text-xs">
+              <div class="flex justify-between">
+                <dt class="text-gray-400">Last seen</dt>
+                <dd class="text-gray-700 font-mono" x-text="relativeTime(a.lastSeen || a.last_seen)"></dd>
+              </div>
+              <div class="flex justify-between" x-show="a.capabilities?.model || a.model">
+                <dt class="text-gray-400">Model</dt>
+                <dd class="text-gray-700 truncate max-w-[160px]" x-text="a.capabilities?.model || a.model || '—'"></dd>
+              </div>
+              <div class="flex justify-between" x-show="a.ssh_user">
+                <dt class="text-gray-400">SSH</dt>
+                <dd class="text-gray-700 font-mono" x-text="(a.ssh_user || '') + '@' + (a.ssh_host || a.capabilities?.tailscale_ip || '?')"></dd>
+              </div>
+              <div class="flex justify-between" x-show="a.status">
+                <dt class="text-gray-400">Status</dt>
+                <dd class="text-gray-700" x-text="a.status"></dd>
+              </div>
+            </dl>
+            <div class="mt-3 pt-3 border-t border-gray-100 flex gap-2">
+              <button @click="deleteAgent(a)"
+                class="text-xs text-red-400 hover:text-red-600 transition ml-auto">Remove</button>
+            </div>
+          </div>
+        </template>
+        <div x-show="agents.length === 0" class="col-span-3 text-center text-gray-400 text-sm py-8">
+          No agents registered.
+        </div>
+      </div>
+    </div>
+
+    <!-- ── BUS ── -->
+    <div x-show="tab === 'bus'">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
+          <h1 class="text-lg font-semibold text-gray-900">Event Bus</h1>
+          <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+            :class="busConnected ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'"
+            x-text="busConnected ? 'Live' : 'Disconnected'"></span>
+        </div>
+        <button @click="busEvents = []" class="text-xs text-gray-400 hover:text-gray-700 transition">Clear</button>
+      </div>
+      <div class="bg-gray-900 rounded-xl shadow-sm p-4 font-mono text-xs h-[32rem] overflow-y-auto flex flex-col-reverse" id="bus-log">
+        <div>
+          <template x-for="(ev, i) in busEvents" :key="i">
+            <div class="flex gap-3 py-0.5 hover:bg-white/5 px-1 rounded">
+              <span class="text-gray-500 shrink-0" x-text="ev.ts"></span>
+              <span class="text-indigo-400 shrink-0" x-text="ev.type || '—'"></span>
+              <span class="text-gray-300 truncate" x-text="ev.raw"></span>
+            </div>
+          </template>
+          <div x-show="busEvents.length === 0" class="text-gray-600 py-4 text-center">Waiting for events…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── LOGS (CCC-zkc) ── -->
+    <div x-show="tab === 'logs'">
+      <div class="flex items-center justify-between mb-4 gap-3">
+        <div class="flex items-center gap-3">
+          <h1 class="text-lg font-semibold text-gray-900">Consolidated Logs</h1>
+          <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+            :class="logConnected ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'"
+            x-text="logConnected ? 'Live' : 'Disconnected'"></span>
+        </div>
+        <div class="flex items-center gap-2">
+          <input x-model="logIdentifierFilter" placeholder="identifier (e.g. acc-agent-tasks)"
+            class="text-xs px-2 py-1 border border-gray-300 rounded font-mono w-56">
+          <input x-model="logFilter" placeholder="text grep…"
+            class="text-xs px-2 py-1 border border-gray-300 rounded w-48">
+          <button @click="logEvents = []" class="text-xs text-gray-400 hover:text-gray-700 transition">Clear</button>
+        </div>
+      </div>
+      <div class="bg-gray-900 rounded-xl shadow-sm p-4 font-mono text-xs h-[36rem] overflow-y-auto flex flex-col-reverse">
+        <div>
+          <template x-for="(ev, i) in logEvents.filter(e =>
+              (!logIdentifierFilter || (e.identifier || '').includes(logIdentifierFilter)) &&
+              (!logFilter || (e.msg || '').toLowerCase().includes(logFilter.toLowerCase())))" :key="i">
+            <div class="flex gap-3 py-0.5 hover:bg-white/5 px-1 rounded">
+              <span class="text-gray-500 shrink-0" x-text="(ev.ts || '').slice(11, 19)"></span>
+              <span class="shrink-0 w-32 truncate" :class="{
+                  'text-red-400': ev.level === 'error',
+                  'text-yellow-400': ev.level === 'warn',
+                  'text-emerald-400': ev.level === 'notice',
+                  'text-indigo-400': ev.level === 'info',
+                  'text-gray-500': ev.level === 'debug'
+                }" x-text="ev.identifier || '—'"></span>
+              <span class="text-gray-300 break-all" x-text="ev.msg"></span>
+            </div>
+          </template>
+          <div x-show="logEvents.length === 0" class="text-gray-600 py-4 text-center">
+            Waiting for journald entries… (Linux+systemd only; on macOS/non-systemd hosts this stream returns a
+            single "unsupported" record. acc-server must run on Linux for this tab to populate.)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── HERMES PANES (CCC-6m0) ── -->
+    <div x-show="tab === 'panes'">
+      <div class="flex items-center justify-between mb-4">
+        <h1 class="text-lg font-semibold text-gray-900">Hermes Interactive Panes</h1>
+        <span class="text-xs text-gray-500">PTY-over-WebSocket per agent — placeholder; backend not yet implemented</span>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <template x-for="a in agents.filter(x => x.online)" :key="a.name">
+          <div class="bg-gray-900 rounded-xl shadow-sm p-3 font-mono text-xs h-72 flex flex-col">
+            <div class="flex items-center justify-between mb-2 border-b border-gray-700 pb-2">
+              <span class="text-emerald-400 font-semibold" x-text="a.name"></span>
+              <span class="text-gray-500" x-text="a.ssh_user + '@' + (a.ssh_host || '?')"></span>
+            </div>
+            <div class="flex-1 flex items-center justify-center text-gray-500 text-center px-4">
+              <div>
+                <div class="text-yellow-400 mb-2">[ CCC-6m0 — pane backend pending ]</div>
+                <div class="text-xs">A WebSocket relay opening an SSH session to <span x-text="a.ssh_host"></span>
+                running <code>hermes</code> in an interactive 80x24 terminal will mount here.</div>
+                <div class="text-xs mt-2 text-gray-600">
+                  For now, run manually:<br>
+                  <code class="text-indigo-300" x-text="'ssh ' + a.ssh_user + '@' + (a.ssh_host || a.name) + ' hermes'"></code>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+        <div x-show="agents.filter(x => x.online).length === 0" class="col-span-2 text-center text-gray-400 text-sm py-8">
+          No agents online.
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ── PROJECT MODAL ── -->
+<div x-show="projectModal.open" x-cloak
+  class="fixed inset-0 bg-black/50 flex items-center justify-center z-40 p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg" @click.stop>
+    <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+      <h2 class="font-semibold text-gray-900" x-text="projectModal.id ? 'Edit Project' : 'New Project'"></h2>
+      <button @click="projectModal.open = false" class="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
+    </div>
+    <div class="px-6 py-4 space-y-4">
+      <div>
+        <label class="block text-xs font-medium text-gray-700 mb-1">Name <span class="text-red-400">*</span></label>
+        <input type="text" x-model="projectModal.name" placeholder="My Project"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-700 mb-1">Git URL</label>
+        <input type="text" x-model="projectModal.git_url" placeholder="https://github.com/org/repo.git"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-700 mb-1">Description</label>
+        <textarea x-model="projectModal.description" rows="2" placeholder="Optional description"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"></textarea>
+      </div>
+      <div x-show="projectModal.id">
+        <label class="block text-xs font-medium text-gray-700 mb-1">Status</label>
+        <select x-model="projectModal.status"
+          class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 w-full">
+          <option value="active">Active</option>
+          <option value="archived">Archived</option>
+        </select>
+      </div>
+    </div>
+    <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+      <button @click="projectModal.open = false"
+        class="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 transition">Cancel</button>
+      <button @click="saveProject()"
+        class="px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+        <span x-text="projectModal.id ? 'Save changes' : 'Create project'"></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── TASK MODAL ── -->
+<div x-show="taskModal.open" x-cloak
+  class="fixed inset-0 bg-black/50 flex items-center justify-center z-40 p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg" @click.stop>
+    <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+      <h2 class="font-semibold text-gray-900" x-text="taskModal.id ? 'Edit Task' : 'New Task'"></h2>
+      <button @click="taskModal.open = false" class="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
+    </div>
+    <div class="px-6 py-4 space-y-4">
+      <div>
+        <label class="block text-xs font-medium text-gray-700 mb-1">Title <span class="text-red-400">*</span></label>
+        <input type="text" x-model="taskModal.title"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-700 mb-1">Project <span class="text-red-400">*</span></label>
+        <select x-model="taskModal.project_id"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+          <option value="">— select project —</option>
+          <template x-for="p in projects" :key="p.id">
+            <option :value="p.id" x-text="p.name"></option>
+          </template>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-700 mb-1">Description</label>
+        <textarea x-model="taskModal.description" rows="2"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"></textarea>
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">Status</label>
+          <select x-model="taskModal.status"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            <option value="open">Open</option>
+            <option value="in_progress">In progress</option>
+            <option value="claimed">Claimed</option>
+            <option value="blocked">Blocked</option>
+            <option value="closed">Closed</option>
+            <option value="completed">Completed</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">Priority</label>
+          <select x-model="taskModal.priority"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            <option value="0">P0 – Critical</option>
+            <option value="1">P1 – High</option>
+            <option value="2">P2 – Medium</option>
+            <option value="3">P3 – Low</option>
+            <option value="4">P4 – Backlog</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">Type</label>
+          <select x-model="taskModal.task_type"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            <option value="work">Work</option>
+            <option value="bug">Bug</option>
+            <option value="feature">Feature</option>
+            <option value="review">Review</option>
+            <option value="docs">Docs</option>
+          </select>
+        </div>
+      </div>
+      <div x-show="taskModal.id">
+        <label class="block text-xs font-medium text-gray-700 mb-1">Phase</label>
+        <input type="text" x-model="taskModal.phase" placeholder="e.g. build, review, ship"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+    </div>
+    <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+      <button @click="taskModal.open = false"
+        class="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 transition">Cancel</button>
+      <button @click="saveTask()"
+        class="px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+        <span x-text="taskModal.id ? 'Save changes' : 'Create task'"></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+function dashboard() {
+  return {
+    token: localStorage.getItem('acc_token') || '',
+    tokenInput: '',
+    tokenError: '',
+    tab: 'projects',
+    tabs: [
+      { id: 'projects', label: 'Projects' },
+      { id: 'tasks',    label: 'Tasks' },
+      { id: 'agents',   label: 'Agents' },
+      { id: 'bus',      label: 'Event Bus' },
+      { id: 'logs',     label: 'Logs' },
+      { id: 'panes',    label: 'Hermes Panes' },
+    ],
+    projects: [],
+    tasks: [],
+    agents: [],
+    busEvents: [],
+    busConnected: false,
+    busSource: null,
+    logEvents: [],
+    logConnected: false,
+    logSource: null,
+    logFilter: '',
+    logIdentifierFilter: '',
+    taskFilter: { status: 'open', project_id: '' },
+    loading: { projects: false, tasks: false, agents: false },
+    toast: '',
+    toastType: 'success',
+    toastTimer: null,
+    serverUrl: window.location.host,
+
+    projectModal: { open: false, id: null, name: '', git_url: '', description: '', status: 'active' },
+    taskModal: { open: false, id: null, title: '', project_id: '', description: '', status: 'open', priority: '2', task_type: 'work', phase: '' },
+
+    async init() {
+      if (this.token) {
+        await this.loadTab('projects');
+        this.loadProjects(); // ensure projects loaded for task filter
+      }
+    },
+
+    saveToken() {
+      if (!this.tokenInput.trim()) { this.tokenError = 'Token is required'; return; }
+      this.token = this.tokenInput.trim();
+      localStorage.setItem('acc_token', this.token);
+      this.tokenError = '';
+      this.init();
+    },
+
+    logout() {
+      localStorage.removeItem('acc_token');
+      this.token = '';
+      this.tokenInput = '';
+      this.projects = [];
+      this.tasks = [];
+      this.agents = [];
+      if (this.busSource) { this.busSource.close(); this.busSource = null; }
+    },
+
+    notify(msg, type = 'success') {
+      this.toast = msg;
+      this.toastType = type;
+      clearTimeout(this.toastTimer);
+      this.toastTimer = setTimeout(() => { this.toast = ''; }, 3500);
+    },
+
+    async api(method, path, body) {
+      const opts = {
+        method,
+        headers: {
+          'Authorization': 'Bearer ' + this.token,
+          'Content-Type': 'application/json',
+        },
+      };
+      if (body !== undefined) opts.body = JSON.stringify(body);
+      const res = await fetch(path, opts);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    },
+
+    async loadTab(id) {
+      if (id === 'projects') await this.loadProjects();
+      else if (id === 'tasks') { await this.loadProjects(); await this.loadTasks(); }
+      else if (id === 'agents') await this.loadAgents();
+      else if (id === 'bus') this.connectBus();
+      else if (id === 'logs') this.connectLogs();
+      else if (id === 'panes') await this.loadAgents();
+    },
+
+    // ── Projects ──
+
+    async loadProjects() {
+      this.loading.projects = true;
+      try {
+        const data = await this.api('GET', '/api/projects');
+        this.projects = Array.isArray(data) ? data : (data.projects || []);
+      } catch(e) { this.notify(e.message, 'error'); }
+      this.loading.projects = false;
+    },
+
+    openProjectModal(p) {
+      if (p) {
+        Object.assign(this.projectModal, {
+          open: true, id: p.id, name: p.name || '',
+          git_url: p.git_url || '', description: p.description || '',
+          status: p.status || 'active',
+        });
+      } else {
+        Object.assign(this.projectModal, { open: true, id: null, name: '', git_url: '', description: '', status: 'active' });
+      }
+    },
+
+    async saveProject() {
+      if (!this.projectModal.name.trim()) { this.notify('Name is required', 'error'); return; }
+      const body = {
+        name: this.projectModal.name.trim(),
+        git_url: this.projectModal.git_url.trim() || null,
+        description: this.projectModal.description.trim(),
+        status: this.projectModal.status,
+      };
+      try {
+        if (this.projectModal.id) {
+          await this.api('PATCH', `/api/projects/${this.projectModal.id}`, body);
+          this.notify('Project updated');
+        } else {
+          await this.api('POST', '/api/projects', body);
+          this.notify('Project created');
+        }
+        this.projectModal.open = false;
+        await this.loadProjects();
+      } catch(e) { this.notify(e.message, 'error'); }
+    },
+
+    async deleteProject(p) {
+      if (!confirm(`Delete project "${p.name}"? This cannot be undone.`)) return;
+      try {
+        await this.api('DELETE', `/api/projects/${p.id}`);
+        this.notify('Project deleted');
+        await this.loadProjects();
+      } catch(e) { this.notify(e.message, 'error'); }
+    },
+
+    async importBeads(p) {
+      try {
+        const res = await this.api('POST', `/api/projects/${p.id}/import-beads`, {});
+        this.notify(`Imported ${res.imported || 0} task(s) from ${p.name}`);
+        if (this.tab === 'tasks') await this.loadTasks();
+      } catch(e) { this.notify(e.message, 'error'); }
+    },
+
+    // ── Tasks ──
+
+    async loadTasks() {
+      this.loading.tasks = true;
+      try {
+        const params = new URLSearchParams();
+        if (this.taskFilter.status) params.set('status', this.taskFilter.status);
+        if (this.taskFilter.project_id) params.set('project_id', this.taskFilter.project_id);
+        const qs = params.toString();
+        const data = await this.api('GET', `/api/tasks${qs ? '?' + qs : ''}`);
+        this.tasks = Array.isArray(data) ? data : (data.tasks || []);
+      } catch(e) { this.notify(e.message, 'error'); }
+      this.loading.tasks = false;
+    },
+
+    openTaskModal(t) {
+      if (t) {
+        Object.assign(this.taskModal, {
+          open: true, id: t.id, title: t.title || '',
+          project_id: t.project_id || '', description: t.description || '',
+          status: t.status || 'open', priority: String(t.priority ?? 2),
+          task_type: t.task_type || 'work', phase: t.phase || '',
+        });
+      } else {
+        Object.assign(this.taskModal, {
+          open: true, id: null, title: '', project_id: this.taskFilter.project_id || '',
+          description: '', status: 'open', priority: '2', task_type: 'work', phase: '',
+        });
+      }
+    },
+
+    async saveTask() {
+      if (!this.taskModal.title.trim()) { this.notify('Title is required', 'error'); return; }
+      if (!this.taskModal.project_id) { this.notify('Project is required', 'error'); return; }
+      const body = {
+        title: this.taskModal.title.trim(),
+        project_id: this.taskModal.project_id,
+        description: this.taskModal.description.trim(),
+        status: this.taskModal.status,
+        priority: parseInt(this.taskModal.priority, 10),
+        task_type: this.taskModal.task_type,
+        phase: this.taskModal.phase.trim() || '',
+      };
+      try {
+        if (this.taskModal.id) {
+          await this.api('PUT', `/api/tasks/${this.taskModal.id}`, body);
+          this.notify('Task updated');
+        } else {
+          await this.api('POST', '/api/tasks', body);
+          this.notify('Task created');
+        }
+        this.taskModal.open = false;
+        await this.loadTasks();
+      } catch(e) { this.notify(e.message, 'error'); }
+    },
+
+    async deleteTask(t) {
+      if (!confirm(`Delete task "${t.title}"?`)) return;
+      try {
+        await this.api('DELETE', `/api/tasks/${t.id}`);
+        this.notify('Task deleted');
+        await this.loadTasks();
+      } catch(e) { this.notify(e.message, 'error'); }
+    },
+
+    // ── Agents ──
+
+    async loadAgents() {
+      this.loading.agents = true;
+      try {
+        const data = await this.api('GET', '/api/agents');
+        this.agents = Array.isArray(data) ? data : (data.agents || []);
+      } catch(e) { this.notify(e.message, 'error'); }
+      this.loading.agents = false;
+    },
+
+    async deleteAgent(a) {
+      if (!confirm(`Remove agent "${a.name}" from registry?`)) return;
+      try {
+        await this.api('DELETE', `/api/agents/${a.name}`);
+        this.notify('Agent removed');
+        await this.loadAgents();
+      } catch(e) { this.notify(e.message, 'error'); }
+    },
+
+    // ── Bus ──
+
+    connectBus() {
+      if (this.busSource) return;
+      const url = `/api/bus/stream?token=${encodeURIComponent(this.token)}`;
+      const es = new EventSource(url);
+      this.busSource = es;
+      es.onopen = () => { this.busConnected = true; };
+      es.onmessage = (ev) => {
+        try {
+          const parsed = JSON.parse(ev.data);
+          this.busEvents.unshift({
+            ts: new Date().toLocaleTimeString(),
+            type: parsed.type || parsed.event || Object.keys(parsed)[0] || 'event',
+            raw: ev.data,
+          });
+          if (this.busEvents.length > 200) this.busEvents.pop();
+        } catch { /* ignore parse errors */ }
+      };
+      es.onerror = () => { this.busConnected = false; };
+    },
+
+    // ── Logs (CCC-zkc) ──
+
+    connectLogs() {
+      if (this.logSource) return;
+      const url = `/api/logs/stream?token=${encodeURIComponent(this.token)}`;
+      const es = new EventSource(url);
+      this.logSource = es;
+      es.onopen = () => { this.logConnected = true; };
+      es.onmessage = (ev) => {
+        try {
+          const parsed = JSON.parse(ev.data);
+          if (parsed.type === 'connected') return;
+          this.logEvents.unshift({
+            ts: parsed.ts || new Date().toISOString(),
+            level: parsed.level || 'info',
+            identifier: parsed.identifier || '',
+            host: parsed.host || '',
+            msg: parsed.msg || '',
+          });
+          if (this.logEvents.length > 1000) this.logEvents.pop();
+        } catch { /* ignore parse errors */ }
+      };
+      es.onerror = () => { this.logConnected = false; };
+    },
+
+    // ── Helpers ──
+
+    projectName(id) {
+      const p = this.projects.find(p => p.id === id);
+      return p ? p.name : (id ? id.slice(0, 12) + '…' : '—');
+    },
+
+    priorityLabel(p) {
+      return ['P0', 'P1', 'P2', 'P3', 'P4'][p] || String(p);
+    },
+
+    relativeTime(ts) {
+      if (!ts) return '—';
+      const d = new Date(ts);
+      if (isNaN(d)) return ts;
+      const s = Math.floor((Date.now() - d) / 1000);
+      if (s < 60) return `${s}s ago`;
+      if (s < 3600) return `${Math.floor(s/60)}m ago`;
+      if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+      return `${Math.floor(s/86400)}d ago`;
+    },
+  };
+}
+</script>
+</body>
+</html>

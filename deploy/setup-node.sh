@@ -3,7 +3,7 @@
 # Run once on a new machine. Safe to re-run (idempotent).
 #
 # Usage:
-#   REPO_URL=git@github.com:yourorg/your-acc-repo.git bash deploy/setup-node.sh
+#   REPO_URL=git@github.com:yourorg/your-ccc-repo.git bash deploy/setup-node.sh
 #   OR (from inside an existing clone): bash deploy/setup-node.sh
 #
 # Tip: run deploy/acc-init.sh after this to configure your .env interactively.
@@ -32,7 +32,7 @@ warn()    { echo -e "${YELLOW}[setup]${NC} ⚠ $1"; }
 error()   { echo -e "${RED}[setup]${NC} ✗ $1"; exit 1; }
 
 echo ""
-echo "🐿️  ACC Agent Node Setup"
+echo "🐿️  CCC Agent Node Setup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -167,6 +167,14 @@ else
   success "tmux present ($(tmux -V))"
 fi
 
+# python3-venv (required to create the hermes venv; Debian/Ubuntu splits this out)
+if [[ "$PLATFORM" == "linux" ]] && ! python3 -m venv --help &>/dev/null 2>&1; then
+  info "Installing python3-venv..."
+  PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+  sudo apt-get install -y "python${PY_VER}-venv" 2>/dev/null || \
+    warn "Could not auto-install python${PY_VER}-venv. Run: sudo apt-get install -y python${PY_VER}-venv"
+fi
+
 # Claude Code CLI (primary coding executor)
 if command -v claude &>/dev/null; then
   success "Claude Code CLI present ($(claude --version 2>/dev/null | head -1))"
@@ -235,18 +243,18 @@ else
 fi
 
 # Install acc-node skill into Hermes
-ACC_SKILL_SRC="$WORKSPACE/skills/acc-node"
-if [ -d "$ACC_SKILL_SRC" ] && [ "$HERMES_INSTALLED" = true ]; then
+CCC_SKILL_SRC="$WORKSPACE/skills/acc-node"
+if [ -d "$CCC_SKILL_SRC" ] && [ "$HERMES_INSTALLED" = true ]; then
   SKILL_DEST="$HOME/.hermes/skills/acc-node"
   if [ ! -d "$SKILL_DEST" ]; then
-    cp -r "$ACC_SKILL_SRC" "$SKILL_DEST"
+    cp -r "$CCC_SKILL_SRC" "$SKILL_DEST"
     success "acc-node skill installed into Hermes"
   else
     success "acc-node skill already in Hermes"
   fi
 fi
 
-# ── Seed hermes MEMORY.md with ACC fleet context ────────────────────────
+# ── Seed hermes MEMORY.md with CCC fleet context ────────────────────────
 # Seeds a typed-network MEMORY.md so a fresh hermes agent knows fleet
 # conventions without stumbling across AGENTS.md on its own.
 #
@@ -261,12 +269,12 @@ seed_hermes_memory() {
   local HERMES_DIR="$HOME/.hermes"
   local MEMORY_FILE="$HERMES_DIR/MEMORY.md"
   # Two sentinels for idempotency: old flat format and new typed format
-  local SENTINEL_OLD="## ACC Fleet Context"
+  local SENTINEL_OLD="## CCC Fleet Context"
   local SENTINEL_NEW="<!-- ccc-fleet-seed -->"
 
   if ! command -v hermes &>/dev/null; then return; fi
-  if grep -qE "(## ACC Fleet Context|<!-- ccc-fleet-seed -->)" "$MEMORY_FILE" 2>/dev/null; then
-    success "ACC fleet context already in hermes MEMORY.md — skipping"
+  if grep -qE "(## CCC Fleet Context|<!-- ccc-fleet-seed -->)" "$MEMORY_FILE" 2>/dev/null; then
+    success "CCC fleet context already in hermes MEMORY.md — skipping"
     return
   fi
 
@@ -286,19 +294,19 @@ seed_hermes_memory() {
 
 ## World Knowledge
 
-### ACC Fleet
-- This agent is part of the ACC fleet managed by ~/Src/ACC
-- Full workspace docs live in ~/Src/ACC/AGENTS.md — read on first boot
+### CCC Fleet
+- This agent is part of the CCC fleet managed by ~/Src/CCC
+- Full workspace docs live in ~/Src/CCC/AGENTS.md — read on first boot
 - Config: ~/.acc/.env — ACC_URL and ACC_AGENT_TOKEN are required before starting
-- Workqueue: ~/Src/ACC/workqueue/queue.json — polled each heartbeat cycle
+- Workqueue: ~/Src/CCC/workqueue/queue.json — polled each heartbeat cycle
 - Secrets are stored in TokenHub (~/Src/tokenhub); never hardcode credentials
 
 ### Companion Repos
 Clone these on any new command node without waiting to be asked:
-- ~/Src/ACC       — core fleet repo (already present)
+- ~/Src/CCC       — core fleet repo (already present)
 - ~/Src/tokenhub  — required: LLM router and secret store
 
-Minimum viable command node: ACC + tokenhub.
+Minimum viable command node: CCC + tokenhub.
 
 ## Beliefs
 
@@ -327,7 +335,7 @@ HERMESMEM
     sed -i.bak "s/SEED_DATE/$SEED_DATE/g" "$MEMORY_FILE" && rm -f "${MEMORY_FILE}.bak"
   fi
 
-  success "ACC fleet context seeded into $MEMORY_FILE (typed-network schema)"
+  success "CCC fleet context seeded into $MEMORY_FILE (typed-network schema)"
 }
 
 info "Seeding hermes fleet context..."
@@ -423,8 +431,31 @@ _agentfs_healthy() {
   _agentfs_mounted && ls "$AGENTFS_MOUNT" >/dev/null 2>&1
 }
 
+_agentfs_is_hub_resident() {
+  # The hub serves AgentFS from /srv/accfs/shared. On the hub itself,
+  # we don't mount our own export — we symlink the shared dir into
+  # ~/.acc/shared/<slug> so agents looking up workspaces find them.
+  [ -d /srv/accfs/shared ] && ! mount | grep -q "on /srv/accfs" 2>/dev/null
+}
+
 if _agentfs_healthy; then
   success "AgentFS already mounted and healthy at $AGENTFS_MOUNT"
+elif _agentfs_is_hub_resident; then
+  # Hub-resident agent (e.g. rocky on do-host1): /srv/accfs/shared/ is a
+  # real local directory, not a mount. Mounting our own SMB export back
+  # at $HOME/.acc/shared causes a self-loop. Symlink each project's
+  # shared dir directly so workspace lookups resolve to the real path.
+  info "Hub-resident detected — wiring AgentFS via symlink farm (no SMB mount needed)"
+  mkdir -p "$AGENTFS_MOUNT"
+  _linked=0
+  for _src in /srv/accfs/shared/*/; do
+    _slug=$(basename "$_src")
+    _dst="$AGENTFS_MOUNT/$_slug"
+    if [ ! -e "$_dst" ]; then
+      ln -s "$_src" "$_dst" && _linked=$((_linked+1))
+    fi
+  done
+  success "AgentFS symlink farm: $_linked new link(s) added at $AGENTFS_MOUNT"
 else
   mkdir -p "$AGENTFS_MOUNT"
 
@@ -494,16 +525,32 @@ EOF"
     fi
 
   elif [[ "$PLATFORM" == "macos" ]]; then
-    # macOS: use mount_smbfs + LaunchAgent for persistence
-    _plist="$HOME/Library/LaunchAgents/com.acc.accfs-mount.plist"
-    if [ ! -f "$_plist" ]; then
-      _pw_fragment=""
-      if [[ -n "${ACC_SMB_PASSWORD:-}" ]]; then
+    # macOS: mount_smbfs + LaunchAgent for persistence.
+    # Without ACC_SMB_PASSWORD, mount_smbfs falls back to anonymous and
+    # the server rejects with "Authentication error". Surface this
+    # clearly instead of silently installing a plist that fails forever.
+    if [[ -z "${ACC_SMB_PASSWORD:-}" ]]; then
+      warn "macOS AgentFS mount needs ACC_SMB_PASSWORD."
+      echo ""
+      echo "  ┌──────────────────────────────────────────────────────────────────┐"
+      echo "  │  macOS doesn't read /etc/samba/smbcredentials. To enable the    │"
+      echo "  │  AgentFS mount on this Mac:                                      │"
+      echo "  │                                                                  │"
+      echo "  │    1. Get the Samba password from the hub (/etc/samba/...)      │"
+      echo "  │    2. Add to ~/.acc/.env (or ~/.zshrc) before re-running setup: │"
+      echo "  │         ACC_SMB_PASSWORD='<password>'                            │"
+      echo "  │    3. Or store it in macOS Keychain and use a credential        │"
+      echo "  │       reference in the LaunchAgent (more secure).                │"
+      echo "  │                                                                  │"
+      echo "  │  Without this, agent task workspaces will be empty stubs and    │"
+      echo "  │  any task this agent claims will silently fail to do real work. │"
+      echo "  └──────────────────────────────────────────────────────────────────┘"
+      echo ""
+    else
+      _plist="$HOME/Library/LaunchAgents/com.acc.accfs-mount.plist"
+      if [ ! -f "$_plist" ]; then
         _pw_fragment="${AGENTFS_USER}:${ACC_SMB_PASSWORD}@"
-      else
-        _pw_fragment="${AGENTFS_USER}@"
-      fi
-      cat > "$_plist" << EOF
+        cat > "$_plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -522,17 +569,18 @@ EOF"
 </dict>
 </plist>
 EOF
-      launchctl load "$_plist" 2>/dev/null
-      sleep 2
-      success "AgentFS LaunchAgent installed"
-    else
-      success "AgentFS LaunchAgent already present"
-    fi
-    # Verify (note: ls may fail from SSH due to macOS TCC; use mount + stat)
-    if _agentfs_mounted; then
-      success "AgentFS mounted at $AGENTFS_MOUNT (macOS TCC may block ls from SSH — normal)"
-    else
-      warn "AgentFS not mounted — check ~/Library/LaunchAgents/com.acc.accfs-mount.plist and logs"
+        launchctl load "$_plist" 2>/dev/null
+        sleep 2
+        success "AgentFS LaunchAgent installed"
+      else
+        success "AgentFS LaunchAgent already present"
+      fi
+      # Verify (note: ls may fail from SSH due to macOS TCC; use mount + stat)
+      if _agentfs_mounted; then
+        success "AgentFS mounted at $AGENTFS_MOUNT (macOS TCC may block ls from SSH — normal)"
+      else
+        warn "AgentFS not mounted — check ~/Library/LaunchAgents/com.acc.accfs-mount.plist and logs"
+      fi
     fi
   fi
 fi
@@ -626,7 +674,7 @@ echo "  2. Run a manual pull: bash $PULL_SCRIPT"
 echo "  3. Check logs: tail -f $LOG_DIR/pull.log"
 echo "  4. Start agent runtime: hermes gateway"
 echo ""
-echo "  To register this agent with ACC:"
+echo "  To register this agent with CCC:"
 echo "  bash $WORKSPACE/deploy/register-agent.sh"
 echo ""
 echo "  Coding CLI turbocharger (if not already running):"

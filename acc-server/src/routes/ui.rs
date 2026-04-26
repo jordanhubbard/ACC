@@ -1,9 +1,9 @@
 use crate::AppState;
-/// /routes/ui.rs — bootstrap token issuer and grievances proxy.
+/// /routes/ui.rs — dashboard SPA, bootstrap token issuer, and grievances proxy.
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
+    response::{Html, IntoResponse, Json},
     routing::{get, post},
     Router,
 };
@@ -11,12 +11,16 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+const DASHBOARD_HTML: &str = include_str!("../dashboard.html");
+
 fn grievances_url() -> String {
     std::env::var("GRIEVANCES_URL").unwrap_or_else(|_| "http://localhost:9999".to_string())
 }
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        // Dashboard SPA
+        .route("/", get(serve_dashboard))
         // Bootstrap
         .route("/api/bootstrap", get(get_bootstrap))
         .route("/api/bootstrap/token", post(post_bootstrap_token))
@@ -27,6 +31,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/grievances/*path", get(proxy_api_grievances))
 }
 
+async fn serve_dashboard() -> impl IntoResponse {
+    Html(DASHBOARD_HTML)
+}
+
 // ── /api/bootstrap ────────────────────────────────────────────────────────
 
 async fn get_bootstrap(
@@ -35,7 +43,7 @@ async fn get_bootstrap(
 ) -> impl IntoResponse {
     let token = params.get("token").cloned().unwrap_or_default();
     // Check if token matches any agent's bootstrap token
-    let agents = state.agents.read().await;
+    let _agents = state.agents.read().await;
     let secrets = state.secrets.read().await;
 
     let global_bootstrap = secrets

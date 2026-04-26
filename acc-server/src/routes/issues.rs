@@ -6,7 +6,7 @@ use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Json},
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use serde::Deserialize;

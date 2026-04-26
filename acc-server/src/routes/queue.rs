@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use serde_json::{json, Value};
@@ -33,30 +33,15 @@ fn stale_threshold(preferred_executor: Option<&str>) -> u64 {
     }
 }
 
-async fn get_queue(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
-    if !state.is_authed(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Unauthorized"})),
-        )
-            .into_response();
-    }
+async fn get_queue(State(state): State<Arc<AppState>>) -> Json<Value> {
     let q = state.queue.read().await;
     Json(json!({
         "items": q.items,
         "completed": q.completed
     }))
-    .into_response()
 }
 
-async fn get_stale(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
-    if !state.is_authed(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Unauthorized"})),
-        )
-            .into_response();
-    }
+async fn get_stale(State(state): State<Arc<AppState>>) -> Json<Value> {
     let q = state.queue.read().await;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -89,7 +74,7 @@ async fn get_stale(State(state): State<Arc<AppState>>, headers: HeaderMap) -> im
         })
         .collect();
 
-    Json(json!({"stale": stale, "count": stale.len()})).into_response()
+    Json(json!({"stale": stale, "count": stale.len()}))
 }
 
 async fn get_claimed(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
@@ -112,14 +97,7 @@ async fn get_claimed(State(state): State<Arc<AppState>>, headers: HeaderMap) -> 
     Json(json!({"ok": true, "claimed": claimed, "count": claimed.len()})).into_response()
 }
 
-async fn get_item(State(state): State<Arc<AppState>>, headers: HeaderMap, Path(id): Path<String>) -> impl IntoResponse {
-    if !state.is_authed(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Unauthorized"})),
-        )
-            .into_response();
-    }
+async fn get_item(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> impl IntoResponse {
     let q = state.queue.read().await;
     let item = q
         .items
@@ -138,16 +116,9 @@ async fn get_item(State(state): State<Arc<AppState>>, headers: HeaderMap, Path(i
 
 async fn post_queue(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if !state.is_authed(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Unauthorized"})),
-        )
-            .into_response();
-    }
     let title = match body.get("title").and_then(|t| t.as_str()) {
         Some(t) => t.to_string(),
         None => {
@@ -445,16 +416,8 @@ async fn delete_item(
 async fn claim_item(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if !state.is_authed(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Unauthorized"})),
-        )
-            .into_response();
-    }
     let agent = match body
         .get("agent")
         .or_else(|| body.get("_author"))
@@ -732,16 +695,8 @@ async fn fail_item(
 async fn keepalive_item(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if !state.is_authed(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Unauthorized"})),
-        )
-            .into_response();
-    }
     let mut q = state.queue.write().await;
     let now = chrono::Utc::now().to_rfc3339();
 

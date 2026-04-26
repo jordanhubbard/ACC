@@ -104,9 +104,8 @@ Docker Compose reads config from `./acc-data/.env` (relative to the repo root).
 make docker-up
 ```
 
-This brings up two containers:
-- **acc-api** (port 8789) — the coordination API (Rust/Axum binary)
-- **dashboard** (port 8788) — WASM web UI (nginx serving pre-built static files from `dist/`)
+This brings up one container:
+- **acc-api** (port 8789) — the coordination API and web dashboard (Rust/Axum binary)
 
 #### Step 3: Verify
 
@@ -115,7 +114,7 @@ curl http://localhost:8789/health
 # → {"status":"ok"}
 ```
 
-Open `http://your-server-ip:8788` in a browser to see the dashboard.
+Open `http://your-server-ip:8789/` in a browser to see the dashboard.
 
 #### Other Docker commands
 
@@ -203,7 +202,7 @@ cd CCC
 make init   # configure a local dev instance
 ```
 
-The API server is a Rust binary (`acc-server`). The dashboard is Leptos WASM (pre-built dist committed at `dist/`).
+The API server is a Rust binary (`acc-server`). The dashboard is a single-page app embedded in the binary and served at `/`.
 
 ```bash
 make build   # build acc-server Rust binary
