@@ -55,12 +55,29 @@ GIT_PUSH_TIMEOUT    = 240       # seconds for a single git push before we give u
 # SSH options injected into every git-over-SSH call to prevent indefinite
 # hangs on dead/slow connections.  ConnectTimeout caps the TCP handshake;
 # ServerAlive* drops the link if the server goes silent mid-transfer.
+# BatchMode=yes disables interactive prompts so a push fails fast instead of
+# blocking on a passphrase/host-key confirmation.
 GIT_SSH_COMMAND = (
     "ssh -o ConnectTimeout=15"
     " -o ServerAliveInterval=30"
     " -o ServerAliveCountMax=3"
     " -o BatchMode=yes"
 )
+
+
+def _dns_preflight(host: str = "github.com") -> bool:
+    """Return True if *host* resolves, False on DNS failure.
+
+    Mirrors the dns_preflight() logic in deploy/acc-repo-sync.sh so that a
+    transient DNS outage is treated as a soft/skippable condition rather than
+    a hard push failure that would trip task-failure alerts.
+    """
+    import socket
+    try:
+        socket.getaddrinfo(host, 22, proto=socket.IPPROTO_TCP)
+        return True
+    except OSError:
+        return False
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -664,6 +681,16 @@ def _git_push_once(item_id: str, workspace: Path, task_output: str) -> str:
         if not remote_url:
             result = f"committed locally @ {sha} (no remote)"
             log.info(f"[{item_id}] {result}")
+            return result
+
+        # DNS pre-flight: if github.com is not resolvable right now, treat the
+        # push as a soft skip (committed locally) rather than a hard failure.
+        # A transient DNS outage (e.g. "nodename nor servname provided") should
+        # not surface as a task-failure alert — the push will be retried on the
+        # next agent-pull / repo-sync cycle.
+        if "github.com" in remote_url and not _dns_preflight("github.com"):
+            result = f"committed locally @ {sha} — DNS for github.com unavailable, push deferred"
+            log.warning(f"[{item_id}] {result}")
             return result
 
         # Rewrite HTTPS GitHub URL → SSH when deploy key is available.

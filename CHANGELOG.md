@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- remove stale `.git/index.lock` and rebuild corrupted git index to unblock phase milestone commits
+
 ## [0.0.1] - 2026-04-13
 
 ### Added
