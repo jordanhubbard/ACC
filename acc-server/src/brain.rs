@@ -68,10 +68,9 @@ impl BrainQueue {
     pub fn new() -> Self {
         let llm_url = std::env::var("OPENAI_BASE_URL")
             .or_else(|_| std::env::var("LLM_URL"))
-            .unwrap_or_else(|_| "http://localhost:8090".to_string());
+            .unwrap_or_default();
         let llm_key = std::env::var("OPENAI_API_KEY")
             .or_else(|_| std::env::var("LLM_KEY"))
-            .or_else(|_| std::env::var("TOKENHUB_AGENT_KEY"))
             .unwrap_or_default();
         let models: Vec<String> = std::env::var("BRAIN_MODELS")
             .unwrap_or_else(|_| {

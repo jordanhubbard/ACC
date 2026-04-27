@@ -72,7 +72,14 @@ async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Value> {
 async fn list_models() -> impl IntoResponse {
     let llm_url = std::env::var("OPENAI_BASE_URL")
         .or_else(|_| std::env::var("LLM_URL"))
-        .unwrap_or_else(|_| "http://127.0.0.1:8090".to_string());
+        .unwrap_or_default();
+
+    if llm_url.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "OPENAI_BASE_URL not configured", "data": []})),
+        ).into_response();
+    }
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
