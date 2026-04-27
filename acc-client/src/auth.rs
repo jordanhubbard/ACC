@@ -30,14 +30,14 @@ pub fn resolve_token(flag: Option<String>) -> Result<String> {
     Err(Error::NoToken)
 }
 
-fn home_dir() -> PathBuf {
+pub(crate) fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Minimal `.env` parser: `KEY=value` lines, `#` comments, optional quotes.
-fn parse_dotenv(text: &str, key: &str) -> Option<String> {
+pub(crate) fn parse_dotenv(text: &str, key: &str) -> Option<String> {
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {

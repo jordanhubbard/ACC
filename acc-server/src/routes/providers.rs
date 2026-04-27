@@ -16,9 +16,7 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let llm_url = std::env::var("OPENAI_BASE_URL")
-        .or_else(|_| std::env::var("LLM_URL"))
-        .unwrap_or_default();
+    let llm_url = acc_client::llm_config::LlmConfig::load().base_url;
     let fs_root = std::env::var("ACC_FS_ROOT").unwrap_or_else(|_| "/srv/accfs".to_string());
     let qdrant_url =
         std::env::var("QDRANT_FLEET_URL").unwrap_or_else(|_| "http://127.0.0.1:6333".to_string());
@@ -70,9 +68,7 @@ async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Value> {
 // Proxies the LLM provider's /v1/models to return available models.
 
 async fn list_models() -> impl IntoResponse {
-    let llm_url = std::env::var("OPENAI_BASE_URL")
-        .or_else(|_| std::env::var("LLM_URL"))
-        .unwrap_or_default();
+    let llm_url = acc_client::llm_config::LlmConfig::load().base_url;
 
     if llm_url.is_empty() {
         return (

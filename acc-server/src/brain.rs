@@ -66,12 +66,9 @@ pub struct BrainQueue {
 
 impl BrainQueue {
     pub fn new() -> Self {
-        let llm_url = std::env::var("OPENAI_BASE_URL")
-            .or_else(|_| std::env::var("LLM_URL"))
-            .unwrap_or_default();
-        let llm_key = std::env::var("OPENAI_API_KEY")
-            .or_else(|_| std::env::var("LLM_KEY"))
-            .unwrap_or_default();
+        let llm_cfg = acc_client::llm_config::LlmConfig::load();
+        let llm_url = llm_cfg.base_url;
+        let llm_key = llm_cfg.api_key;
         let models: Vec<String> = std::env::var("BRAIN_MODELS")
             .unwrap_or_else(|_| {
                 "nemotron,peabody-vllm,sherman-vllm,snidely-vllm,dudley-vllm,llama-3.3-70b-instruct"

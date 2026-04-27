@@ -16,6 +16,7 @@
 pub mod agents;
 pub mod auth;
 pub mod bus;
+pub mod llm_config;
 pub mod error;
 pub mod items;
 pub mod memory;

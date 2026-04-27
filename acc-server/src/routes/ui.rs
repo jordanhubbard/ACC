@@ -58,9 +58,7 @@ async fn get_bootstrap(
                 std::env::var("PUBLIC_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
                 std::env::var("ACC_PORT").unwrap_or_else(|_| "8789".to_string())
             ),
-            "llm_url": std::env::var("OPENAI_BASE_URL")
-                .or_else(|_| std::env::var("LLM_URL"))
-                .unwrap_or_default(),
+            "llm_url": acc_client::llm_config::LlmConfig::load().base_url,
         })).into_response();
     }
 

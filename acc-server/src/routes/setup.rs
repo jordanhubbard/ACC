@@ -21,9 +21,7 @@ pub fn router() -> Router<Arc<AppState>> {
 async fn get_setup_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let first_run = state.auth_tokens.is_empty();
 
-    let llm_url = std::env::var("OPENAI_BASE_URL")
-        .or_else(|_| std::env::var("LLM_URL"))
-        .unwrap_or_default();
+    let llm_url = acc_client::llm_config::LlmConfig::load().base_url;
     let fs_root = std::env::var("ACC_FS_ROOT").unwrap_or_else(|_| "/srv/accfs".to_string());
     let has_accfs = std::path::Path::new(&fs_root).exists();
     let agent_name = std::env::var("AGENT_NAME").unwrap_or_else(|_| "ccc".to_string());
@@ -52,7 +50,7 @@ async fn get_config(State(state): State<Arc<AppState>>, headers: HeaderMap) -> i
     Json(json!({
         "agent_name":         std::env::var("AGENT_NAME").unwrap_or_else(|_| "ccc".to_string()),
         "public_url":         std::env::var("ACC_HOST_PUBLIC").unwrap_or_default(),
-        "llm_url":            std::env::var("OPENAI_BASE_URL").or_else(|_| std::env::var("LLM_URL")).unwrap_or_default(),
+        "llm_url":            acc_client::llm_config::LlmConfig::load().base_url,
         "supervisor_enabled": std::env::var("SUPERVISOR_ENABLED").unwrap_or_default() == "true",
         "fs_root":            std::env::var("ACC_FS_ROOT").unwrap_or_else(|_| "/srv/accfs".to_string()),
         "ccc_port":           port,

@@ -29,11 +29,9 @@ pub async fn run(workspace: Option<&str>) {
     eprintln!("[hermes-gateway] starting agent={} hub={} workspace={ws_label}",
         cfg.agent_name, cfg.acc_url);
 
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .or_else(|_| std::env::var("OPENAI_API_KEY"))
-        .unwrap_or_default();
-    let model = std::env::var("HERMES_MODEL")
-        .unwrap_or_else(|_| "claude-opus-4-7".to_string());
+    let llm_cfg = acc_client::llm_config::LlmConfig::load();
+    let model = if llm_cfg.model.is_empty() { "claude-opus-4-7".to_string() } else { llm_cfg.model.clone() };
+    let api_key = if !llm_cfg.anthropic_key.is_empty() { llm_cfg.anthropic_key } else { llm_cfg.api_key };
     let provider = make_provider(api_key, model);
     let tools = ToolRegistry::default_tools();
     let client = Client::new(&cfg.acc_url, &cfg.acc_token).expect("acc client");

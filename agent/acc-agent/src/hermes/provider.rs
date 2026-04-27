@@ -33,12 +33,6 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    pub fn new(api_key: String, model: String) -> Self {
-        let base_url = std::env::var("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
-        Self::with_base_url(api_key, model, base_url)
-    }
-
     pub fn with_base_url(api_key: String, model: String, base_url: String) -> Self {
         let base_url = base_url.trim_end_matches('/').trim_end_matches("/v1").to_string();
         let client = reqwest::Client::builder()
@@ -120,13 +114,6 @@ pub struct OpenAiProvider {
 }
 
 impl OpenAiProvider {
-    pub fn new(api_key: String, model: String) -> Self {
-        let base_url = std::env::var("OPENAI_BASE_URL")
-            .or_else(|_| std::env::var("HERMES_BACKEND_URL"))
-            .unwrap_or_else(|_| "https://api.openai.com".to_string());
-        Self::with_base_url(api_key, model, base_url)
-    }
-
     pub fn with_base_url(api_key: String, model: String, base_url: String) -> Self {
         let base_url = base_url.trim_end_matches('/').trim_end_matches("/v1").to_string();
         let client = reqwest::Client::builder()
@@ -408,16 +395,16 @@ pub fn make_provider(api_key: String, model: String) -> Box<dyn LlmProvider> {
         return Box::new(ProviderChain::new(chain_entries));
     }
 
+    let llm_cfg = acc_client::llm_config::LlmConfig::load();
     let use_openai = std::env::var("HERMES_PROVIDER").as_deref() == Ok("openai")
-        || std::env::var("OPENAI_BASE_URL").is_ok()
-        || std::env::var("HERMES_BACKEND_URL").is_ok();
+        || llm_cfg.is_openai_configured();
     if use_openai {
-        let oai_key = std::env::var("OPENAI_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .unwrap_or(api_key);
-        Box::new(OpenAiProvider::new(oai_key, model))
+        let oai_key = if !api_key.is_empty() { api_key } else { llm_cfg.api_key };
+        Box::new(OpenAiProvider::with_base_url(oai_key, model, llm_cfg.base_url))
     } else {
-        Box::new(AnthropicProvider::new(api_key, model))
+        let anthropic_url = llm_cfg.anthropic_base_url_or_default().to_string();
+        let ant_key = if !api_key.is_empty() { api_key } else { llm_cfg.anthropic_key };
+        Box::new(AnthropicProvider::with_base_url(ant_key, model, anthropic_url))
     }
 }
 

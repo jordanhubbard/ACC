@@ -12,6 +12,7 @@ name = "acc_server"
 path = "src/lib.rs"
 
 [dependencies]
+acc-client = { path = "../acc-client" }
 axum = { workspace = true, features = ["macros", "ws"] }
 portable-pty = "0.8"
 tokio.workspace = true

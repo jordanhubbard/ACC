@@ -89,6 +89,7 @@ dependencies = [
 name = "acc-server"
 version = "0.1.0"
 dependencies = [
+ "acc-client",
  "aes-gcm",
  "argon2",
  "async-stream",
