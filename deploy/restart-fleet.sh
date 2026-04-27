@@ -21,10 +21,10 @@ if [ -f "$HOME/.acc/.env" ]; then
     set +a
 fi
 
-ACC_URL="${ACC_URL:-http://localhost:8789}"
-TOKEN="${ACC_AGENT_TOKEN:-${ACC_TOKEN:-}}"
+ACC_URL="${ACC_URL:-${CCC_URL:-http://localhost:8789}}"
+TOKEN="${ACC_AGENT_TOKEN:-${ACC_TOKEN:-${CCC_AGENT_TOKEN:-}}}"
 if [ -z "$TOKEN" ]; then
-    echo "[restart-fleet] ERROR: no ACC_AGENT_TOKEN or ACC_TOKEN in env / ~/.acc/.env" >&2
+    echo "[restart-fleet] ERROR: no ACC_AGENT_TOKEN (or CCC_AGENT_TOKEN) in env / ~/.acc/.env" >&2
     exit 1
 fi
 
