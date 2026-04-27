@@ -527,6 +527,11 @@ async fn post_heartbeat(cfg: &Config, client: &Client, note: &str) {
         ssh_port: Some(cfg.ssh_port as u64),
         tasks_in_flight: None,
         estimated_free_slots: None,
+        free_session_slots: None,
+        max_sessions: None,
+        session_spawn_denied_reason: None,
+        executors: vec![],
+        sessions: vec![],
     };
     let _ = client.items().heartbeat(&cfg.agent_name, &req).await;
 }

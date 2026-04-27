@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use crate::agent::{AgentExecutor, AgentSession};
+
 /// Queue item as emitted by `/api/queue` and `/api/item/{id}`.
 ///
 /// Unknown or not-yet-modeled fields land in [`QueueItem::extra`].
@@ -140,6 +142,16 @@ pub struct HeartbeatRequest {
     /// Self-reported free capacity (how many more tasks this agent can accept).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_free_slots: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_session_slots: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_sessions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_spawn_denied_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub executors: Vec<AgentExecutor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<AgentSession>,
 }
 
 #[cfg(test)]

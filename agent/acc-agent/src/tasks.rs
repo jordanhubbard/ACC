@@ -51,6 +51,11 @@ fn spawn_keepalive(
     client: Client,
     note: String,
 ) -> tokio::sync::oneshot::Sender<()> {
+    let max_slots: u32 = std::env::var("ACC_MAX_TASKS_PER_AGENT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    let free_slots = max_slots.saturating_sub(1);
     let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(TASK_KEEPALIVE_INTERVAL);
@@ -68,8 +73,13 @@ fn spawn_keepalive(
                         ssh_user: Some(cfg.ssh_user.clone()),
                         ssh_host: Some(cfg.ssh_host.clone()),
                         ssh_port: Some(cfg.ssh_port as u64),
-                        tasks_in_flight: None,
-                        estimated_free_slots: None,
+                        tasks_in_flight: Some(1),
+                        estimated_free_slots: Some(free_slots),
+                        free_session_slots: None,
+                        max_sessions: None,
+                        session_spawn_denied_reason: None,
+                        executors: vec![],
+                        sessions: vec![],
                     };
                     let _ = client.items().heartbeat(&cfg.agent_name, &req).await;
                 }
@@ -104,6 +114,13 @@ fn in_cooldown(task_id: &str) -> bool {
         }
     }
     false
+}
+
+fn preferred_agent(task: &Value) -> Option<&str> {
+    task.get("preferred_agent")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| task["metadata"]["preferred_agent"].as_str().filter(|s| !s.is_empty()))
 }
 
 pub async fn run(args: &[String]) {
@@ -179,13 +196,13 @@ pub async fn run(args: &[String]) {
                             if task_id.is_empty() { continue; }
                             if in_cooldown(&task_id) { continue; }
 
-                            let preferred = task["metadata"]["preferred_executor"].as_str().unwrap_or("");
-                            if !preferred.is_empty()
-                                && preferred != cfg.agent_name.as_str()
-                                && online_peers.iter().any(|p| p == preferred)
-                            {
-                                log(&cfg, &format!("skipping {task_id} — preferred by {preferred} (online)"));
-                                continue;
+                            if let Some(preferred) = preferred_agent(task) {
+                                if preferred != cfg.agent_name.as_str()
+                                    && online_peers.iter().any(|p| p == preferred)
+                                {
+                                    log(&cfg, &format!("skipping {task_id} — preferred by {preferred} (online)"));
+                                    continue;
+                                }
                             }
 
                             match claim_task(&cfg, &client, &task_id).await {
@@ -227,12 +244,12 @@ pub async fn run(args: &[String]) {
                     if task_id.is_empty() { continue; }
                     if in_cooldown(&task_id) { continue; }
 
-                    let preferred = task["metadata"]["preferred_executor"].as_str().unwrap_or("");
-                    if !preferred.is_empty()
-                        && preferred != cfg.agent_name.as_str()
-                        && online_peers.iter().any(|p| p == preferred)
-                    {
-                        continue;
+                    if let Some(preferred) = preferred_agent(task) {
+                        if preferred != cfg.agent_name.as_str()
+                            && online_peers.iter().any(|p| p == preferred)
+                        {
+                            continue;
+                        }
                     }
 
                     match claim_task(&cfg, &client, &task_id).await {
@@ -515,11 +532,7 @@ async fn submit_for_review(cfg: &Config, client: &Client, task: &Value, output: 
         .unwrap_or("");
 
     let summary = &output[..output.len().min(2000)];
-    let mut meta = serde_json::json!({"work_output_summary": summary});
-    if !reviewer.is_empty() {
-        meta["preferred_executor"] = Value::String(reviewer.to_string());
-    }
-
+    let meta = serde_json::json!({"work_output_summary": summary});
     let review_desc = format!(
         "Review the completed work for task '{title}' (ID: {task_id}).\n\nWorker summary:\n{summary}\n\nCheck the shared project workspace for changes."
     );
@@ -533,6 +546,7 @@ async fn submit_for_review(cfg: &Config, client: &Client, task: &Value, output: 
         review_of: Some(task_id.to_string()),
         phase: phase.map(|p| p.to_string()),
         metadata: Some(meta),
+        preferred_agent: (!reviewer.is_empty()).then(|| reviewer.to_string()),
         ..Default::default()
     };
 
@@ -1228,7 +1242,7 @@ mod tests {
         assert_eq!(created.len(), 1);
         assert_eq!(created[0]["task_type"], "review");
         assert_eq!(created[0]["review_of"], "t-1");
-        assert_eq!(created[0]["metadata"]["preferred_executor"], "natasha");
+        assert_eq!(created[0]["preferred_agent"], "natasha");
     }
 
     #[tokio::test]
@@ -1247,9 +1261,9 @@ mod tests {
         let created = mock.state.read().await.created_tasks.lock().await.clone();
         assert_eq!(created.len(), 1);
         assert_eq!(created[0]["task_type"], "review");
-        // No preferred_executor when no peers
-        assert!(created[0]["metadata"]["preferred_executor"].is_null() ||
-                created[0]["metadata"].get("preferred_executor").is_none());
+        // No preferred_agent when no peers
+        assert!(created[0]["preferred_agent"].is_null() ||
+                created[0].get("preferred_agent").is_none());
     }
 
     #[tokio::test]
@@ -1268,8 +1282,8 @@ mod tests {
 
         let created = mock.state.read().await.created_tasks.lock().await.clone();
         assert_eq!(created.len(), 1);
-        // No other peer available, preferred_executor should be absent or empty
-        let pref = created[0]["metadata"]["preferred_executor"].as_str().unwrap_or("");
+        // No other peer available, preferred_agent should be absent or empty
+        let pref = created[0]["preferred_agent"].as_str().unwrap_or("");
         assert!(pref.is_empty());
     }
 }

@@ -94,6 +94,17 @@ pub struct Task {
     #[serde(default)]
     pub metadata: Value,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_executor: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_executors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_session: Option<String>,
+
     #[serde(default = "default_task_type")]
     pub task_type: TaskType,
 
@@ -127,6 +138,16 @@ pub struct CreateTaskRequest {
     pub task_type: Option<TaskType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_executor: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_executors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -231,6 +252,25 @@ mod tests {
         assert_eq!(t.task_type, TaskType::Work);
         assert!(t.claimed_by.is_none());
         assert!(t.blocked_by.is_empty());
+    }
+
+    #[test]
+    fn task_affinity_fields_deserialize() {
+        let json = r#"{
+            "id": "task-2",
+            "status": "open",
+            "preferred_executor": "claude_cli",
+            "required_executors": ["claude_cli", "codex_cli"],
+            "preferred_agent": "natasha",
+            "assigned_agent": "boris",
+            "assigned_session": "proj-main"
+        }"#;
+        let t: Task = serde_json::from_str(json).unwrap();
+        assert_eq!(t.preferred_executor.as_deref(), Some("claude_cli"));
+        assert_eq!(t.required_executors, vec!["claude_cli", "codex_cli"]);
+        assert_eq!(t.preferred_agent.as_deref(), Some("natasha"));
+        assert_eq!(t.assigned_agent.as_deref(), Some("boris"));
+        assert_eq!(t.assigned_session.as_deref(), Some("proj-main"));
     }
 
     #[test]

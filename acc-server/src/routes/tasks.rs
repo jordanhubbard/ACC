@@ -51,6 +51,11 @@ const TASK_COLS: &str = "id,project_id,title,description,status,priority,claimed
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Value> {
     let metadata_str: String = row.get(12)?;
     let metadata: Value = serde_json::from_str(&metadata_str).unwrap_or(json!({}));
+    let preferred_executor = metadata.get("preferred_executor").cloned().unwrap_or(Value::Null);
+    let required_executors = metadata.get("required_executors").cloned().unwrap_or_else(|| json!([]));
+    let preferred_agent = metadata.get("preferred_agent").cloned().unwrap_or(Value::Null);
+    let assigned_agent = metadata.get("assigned_agent").cloned().unwrap_or(Value::Null);
+    let assigned_session = metadata.get("assigned_session").cloned().unwrap_or(Value::Null);
     let blocked_by_str: String = row.get(16).unwrap_or_else(|_| "[]".to_string());
     let blocked_by: Value = serde_json::from_str(&blocked_by_str).unwrap_or(json!([]));
     let output_val: Value = {
@@ -76,6 +81,11 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Value> {
         "completed_by":     row.get::<_, Option<String>>(10)?,
         "created_at":       row.get::<_, String>(11)?,
         "metadata":         metadata,
+        "preferred_executor": preferred_executor,
+        "required_executors": required_executors,
+        "preferred_agent":  preferred_agent,
+        "assigned_agent":   assigned_agent,
+        "assigned_session": assigned_session,
         "task_type":        row.get::<_, String>(13).unwrap_or_else(|_| "work".to_string()),
         "review_of":        row.get::<_, Option<String>>(14)?,
         "phase":            row.get::<_, Option<String>>(15)?,
@@ -192,6 +202,27 @@ async fn create_task(
         let mut m: serde_json::Value = body.get("metadata")
             .cloned()
             .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(preferred_executor) = body.get("preferred_executor").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            m["preferred_executor"] = serde_json::json!(preferred_executor);
+        }
+        if let Some(preferred_agent) = body.get("preferred_agent").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            m["preferred_agent"] = serde_json::json!(preferred_agent);
+        }
+        if let Some(assigned_agent) = body.get("assigned_agent").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            m["assigned_agent"] = serde_json::json!(assigned_agent);
+        }
+        if let Some(assigned_session) = body.get("assigned_session").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            m["assigned_session"] = serde_json::json!(assigned_session);
+        }
+        if let Some(required_executors) = body.get("required_executors").and_then(|v| v.as_array()) {
+            let required: Vec<String> = required_executors
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            if !required.is_empty() {
+                m["required_executors"] = serde_json::json!(required);
+            }
+        }
         if task_type == "idea" {
             if let Some(agent) = body.get("agent").and_then(|v| v.as_str()) {
                 m["created_by"] = serde_json::json!(agent);

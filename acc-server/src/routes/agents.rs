@@ -43,6 +43,140 @@ fn online_status(agent: &Value) -> &'static str {
     if is_online(agent) { "online" } else { "offline" }
 }
 
+const KNOWN_EXECUTORS: &[&str] = &[
+    "claude_cli",
+    "codex_cli",
+    "cursor_cli",
+    "opencode",
+    "inference_key",
+    "gpu",
+    "vllm",
+    "ollama",
+    "hermes",
+];
+
+fn string_list(value: Option<&Value>) -> Vec<String> {
+    value.and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn normalize_capabilities_map(raw: Option<&Value>, existing: Option<&Value>) -> serde_json::Map<String, Value> {
+    let mut map = serde_json::Map::new();
+    for source in [existing, raw] {
+        match source {
+            Some(Value::Object(obj)) => {
+                for (k, v) in obj {
+                    map.insert(k.clone(), v.clone());
+                }
+            }
+            Some(Value::Array(arr)) => {
+                for cap in arr.iter().filter_map(|v| v.as_str()) {
+                    map.insert(cap.to_string(), json!(true));
+                }
+            }
+            _ => {}
+        }
+    }
+    map
+}
+
+fn merge_string_lists(primary: Vec<String>, secondary: Vec<String>) -> Vec<String> {
+    let mut merged = Vec::new();
+    for value in primary.into_iter().chain(secondary.into_iter()) {
+        if !value.is_empty() && !merged.iter().any(|v| v == &value) {
+            merged.push(value);
+        }
+    }
+    merged
+}
+
+fn derive_executors(body: &Value, existing: &Value, caps: &serde_json::Map<String, Value>, tool_capabilities: &[String]) -> Vec<Value> {
+    if let Some(executors) = body.get("executors").and_then(|v| v.as_array()) {
+        return executors.clone();
+    }
+    if let Some(executors) = existing.get("executors").and_then(|v| v.as_array()) {
+        return executors.clone();
+    }
+
+    let mut names: Vec<String> = caps.iter()
+        .filter_map(|(name, val)| val.as_bool().filter(|b| *b).map(|_| name.clone()))
+        .filter(|name| KNOWN_EXECUTORS.contains(&name.as_str()))
+        .collect();
+    for cap in tool_capabilities {
+        if KNOWN_EXECUTORS.contains(&cap.as_str()) && !names.iter().any(|n| n == cap) {
+            names.push(cap.clone());
+        }
+    }
+    names.sort();
+    names.into_iter()
+        .map(|executor| json!({"executor": executor, "ready": true, "auth_state": "unknown"}))
+        .collect()
+}
+
+fn normalize_capacity(body: &Value, existing: &Value) -> Value {
+    let mut capacity = existing.get("capacity")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    if let Some(obj) = body.get("capacity").and_then(|v| v.as_object()) {
+        for (k, v) in obj {
+            capacity.insert(k.clone(), v.clone());
+        }
+    }
+    for key in [
+        "tasks_in_flight",
+        "estimated_free_slots",
+        "free_session_slots",
+        "max_sessions",
+        "session_spawn_denied_reason",
+    ] {
+        if let Some(val) = body.get(key).cloned().or_else(|| existing.get(key).cloned()) {
+            capacity.insert(key.to_string(), val);
+        }
+    }
+    if capacity.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(capacity)
+    }
+}
+
+fn refresh_canonical_agent_shape(agent: &mut Value, body: &Value) {
+    let existing = agent.clone();
+    let caps = normalize_capabilities_map(body.get("capabilities"), existing.get("capabilities"));
+    let tool_caps = merge_string_lists(
+        string_list(body.get("tool_capabilities")),
+        merge_string_lists(
+            string_list(existing.get("tool_capabilities")),
+            string_list(body.get("capabilities")),
+        ),
+    );
+    let executors = derive_executors(body, &existing, &caps, &tool_caps);
+    let sessions = body.get("sessions")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .or_else(|| existing.get("sessions").and_then(|v| v.as_array()).cloned())
+        .unwrap_or_default();
+    let capacity = normalize_capacity(body, &existing);
+
+    agent["capabilities"] = Value::Object(caps);
+    agent["tool_capabilities"] = json!(tool_caps);
+    agent["executors"] = json!(executors);
+    agent["sessions"] = json!(sessions);
+    if capacity.is_null() {
+        if let Some(obj) = agent.as_object_mut() {
+            obj.remove("capacity");
+        }
+    } else {
+        agent["capacity"] = capacity;
+    }
+}
+
 // GET /api/agents[?online=true]
 // ?online=true — return only agents whose lastSeen is within 300s
 async fn get_agents(
@@ -179,6 +313,8 @@ async fn agent_heartbeat(
         "ram", "ram_used_mb", "ram_avail_mb", "ram_total_mb",
         "ollama_status", "ollama_models", "ccc_version",
         "ssh_user", "ssh_host", "ssh_port",
+        "tasks_in_flight", "estimated_free_slots",
+        "free_session_slots", "max_sessions", "session_spawn_denied_reason",
     ];
 
     if let Some(agent_obj) = agents_map.get_mut(&agent_name) {
@@ -190,10 +326,11 @@ async fn agent_heartbeat(
                 }
             }
         }
+        refresh_canonical_agent_shape(agent_obj, &body);
     } else {
         let host = body.get("host").and_then(|h| h.as_str()).unwrap_or("unknown").to_string();
         let token = format!("acc-agent-{}-{}",agent_name, uuid::Uuid::new_v4().to_string().replace('-', ""));
-        agents_map.insert(agent_name.clone(), json!({
+        let mut record = json!({
             "name": agent_name,
             "host": host,
             "type": "full",
@@ -202,7 +339,9 @@ async fn agent_heartbeat(
             "lastSeen": now,
             "capabilities": body.get("capabilities").cloned().unwrap_or(json!({})),
             "billing": {"claude_cli": "fixed", "inference_key": "metered", "gpu": "fixed"},
-        }));
+        });
+        refresh_canonical_agent_shape(&mut record, &body);
+        agents_map.insert(agent_name.clone(), record);
     }
 
     drop(agents);
@@ -234,26 +373,7 @@ async fn register_agent(
     let now = chrono::Utc::now().to_rfc3339();
     let existing = agents_map.get(&name).cloned().unwrap_or(json!({}));
 
-    let caps_raw = body.get("capabilities").cloned().unwrap_or(json!({}));
-    let existing_caps = existing.get("capabilities").cloned().unwrap_or(json!({}));
-
-    // Support both array format (["openclaw", "claude"]) and legacy boolean-map format
-    let capabilities_value = if caps_raw.is_array() {
-        caps_raw.clone()
-    } else {
-        let caps = &caps_raw;
-        json!({
-            "claude_cli": caps.get("claude_cli").or_else(|| existing_caps.get("claude_cli")).and_then(|v| v.as_bool()).unwrap_or(true),
-            "inference_key": caps.get("inference_key").or_else(|| existing_caps.get("inference_key")).and_then(|v| v.as_bool()).unwrap_or(true),
-            "gpu": caps.get("gpu").or_else(|| existing_caps.get("gpu")).and_then(|v| v.as_bool()).unwrap_or(false),
-            "tailscale": caps.get("tailscale").or_else(|| existing_caps.get("tailscale")).and_then(|v| v.as_bool()).unwrap_or(false),
-            "tailscale_ip": caps.get("tailscale_ip").or_else(|| existing_caps.get("tailscale_ip")).cloned().unwrap_or(json!(null)),
-            "vllm": caps.get("vllm").or_else(|| existing_caps.get("vllm")).and_then(|v| v.as_bool()).unwrap_or(false),
-            "vllm_port": caps.get("vllm_port").or_else(|| existing_caps.get("vllm_port")).and_then(|v| v.as_u64()).unwrap_or(8080),
-        })
-    };
-
-    let agent = json!({
+    let mut agent = json!({
         "name": name,
         "host": body.get("host").or_else(|| existing.get("host")).and_then(|h| h.as_str()).unwrap_or("unknown"),
         "type": body.get("type").or_else(|| existing.get("type")).and_then(|t| t.as_str()).unwrap_or("full"),
@@ -264,13 +384,14 @@ async fn register_agent(
         "token": token,
         "registeredAt": existing.get("registeredAt").cloned().unwrap_or(json!(now)),
         "lastSeen": json!(now),
-        "capabilities": capabilities_value,
+        "capabilities": body.get("capabilities").or_else(|| existing.get("capabilities")).cloned().unwrap_or(json!({})),
         "billing": {
             "claude_cli": "fixed",
             "inference_key": "metered",
             "gpu": "fixed",
         },
     });
+    refresh_canonical_agent_shape(&mut agent, &body);
 
     agents_map.insert(name.clone(), agent.clone());
     drop(agents);
@@ -298,7 +419,7 @@ async fn upsert_agent(
 
     if !agents_map.contains_key(&name) {
         let token = format!("acc-agent-{}-{}",name, uuid::Uuid::new_v4().to_string().replace('-', ""));
-        agents_map.insert(name.clone(), json!({
+        let mut record = json!({
             "name": name,
             "host": body.get("host").and_then(|h| h.as_str()).unwrap_or("unknown"),
             "type": body.get("type").and_then(|t| t.as_str()).unwrap_or("full"),
@@ -307,17 +428,18 @@ async fn upsert_agent(
             "lastSeen": null,
             "capabilities": body.get("capabilities").cloned().unwrap_or(json!({})),
             "billing": {"claude_cli": "fixed", "inference_key": "metered", "gpu": "fixed"},
-        }));
+        });
+        refresh_canonical_agent_shape(&mut record, &body);
+        agents_map.insert(name.clone(), record);
     } else {
         let agent = agents_map.get_mut(&name).unwrap().as_object_mut().unwrap();
         if let Some(h) = body.get("host").and_then(|h| h.as_str()) { agent.insert("host".into(), json!(h)); }
         if let Some(t) = body.get("type").and_then(|t| t.as_str()) { agent.insert("type".into(), json!(t)); }
         if let Some(caps) = body.get("capabilities") {
-            let existing_caps = agent.entry("capabilities").or_insert(json!({}));
-            if let (Some(ec), Some(nc)) = (existing_caps.as_object_mut(), caps.as_object()) {
-                for (k, v) in nc { ec.insert(k.clone(), v.clone()); }
-            }
+            agent.insert("capabilities".into(), caps.clone());
         }
+        let value = agents_map.get_mut(&name).unwrap();
+        refresh_canonical_agent_shape(value, &body);
     }
 
     let token = agents_map[&name].get("token").and_then(|t| t.as_str()).unwrap_or("").to_string();
@@ -346,11 +468,8 @@ async fn patch_agent(
 
     if let Some(h) = body.get("host").and_then(|h| h.as_str()) { agent.insert("host".into(), json!(h)); }
     if let Some(t) = body.get("type").and_then(|t| t.as_str()) { agent.insert("type".into(), json!(t)); }
-    if let Some(caps) = body.get("capabilities").and_then(|c| c.as_object()) {
-        let existing_caps = agent.entry("capabilities").or_insert(json!({}));
-        if let Some(ec) = existing_caps.as_object_mut() {
-            for (k, v) in caps { ec.insert(k.clone(), v.clone()); }
-        }
+    if let Some(caps) = body.get("capabilities") {
+        agent.insert("capabilities".into(), caps.clone());
     }
     if let Some(billing) = body.get("billing").and_then(|b| b.as_object()) {
         let existing_billing = agent.entry("billing").or_insert(json!({}));
@@ -369,6 +488,8 @@ async fn patch_agent(
             agent.insert("onlineStatus".into(), json!("unknown"));
         }
     }
+    let updated_value = agents_map.get_mut(&name).unwrap();
+    refresh_canonical_agent_shape(updated_value, &body);
 
     let updated = agents_map[&name].clone();
     drop(agents);
@@ -424,6 +545,7 @@ async fn register_tool_capabilities(
     let agent = agents_map.entry(name.clone()).or_insert(json!({}));
     agent["tool_capabilities"] = serde_json::json!(caps);
     agent["lastSeen"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+    refresh_canonical_agent_shape(agent, &json!({"tool_capabilities": caps}));
     drop(agents);
     state::db_flush_agents(&state).await;
 
@@ -448,6 +570,7 @@ async fn post_heartbeat(
         "ollama_status", "ollama_models", "ccc_version",
         "ssh_user", "ssh_host", "ssh_port",
         "tasks_in_flight", "estimated_free_slots",
+        "free_session_slots", "max_sessions", "session_spawn_denied_reason",
     ];
 
     let mut agents = state.agents.write().await;
@@ -464,6 +587,9 @@ async fn post_heartbeat(
                     obj.insert((*key).to_string(), val.clone());
                 }
             }
+        }
+        if let Some(agent_obj) = agents.as_object_mut().and_then(|m| m.get_mut(&agent)) {
+            refresh_canonical_agent_shape(agent_obj, &body);
         }
     }
     drop(agents);

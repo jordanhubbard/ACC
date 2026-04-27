@@ -526,22 +526,27 @@ pub fn select_best_agent(
     blacklist: &[String],
     max_per_agent: usize,
 ) -> Option<String> {
-    let required_executor = task["metadata"]["preferred_executor"].as_str()
-        .filter(|s| !s.is_empty());
+    let preferred_executor = task.get("preferred_executor")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| task["metadata"]["preferred_executor"].as_str().filter(|s| !s.is_empty()));
+    let required_executors: Vec<&str> = task.get("required_executors")
+        .and_then(|v| v.as_array())
+        .or_else(|| task["metadata"]["required_executors"].as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
 
-    let mut candidates: Vec<(String, usize)> = agents.as_object()?
+    let mut candidates: Vec<(String, usize, bool)> = agents.as_object()?
         .iter()
         .filter_map(|(name, agent)| {
             if !is_agent_online(agent) { return None; }
             if blacklist.contains(name) { return None; }
             let load = *claimed_counts.get(name).unwrap_or(&0);
             if load >= max_per_agent { return None; }
-            if let Some(req) = required_executor {
-                let caps = &agent["capabilities"];
-                let has_cap = caps.get(req)
-                    .map(|v| v.as_bool().unwrap_or(false) || v.as_str().map(|s| !s.is_empty()).unwrap_or(false))
-                    .unwrap_or(false);
-                if !has_cap { return None; }
+            if !required_executors.is_empty()
+                && !required_executors.iter().any(|req| agent_supports_executor(agent, req))
+            {
+                return None;
             }
             // Check task metadata.requires[] against agent's registered tool_capabilities[]
             if let Some(requires) = task["metadata"]["requires"].as_array() {
@@ -560,15 +565,42 @@ pub fn select_best_agent(
                     }
                 }
             }
-            Some((name.clone(), load))
+            let prefers = preferred_executor
+                .map(|req| agent_supports_executor(agent, req))
+                .unwrap_or(false);
+            Some((name.clone(), load, prefers))
         })
         .collect();
 
     if candidates.is_empty() { return None; }
 
-    // Sort: least loaded first, alphabetical tiebreak
-    candidates.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+    if preferred_executor.is_some() && candidates.iter().any(|c| c.2) {
+        candidates.retain(|c| c.2);
+    }
+
+    // Sort: preferred executor first, then least loaded, then alphabetical
+    candidates.sort_by(|a, b| b.2.cmp(&a.2).then(a.1.cmp(&b.1)).then(a.0.cmp(&b.0)));
     Some(candidates.into_iter().next()?.0)
+}
+
+fn agent_supports_executor(agent: &Value, executor: &str) -> bool {
+    if agent["executors"]
+        .as_array()
+        .map(|arr| {
+            arr.iter().any(|entry| {
+                entry.get("executor").and_then(|v| v.as_str()) == Some(executor)
+                    && entry.get("ready").and_then(|v| v.as_bool()).unwrap_or(true)
+            })
+        })
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let caps = &agent["capabilities"];
+    caps.get(executor)
+        .map(|v| v.as_bool().unwrap_or(false) || v.as_str().map(|s| !s.is_empty()).unwrap_or(false))
+        .unwrap_or(false)
 }
 
 /// Check if an agent is online (lastSeen within 300s).
@@ -904,7 +936,8 @@ pub async fn detect_idle_agents(
             let max_per_agent = cfg.max_tasks_per_agent;
             let has_work = open_real_tasks.iter().any(|task| {
                 select_best_agent(task, agents, claimed_counts, &[], max_per_agent).as_deref() == Some(name.as_str())
-                || task["metadata"]["preferred_executor"].as_str().is_none()
+                || (task.get("preferred_agent").and_then(|v| v.as_str()).is_none()
+                    && task["metadata"]["preferred_agent"].as_str().is_none())
             });
             if has_work { continue; }
 
@@ -1138,9 +1171,13 @@ mod tests {
             for cap in *caps {
                 caps_map.insert(cap.to_string(), json!(true));
             }
+            let executors: Vec<Value> = caps.iter()
+                .map(|cap| json!({"executor": cap, "ready": true}))
+                .collect();
             map.insert(name.to_string(), json!({
                 "lastSeen": last_seen,
                 "capabilities": caps_map,
+                "executors": executors,
             }));
         }
         Value::Object(map)
@@ -1151,7 +1188,7 @@ mod tests {
         if let Some(exec) = preferred_executor {
             meta["preferred_executor"] = json!(exec);
         }
-        json!({ "id": "task-1", "metadata": meta })
+        json!({ "id": "task-1", "metadata": meta, "preferred_executor": preferred_executor })
     }
 
     #[test]
@@ -1174,6 +1211,21 @@ mod tests {
         let task = make_task(Some("gpu"));
         let result = select_best_agent(&task, &agents, &HashMap::new(), &[], 99);
         assert_eq!(result.as_deref(), Some("gpu-agent"));
+    }
+
+    #[test]
+    fn test_required_executors_is_hard_filter() {
+        let agents = make_agents(&[
+            ("claude-agent", true, &["claude_cli"], 10),
+            ("codex-agent", true, &["codex_cli"], 10),
+        ]);
+        let task = json!({
+            "id": "task-2",
+            "required_executors": ["codex_cli"],
+            "metadata": {"required_executors": ["codex_cli"]}
+        });
+        let result = select_best_agent(&task, &agents, &HashMap::new(), &[], 99);
+        assert_eq!(result.as_deref(), Some("codex-agent"));
     }
 
     #[test]

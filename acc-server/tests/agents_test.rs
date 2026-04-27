@@ -32,6 +32,8 @@ async fn register_agent_creates_with_token() {
     let token = body["token"].as_str().unwrap();
     assert!(token.starts_with("acc-agent-hermes-"), "token must start with acc-agent-{{name}}-");
     assert_eq!(body["agent"]["name"], "hermes");
+    assert!(body["agent"]["executors"].is_array());
+    assert!(body["agent"]["sessions"].is_array());
 }
 
 #[tokio::test]
@@ -92,6 +94,28 @@ async fn heartbeat_registers_agent() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = helpers::body_json(resp).await;
     assert_eq!(body["agent"]["name"].as_str().unwrap_or(""), "test-node");
+    assert_eq!(body["agent"]["executors"][0]["executor"], "claude_cli");
+}
+
+#[tokio::test]
+async fn register_agent_normalizes_canonical_executor_shape() {
+    let srv = helpers::TestServer::new().await;
+    let resp = helpers::call(
+        &srv.app,
+        helpers::post_json("/api/agents/register", &json!({
+            "name": "codex-node",
+            "capabilities": {"codex_cli": true, "gpu": false},
+            "tool_capabilities": ["bash", "read_file"],
+            "sessions": [{"name": "proj-main", "executor": "codex_cli", "state": "idle"}],
+            "capacity": {"tasks_in_flight": 1, "estimated_free_slots": 2, "free_session_slots": 1}
+        })),
+    ).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = helpers::body_json(resp).await;
+    assert_eq!(body["agent"]["tool_capabilities"][0], "bash");
+    assert_eq!(body["agent"]["executors"][0]["executor"], "codex_cli");
+    assert_eq!(body["agent"]["sessions"][0]["name"], "proj-main");
+    assert_eq!(body["agent"]["capacity"]["free_session_slots"], 1);
 }
 
 #[tokio::test]
@@ -126,6 +150,34 @@ async fn alternate_heartbeat_returns_ok_and_pending_work() {
     let body = helpers::body_json(resp).await;
     assert_eq!(body["ok"], true);
     assert!(body["pendingWork"].is_array());
+}
+
+#[tokio::test]
+async fn alternate_heartbeat_updates_capacity_and_sessions() {
+    let srv = helpers::TestServer::new().await;
+    helpers::call(
+        &srv.app,
+        helpers::post_json("/api/agents/register", &json!({"name": "heartbeat-node"})),
+    ).await;
+
+    let resp = helpers::call(
+        &srv.app,
+        helpers::post_json("/api/heartbeat/heartbeat-node", &json!({
+            "tasks_in_flight": 1,
+            "estimated_free_slots": 2,
+            "free_session_slots": 1,
+            "executors": [{"executor": "claude_cli", "ready": true, "auth_state": "ready"}],
+            "sessions": [{"name": "proj-a", "executor": "claude_cli", "state": "busy"}]
+        })),
+    ).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = helpers::body_json(
+        helpers::call(&srv.app, helpers::get("/api/agents/heartbeat-node")).await,
+    ).await;
+    assert_eq!(body["agent"]["capacity"]["tasks_in_flight"], 1);
+    assert_eq!(body["agent"]["capacity"]["free_session_slots"], 1);
+    assert_eq!(body["agent"]["sessions"][0]["name"], "proj-a");
 }
 
 #[tokio::test]
