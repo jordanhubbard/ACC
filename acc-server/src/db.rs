@@ -709,6 +709,86 @@ pub fn auth_all_token_hashes(conn: &Connection) -> Vec<String> {
     result
 }
 
+// ── DAG helpers ───────────────────────────────────────────────────────────────
+
+/// Returns all `blocked_by` mappings from fleet_tasks: task_id → list of blockers.
+/// Used by cycle detection before inserting or updating a task's dependencies.
+pub fn db_all_blocked_by(conn: &Connection) -> std::collections::HashMap<String, Vec<String>> {
+    let mut stmt = match conn.prepare(
+        "SELECT id, blocked_by FROM fleet_tasks \
+         WHERE blocked_by IS NOT NULL AND blocked_by != '[]'"
+    ) {
+        Ok(s) => s,
+        Err(_) => return std::collections::HashMap::new(),
+    };
+    let mut map = std::collections::HashMap::new();
+    let _ = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }).map(|rows| {
+        for (id, bj) in rows.flatten() {
+            let blockers: Vec<String> = serde_json::from_str(&bj).unwrap_or_default();
+            if !blockers.is_empty() {
+                map.insert(id, blockers);
+            }
+        }
+    });
+    map
+}
+
+/// Finds open tasks whose `blocked_by` list contains `completed_id` and are now
+/// fully unblocked (all blockers completed and not review-rejected).
+///
+/// Called after a task completes or a review is approved to discover tasks
+/// that should now be dispatched.
+pub fn db_find_newly_unblocked(conn: &Connection, completed_id: &str) -> Vec<String> {
+    // LIKE search: the JSON array encodes IDs as quoted strings, so we look
+    // for `"task-abc"` within the stored JSON text. This is reliable because
+    // task IDs never contain embedded quotes.
+    let pattern = format!("%\"{completed_id}\"%");
+    let mut stmt = match conn.prepare(
+        "SELECT id, blocked_by FROM fleet_tasks WHERE status='open' AND blocked_by LIKE ?1"
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    let candidates: Vec<(String, Vec<String>)> = stmt
+        .query_map(params![pattern], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map(|rows| {
+            rows.flatten()
+                .filter_map(|(id, bj)| {
+                    let blockers: Vec<String> = serde_json::from_str(&bj).unwrap_or_default();
+                    // Confirm the LIKE match is exact (not a substring false-positive).
+                    if blockers.contains(&completed_id.to_string()) {
+                        Some((id, blockers))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // For each candidate, verify ALL its blockers are satisfied.
+    candidates
+        .into_iter()
+        .filter(|(_, blockers)| {
+            blockers.iter().all(|blocker_id| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM fleet_tasks WHERE id=?1 AND status='completed' \
+                     AND (review_result IS NULL OR review_result != 'rejected')",
+                    params![blocker_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0) > 0
+            })
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

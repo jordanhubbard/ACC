@@ -355,6 +355,26 @@ async fn subscribe_bus(cfg: &Config, client: &Client, nudge: &Arc<Notify>) -> Re
         let is_broadcast = to.is_empty() || to == "null";
 
         if kind == "tasks:dispatch_nudge" && (is_directed_to_us || is_broadcast) {
+            // If the nudge carries capability requirements, skip wakeup if we lack them.
+            // This avoids spurious polls when the task requires e.g. gpu and we're cpu-only.
+            if let Some(requires) = msg.extra.get("requires").and_then(|v| v.as_array()) {
+                if !requires.is_empty() {
+                    let my_caps: std::collections::HashSet<String> =
+                        std::env::var("AGENT_CAPABILITIES")
+                            .unwrap_or_default()
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    let satisfied = requires.iter()
+                        .filter_map(|v| v.as_str())
+                        .any(|r| my_caps.contains(r));
+                    if !satisfied {
+                        // Skip: we don't have any of the required capabilities.
+                        continue;
+                    }
+                }
+            }
             nudge.notify_one();
         } else if kind == "tasks:dispatch_assigned" && is_directed_to_us {
             nudge.notify_one();

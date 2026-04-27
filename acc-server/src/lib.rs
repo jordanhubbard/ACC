@@ -1,6 +1,7 @@
 pub mod brain;
 pub mod bus_types;
 pub mod config;
+pub mod dag;
 pub mod db;
 pub mod dispatch;
 pub mod routes;

@@ -567,3 +567,237 @@ async fn test_set_review_result_unknown_task_returns_404() {
     ).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+// ── DAG: cycle detection ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_create_task_with_valid_blocked_by() {
+    let ts = helpers::TestServer::new().await;
+    let dep = create_task(&ts, "proj-1", "Dependency task").await;
+    let dep_id = dep["id"].as_str().unwrap();
+
+    let resp = helpers::call(
+        &ts.app,
+        helpers::post_json("/api/tasks", &json!({
+            "project_id": "proj-1",
+            "title": "Dependent task",
+            "blocked_by": [dep_id]
+        })),
+    ).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = helpers::body_json(resp).await;
+    assert_eq!(body["task"]["blocked_by"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_create_task_self_cycle_rejected() {
+    // A task can't depend on itself.
+    // Since the ID is generated server-side we can't easily pre-specify it,
+    // but we CAN update an existing task's blocked_by to point to itself.
+    let ts = helpers::TestServer::new().await;
+    let task = create_task(&ts, "proj-1", "Self-looping task").await;
+    let id = task["id"].as_str().unwrap();
+
+    let resp = helpers::call(
+        &ts.app,
+        helpers::put_json(&format!("/api/tasks/{id}"), &json!({"blocked_by": [id]})),
+    ).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY, "self-cycle must be rejected");
+}
+
+#[tokio::test]
+async fn test_update_task_cycle_in_chain_rejected() {
+    let ts = helpers::TestServer::new().await;
+    let a = create_task(&ts, "proj-1", "Task A").await;
+    let b = create_task(&ts, "proj-1", "Task B").await;
+    let aid = a["id"].as_str().unwrap();
+    let bid = b["id"].as_str().unwrap();
+
+    // Make B depend on A
+    let resp = helpers::call(
+        &ts.app,
+        helpers::put_json(&format!("/api/tasks/{bid}"), &json!({"blocked_by": [aid]})),
+    ).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Now try to make A depend on B — would create A→B→A cycle
+    let resp = helpers::call(
+        &ts.app,
+        helpers::put_json(&format!("/api/tasks/{aid}"), &json!({"blocked_by": [bid]})),
+    ).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY, "A→B→A cycle must be rejected");
+}
+
+// ── DAG: auto-unblock on complete ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_complete_task_unblocks_dependents() {
+    let ts = helpers::TestServer::new().await;
+    let blocker = create_task(&ts, "proj-dag", "Blocker").await;
+    let blocker_id = blocker["id"].as_str().unwrap().to_string();
+
+    // Create a task blocked by blocker
+    let dep_resp = helpers::call(
+        &ts.app,
+        helpers::post_json("/api/tasks", &json!({
+            "project_id": "proj-dag",
+            "title": "Waiting task",
+            "blocked_by": [&blocker_id]
+        })),
+    ).await;
+    let dep_id = helpers::body_json(dep_resp).await["task"]["id"].as_str().unwrap().to_string();
+
+    // Claim the blocker
+    helpers::call(
+        &ts.app,
+        helpers::put_json(&format!("/api/tasks/{blocker_id}/claim"), &json!({"agent":"bob"})),
+    ).await;
+
+    // Complete the blocker
+    helpers::call(
+        &ts.app,
+        helpers::put_json(&format!("/api/tasks/{blocker_id}/complete"), &json!({"agent":"bob"})),
+    ).await;
+
+    // Verify dep is now claimable (no longer blocked)
+    let claim_resp = helpers::call(
+        &ts.app,
+        helpers::put_json(&format!("/api/tasks/{dep_id}/claim"), &json!({"agent":"alice"})),
+    ).await;
+    assert_eq!(claim_resp.status(), StatusCode::OK, "dependent must be claimable after blocker completes");
+}
+
+// ── GET /api/tasks/graph ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_get_task_graph_empty() {
+    let ts = helpers::TestServer::new().await;
+    let resp = helpers::call(&ts.app, helpers::get("/api/tasks/graph")).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = helpers::body_json(resp).await;
+    assert_eq!(body["node_count"], 0);
+    assert_eq!(body["edge_count"], 0);
+    assert!(body["nodes"].as_array().unwrap().is_empty());
+    assert!(body["edges"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_get_task_graph_with_dependency_edge() {
+    let ts = helpers::TestServer::new().await;
+    let a = create_task(&ts, "proj-g", "Task A").await;
+    let aid = a["id"].as_str().unwrap();
+
+    // Create B depending on A
+    let resp = helpers::call(
+        &ts.app,
+        helpers::post_json("/api/tasks", &json!({
+            "project_id": "proj-g",
+            "title": "Task B",
+            "blocked_by": [aid]
+        })),
+    ).await;
+    let bid = helpers::body_json(resp).await["task"]["id"].as_str().unwrap().to_string();
+
+    let graph = helpers::body_json(
+        helpers::call(&ts.app, helpers::get("/api/tasks/graph")).await
+    ).await;
+
+    assert_eq!(graph["node_count"], 2);
+    assert_eq!(graph["edge_count"], 1);
+    let edges = graph["edges"].as_array().unwrap();
+    assert!(edges.iter().any(|e| e["from"] == bid && e["to"] == aid));
+}
+
+// ── POST /api/tasks/:id/fanout ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_fanout_creates_children_and_join_gate() {
+    let ts = helpers::TestServer::new().await;
+    let parent = create_task(&ts, "proj-f", "Parent task").await;
+    let pid = parent["id"].as_str().unwrap().to_string();
+
+    let resp = helpers::call(
+        &ts.app,
+        helpers::post_json(&format!("/api/tasks/{pid}/fanout"), &json!({
+            "tasks": [
+                {"title": "Child 1", "description": "first child"},
+                {"title": "Child 2", "description": "second child"}
+            ]
+        })),
+    ).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = helpers::body_json(resp).await;
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["children"].as_array().unwrap().len(), 2);
+
+    // Parent should now be a join gate blocked by both children
+    let parent_resp = helpers::call(
+        &ts.app,
+        helpers::get(&format!("/api/tasks/{pid}")),
+    ).await;
+    let parent_task = helpers::body_json(parent_resp).await;
+    let blocked_by = parent_task["blocked_by"].as_array().unwrap();
+    assert_eq!(blocked_by.len(), 2, "parent must be blocked by both children");
+
+    // Children should be independently claimable
+    let child_id = body["children"][0].as_str().unwrap().to_string();
+    let claim_resp = helpers::call(
+        &ts.app,
+        helpers::put_json(&format!("/api/tasks/{child_id}/claim"), &json!({"agent":"worker"})),
+    ).await;
+    assert_eq!(claim_resp.status(), StatusCode::OK, "child task must be claimable");
+}
+
+#[tokio::test]
+async fn test_fanout_parent_unblocks_when_all_children_complete() {
+    let ts = helpers::TestServer::new().await;
+    let parent = create_task(&ts, "proj-f2", "Join parent").await;
+    let pid = parent["id"].as_str().unwrap().to_string();
+
+    let fanout = helpers::body_json(
+        helpers::call(
+            &ts.app,
+            helpers::post_json(&format!("/api/tasks/{pid}/fanout"), &json!({
+                "tasks": [{"title": "Child A"}, {"title": "Child B"}]
+            })),
+        ).await
+    ).await;
+    let children = fanout["children"].as_array().unwrap().clone();
+    let c1 = children[0].as_str().unwrap().to_string();
+    let c2 = children[1].as_str().unwrap().to_string();
+
+    // Complete both children
+    for cid in [&c1, &c2] {
+        helpers::call(&ts.app, helpers::put_json(&format!("/api/tasks/{cid}/claim"), &json!({"agent":"w"}))).await;
+        helpers::call(&ts.app, helpers::put_json(&format!("/api/tasks/{cid}/complete"), &json!({"agent":"w"}))).await;
+    }
+
+    // Parent join gate should now be claimable
+    let claim_resp = helpers::call(
+        &ts.app,
+        helpers::put_json(&format!("/api/tasks/{pid}/claim"), &json!({"agent":"joiner"})),
+    ).await;
+    assert_eq!(claim_resp.status(), StatusCode::OK, "join gate must be claimable after all children complete");
+}
+
+#[tokio::test]
+async fn test_fanout_unknown_parent_returns_404() {
+    let ts = helpers::TestServer::new().await;
+    let resp = helpers::call(
+        &ts.app,
+        helpers::post_json("/api/tasks/no-such/fanout", &json!({"tasks":[{"title":"x"}]})),
+    ).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_fanout_empty_tasks_returns_400() {
+    let ts = helpers::TestServer::new().await;
+    let parent = create_task(&ts, "proj-f3", "Parent").await;
+    let pid = parent["id"].as_str().unwrap();
+    let resp = helpers::call(
+        &ts.app,
+        helpers::post_json(&format!("/api/tasks/{pid}/fanout"), &json!({"tasks":[]})),
+    ).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

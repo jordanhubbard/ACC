@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use rusqlite::params;
@@ -19,12 +19,14 @@ use crate::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/tasks", get(list_tasks).post(create_task))
+        .route("/api/tasks/graph", get(get_task_graph))
         .route("/api/tasks/:id", get(get_task).put(update_task).delete(cancel_task))
         .route("/api/tasks/:id/claim", put(claim_task))
         .route("/api/tasks/:id/unclaim", put(unclaim_task))
         .route("/api/tasks/:id/complete", put(complete_task))
         .route("/api/tasks/:id/review-result", put(set_review_result))
         .route("/api/tasks/:id/vote", put(vote_on_task))
+        .route("/api/tasks/:id/fanout", post(fanout_task))
 }
 
 #[derive(Deserialize)]
@@ -180,9 +182,29 @@ async fn create_task(
     };
     let review_of: Option<String> = body.get("review_of").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
     let phase: String = body.get("phase").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or_else(|| "build".to_string());
-    let blocked_by = body.get("blocked_by")
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "[]".to_string());
+    let blocked_by_vec: Vec<String> = body.get("blocked_by")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    let blocked_by = if blocked_by_vec.is_empty() {
+        "[]".to_string()
+    } else {
+        serde_json::to_string(&blocked_by_vec).unwrap_or_else(|_| "[]".to_string())
+    };
+
+    // Cycle detection: check before inserting (separate lock so we can drop before .await).
+    if !blocked_by_vec.is_empty() {
+        let graph = {
+            let db = state.fleet_db.lock().await;
+            crate::db::db_all_blocked_by(&db)
+        };
+        if crate::dag::would_create_cycle(&graph, &id, &blocked_by_vec) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error":"cycle_detected","message":"Adding these dependencies would create a circular dependency"})),
+            ).into_response();
+        }
+    }
 
     // Use a block so db (MutexGuard, !Send) is dropped before any .await
     let insert_result: Result<Value, String> = {
@@ -247,7 +269,20 @@ async fn update_task(
         let _ = db.execute("UPDATE fleet_tasks SET phase=?1, updated_at=?2 WHERE id=?3", params![ph, now, id]);
     }
     if let Some(bb) = body.get("blocked_by") {
-        let _ = db.execute("UPDATE fleet_tasks SET blocked_by=?1, updated_at=?2 WHERE id=?3", params![bb.to_string(), now, id]);
+        let new_blockers: Vec<String> = bb.as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+        if !new_blockers.is_empty() {
+            let graph = crate::db::db_all_blocked_by(&db);
+            if crate::dag::would_create_cycle(&graph, &id, &new_blockers) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({"error":"cycle_detected","message":"Adding these dependencies would create a circular dependency"})),
+                ).into_response();
+            }
+        }
+        let bb_json = serde_json::to_string(&new_blockers).unwrap_or_else(|_| bb.to_string());
+        let _ = db.execute("UPDATE fleet_tasks SET blocked_by=?1, updated_at=?2 WHERE id=?3", params![bb_json, now, id]);
     }
     let task = db.query_row(
         &format!("SELECT {TASK_COLS} FROM fleet_tasks WHERE id=?1"),
@@ -432,6 +467,20 @@ async fn complete_task(
     drop(db); // release lock before potentially calling into projects state
     let _ = state.bus_tx.send(json!({"type":"tasks:completed","task_id":id,"agent":agent}).to_string());
 
+    // Scheduler: find tasks that are now unblocked by this completion and nudge agents.
+    let newly_unblocked: Vec<String> = {
+        let conn = state.fleet_db.lock().await;
+        crate::db::db_find_newly_unblocked(&conn, &id)
+    };
+    if !newly_unblocked.is_empty() {
+        tracing::info!(component = "scheduler", "task {id} completed: unblocked {} dependent task(s)", newly_unblocked.len());
+        for unblocked_id in &newly_unblocked {
+            let _ = state.bus_tx.send(
+                json!({"type":"tasks:dispatch_nudge","task_id":unblocked_id,"reason":"blocker_completed"}).to_string()
+            );
+        }
+    }
+
     // CCC-tk0 / drift-fix #3: any completed task may have modified the
     // project's AgentFS workspace. Mark the project dirty ONLY if the
     // workspace actually has uncommitted changes — agents whose writes
@@ -536,8 +585,24 @@ async fn set_review_result(
         return (StatusCode::NOT_FOUND, Json(json!({"error":"Task not found"}))).into_response();
     }
 
+    drop(db);
     let event_type = if result == "approved" { "tasks:review_approved" } else { "tasks:review_rejected" };
     let _ = state.bus_tx.send(json!({"type":event_type,"task_id":id,"agent":agent}).to_string());
+
+    // An approval may satisfy a dependency (e.g. a blocker that was completed but
+    // previously rejected). Nudge any tasks that are now fully unblocked.
+    if result == "approved" {
+        let newly_unblocked: Vec<String> = {
+            let conn = state.fleet_db.lock().await;
+            crate::db::db_find_newly_unblocked(&conn, &id)
+        };
+        for unblocked_id in &newly_unblocked {
+            let _ = state.bus_tx.send(
+                json!({"type":"tasks:dispatch_nudge","task_id":unblocked_id,"reason":"review_approved"}).to_string()
+            );
+        }
+    }
+
     Json(json!({"ok":true})).into_response()
 }
 
@@ -665,6 +730,150 @@ async fn notify_github_issue(repo: &str, number: u64, task_id: &str, agent: &str
                 tracing::warn!("github: gh CLI close failed: {}", e),
         }
     }
+}
+
+// ── GET /api/tasks/graph ──────────────────────────────────────────────────────
+
+async fn get_task_graph(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !state.is_authed(&headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response();
+    }
+    let db = state.fleet_db.lock().await;
+    let mut stmt = match db.prepare(
+        "SELECT id, title, status, task_type, blocked_by, project_id, priority \
+         FROM fleet_tasks ORDER BY created_at"
+    ) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":e.to_string()}))).into_response(),
+    };
+    let mut nodes: Vec<Value> = Vec::new();
+    let mut edges: Vec<Value> = Vec::new();
+    let _ = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4).unwrap_or_else(|_| "[]".to_string()),
+            row.get::<_, String>(5)?,
+            row.get::<_, i64>(6)?,
+        ))
+    }).map(|rows| {
+        for (id, title, status, task_type, blocked_by_json, project_id, priority) in rows.flatten() {
+            let blocked_by: Vec<String> = serde_json::from_str(&blocked_by_json).unwrap_or_default();
+            for blocker_id in &blocked_by {
+                edges.push(json!({"from": id, "to": blocker_id, "type": "depends_on"}));
+            }
+            nodes.push(json!({
+                "id": id,
+                "title": title,
+                "status": status,
+                "task_type": task_type,
+                "project_id": project_id,
+                "priority": priority,
+                "blocked_by": blocked_by
+            }));
+        }
+    });
+    Json(json!({"nodes": nodes, "edges": edges, "node_count": nodes.len(), "edge_count": edges.len()})).into_response()
+}
+
+// ── POST /api/tasks/:id/fanout ────────────────────────────────────────────────
+//
+// Expands a task into N parallel child tasks and transforms the original task
+// into a join gate that is blocked by all children. When all children complete,
+// the scheduler auto-unblocks the join task and agents can claim it again.
+//
+// Body: {"tasks": [{"title":"...","description":"...","task_type":"work","priority":2,"metadata":{}}]}
+
+async fn fanout_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    if !state.is_authed(&headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response();
+    }
+
+    let fanout_defs = match body.get("tasks").and_then(|v| v.as_array()) {
+        Some(tasks) if !tasks.is_empty() => tasks.clone(),
+        _ => return (StatusCode::BAD_REQUEST, Json(json!({"error":"tasks array required"}))).into_response(),
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Read parent task — specifically its project_id.
+    let project_id: String = {
+        let db = state.fleet_db.lock().await;
+        match db.query_row(
+            "SELECT project_id FROM fleet_tasks WHERE id=?1",
+            params![id],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(pid) => pid,
+            Err(rusqlite::Error::QueryReturnedNoRows) =>
+                return (StatusCode::NOT_FOUND, Json(json!({"error":"Task not found"}))).into_response(),
+            Err(e) =>
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":e.to_string()}))).into_response(),
+        }
+    };
+
+    // Create child tasks and transform the parent into a join gate.
+    let mut child_ids: Vec<String> = Vec::new();
+    {
+        let db = state.fleet_db.lock().await;
+        for task_def in &fanout_defs {
+            let child_id = format!("task-{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
+            let title = task_def.get("title").and_then(|v| v.as_str()).unwrap_or("(untitled)");
+            let desc = task_def.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            let task_type = task_def.get("task_type").and_then(|v| v.as_str()).unwrap_or("work");
+            let priority = task_def.get("priority").and_then(|v| v.as_i64()).unwrap_or(2);
+            let metadata = task_def.get("metadata")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "{}".to_string());
+            let phase = task_def.get("phase").and_then(|v| v.as_str()).unwrap_or("build");
+
+            if db.execute(
+                "INSERT INTO fleet_tasks \
+                 (id, project_id, title, description, status, priority, task_type, metadata, phase, blocked_by, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?7, ?8, '[]', ?9, ?9)",
+                params![child_id, project_id, title, desc, priority, task_type, metadata, phase, now]
+            ).is_ok() {
+                child_ids.push(child_id);
+            }
+        }
+
+        if child_ids.is_empty() {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"failed to create child tasks"}))).into_response();
+        }
+
+        // Transform the parent into a join gate blocked by all children.
+        let blocked_by = serde_json::to_string(&child_ids).unwrap_or_else(|_| "[]".to_string());
+        let _ = db.execute(
+            "UPDATE fleet_tasks SET status='open', claimed_by=NULL, claimed_at=NULL, \
+             claim_expires_at=NULL, blocked_by=?1, updated_at=?2 WHERE id=?3",
+            params![blocked_by, now, id],
+        );
+    }
+
+    // Announce new children and nudge agents to pick them up.
+    let _ = state.bus_tx.send(
+        json!({"type":"tasks:fanout","parent_id":id,"children":child_ids,"count":child_ids.len()}).to_string()
+    );
+    for child_id in &child_ids {
+        let _ = state.bus_tx.send(
+            json!({"type":"tasks:added","task_id":child_id,"project_id":project_id}).to_string()
+        );
+        let _ = state.bus_tx.send(
+            json!({"type":"tasks:dispatch_nudge","task_id":child_id,"reason":"fanout"}).to_string()
+        );
+    }
+
+    (StatusCode::CREATED, Json(json!({"ok":true,"parent_id":id,"children":child_ids}))).into_response()
 }
 
 #[cfg(test)]

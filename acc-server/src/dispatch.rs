@@ -569,6 +569,12 @@ fn publish_nudge(state: &Arc<AppState>, task_id: &str, task: &Value, to: Option<
         "task_type": task["task_type"],
         "priority": task["priority"],
     });
+    // Include capability requirements so agents can self-select without claiming.
+    if let Some(requires) = task["metadata"]["requires"].as_array() {
+        if !requires.is_empty() {
+            msg["requires"] = json!(requires);
+        }
+    }
     if let Some(agent) = to {
         msg["to"] = json!(agent);
     }
