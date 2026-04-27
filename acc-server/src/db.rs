@@ -172,6 +172,14 @@ fn init_schema(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_requests_status  ON requests(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_requests_claimed ON requests(claimed_by, status);
+
+        CREATE TABLE IF NOT EXISTS gateway_sessions (
+            session_key   TEXT PRIMARY KEY,
+            agent_name    TEXT NOT NULL DEFAULT '',
+            messages_json TEXT NOT NULL DEFAULT '[]',
+            workspace     TEXT NOT NULL DEFAULT 'default',
+            updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
     ")?;
     Ok(())
 }
@@ -1014,6 +1022,42 @@ pub fn db_populate_inputs(
         "UPDATE fleet_tasks SET inputs=?1 WHERE id=?2",
         rusqlite::params![inputs_str, task_id],
     )?;
+    Ok(())
+}
+
+// ── Gateway session helpers ───────────────────────────────────────────────────
+
+pub fn get_session(conn: &Connection, key: &str) -> Result<Option<Vec<serde_json::Value>>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT messages_json FROM gateway_sessions WHERE session_key = ?1"
+    )?;
+    let mut rows = stmt.query(rusqlite::params![key])?;
+    if let Some(row) = rows.next()? {
+        let json: String = row.get(0)?;
+        let msgs: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap_or_default();
+        Ok(Some(msgs))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn put_session(conn: &Connection, key: &str, agent: &str, workspace: &str, messages: &[serde_json::Value]) -> Result<()> {
+    let json = serde_json::to_string(messages).unwrap_or_else(|_| "[]".to_string());
+    conn.execute(
+        "INSERT INTO gateway_sessions (session_key, agent_name, workspace, messages_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+         ON CONFLICT(session_key) DO UPDATE SET
+             agent_name    = excluded.agent_name,
+             workspace     = excluded.workspace,
+             messages_json = excluded.messages_json,
+             updated_at    = excluded.updated_at",
+        rusqlite::params![key, agent, workspace, json],
+    )?;
+    Ok(())
+}
+
+pub fn delete_session(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM gateway_sessions WHERE session_key = ?1", rusqlite::params![key])?;
     Ok(())
 }
 

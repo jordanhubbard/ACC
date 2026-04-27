@@ -42,7 +42,12 @@ pub async fn run(workspace: Option<&str>) {
     // Sessions are namespaced by workspace so conversations don't bleed across.
     let sessions_dir = cfg.acc_dir.join("data").join("sessions")
         .join(workspace.unwrap_or("default").to_lowercase());
-    let sessions = Arc::new(SessionStore::new(sessions_dir));
+    let sessions = Arc::new(SessionStore::new(sessions_dir)
+        .with_hub(
+            Client::new(&cfg.acc_url, &cfg.acc_token).expect("sessions client"),
+            cfg.agent_name.clone(),
+            workspace.unwrap_or("default").to_lowercase(),
+        ));
 
     let mut handles = Vec::new();
 

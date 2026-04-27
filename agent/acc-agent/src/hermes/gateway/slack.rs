@@ -1,11 +1,23 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use futures_util::{SinkExt, StreamExt};
+use tracing::Instrument;
 
 use super::session::SessionStore;
 use super::super::agent::HermesAgent;
+
+fn new_trace_id() -> String {
+    static CTR: AtomicU64 = AtomicU64::new(0);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0);
+    let seq = CTR.fetch_add(1, Ordering::Relaxed);
+    format!("{ts:016x}{seq:04x}")
+}
 
 const GATEWAY_SYSTEM: &str = "\
 You are a helpful AI assistant accessible via Slack. \
@@ -203,13 +215,24 @@ impl SlackAdapter {
         };
         let _guard = lock.lock().await;
 
+        let trace_id = new_trace_id();
+        let span = tracing::info_span!(
+            "slack_turn",
+            trace_id = %trace_id,
+            channel  = %channel,
+            user     = %user,
+        );
+
         // Show a thinking indicator.
         // TODO: capture the returned ts and delete/update this message after the response is ready;
         // currently the "_thinking…_" message remains permanently in the channel.
         let _ = self.post_message(&channel, reply_thread.as_deref(), "_thinking…_").await;
 
         let mut history = self.sessions.load_history(&key).await;
-        let response = self.agent.run_gateway_turn(&mut history, &clean_text, GATEWAY_SYSTEM).await;
+        let response = self.agent
+            .run_gateway_turn(&mut history, &clean_text, GATEWAY_SYSTEM)
+            .instrument(span)
+            .await;
         self.sessions.save_history(&key, &history).await;
 
         // Slack limit is 3000 chars per block; split if needed.

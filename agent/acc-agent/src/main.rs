@@ -16,6 +16,7 @@ mod services;
 mod supervise;
 mod tasks;
 mod upgrade;
+mod worker;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

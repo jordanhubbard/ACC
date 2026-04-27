@@ -29,6 +29,7 @@ pub mod watchdog;
 pub mod github;
 pub mod logs;
 pub mod panes;
+pub mod chat_sessions;
 
 use axum::{
     http::StatusCode,

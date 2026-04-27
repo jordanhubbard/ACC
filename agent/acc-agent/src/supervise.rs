@@ -3,6 +3,11 @@
 //! `acc-agent supervise` is the only binary that needs a systemd unit or launchd
 //! plist. It owns the full child lifecycle: spawn, watch, restart with backoff.
 //!
+//! Worker set is determined at startup:
+//!   1. Read `~/.acc/acc.json` → `supervisor.processes` if present.
+//!   2. Fall back to the compiled-in CHILDREN list otherwise.
+//!   Both paths apply the same per-worker `enabled` predicates.
+//!
 //! Signals:
 //!   SIGTERM / SIGINT  → graceful shutdown (SIGTERM each child, wait, then exit 0)
 //!   SIGUSR1           → graceful restart  (same stop sequence, then re-exec self)
@@ -23,14 +28,40 @@ const HEALTHY_UPTIME: Duration = Duration::from_secs(300);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
+// ── Static child spec (compile-time default set) ──────────────────────────────
+
 struct ChildSpec {
     name: &'static str,
-    /// For acc-agent subcommands: args[0] is the subcommand name.
-    /// For direct executables (direct_exe = true): args[0] is the binary path.
     args: &'static [&'static str],
-    /// If true, spawn args[0] as the executable directly (not as a subcommand).
     direct_exe: bool,
     enabled: fn(&Config) -> bool,
+}
+
+// ── Dynamic child spec (loaded from acc.json at runtime) ──────────────────────
+
+/// One worker entry from `~/.acc/acc.json` → `supervisor.processes`.
+#[derive(serde::Deserialize, Clone)]
+struct DynProcess {
+    name: String,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    /// Optional: only start this process if this env var is present.
+    #[serde(default)]
+    enabled_if_env: Option<String>,
+}
+
+/// Load `supervisor.processes` from `~/.acc/acc.json` if it exists.
+/// Returns None if the file is absent, unreadable, or has no processes array.
+fn load_acc_json_processes() -> Option<Vec<DynProcess>> {
+    let path = std::env::var("HOME").ok()
+        .map(|h| PathBuf::from(h).join(".acc").join("acc.json"))
+        .or_else(|| Some(PathBuf::from("/root/.acc/acc.json")))?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let procs = v.get("supervisor")?.get("processes")?;
+    let list: Vec<DynProcess> = serde_json::from_value(procs.clone()).ok()?;
+    if list.is_empty() { None } else { Some(list) }
 }
 
 fn always(_: &Config) -> bool {
@@ -99,30 +130,58 @@ pub async fn run(args: &[String]) {
     let exe = std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("acc-agent"));
 
-    let enabled: Vec<&ChildSpec> = CHILDREN.iter()
-        .filter(|c| (c.enabled)(&cfg))
-        .collect();
+    // Log capabilities from the Worker trait before spawning.
+    let caps = crate::worker::enabled_capabilities();
+    log(&cfg, &format!("capabilities: {}", caps.join(", ")));
 
-    log(&cfg, &format!("spawning: {}",
-        enabled.iter().map(|c| c.name).collect::<Vec<_>>().join(", ")));
+    // Build the process list: prefer acc.json config, fall back to compiled-in CHILDREN.
+    // Represented as (name, exe_path, args, direct_exe) tuples for uniform spawning.
+    let processes: Vec<(String, PathBuf, Vec<String>, bool)> =
+        if let Some(dyn_procs) = load_acc_json_processes() {
+            log(&cfg, &format!("using acc.json worker config ({} entries)", dyn_procs.len()));
+            dyn_procs.into_iter()
+                .filter(|p| {
+                    // Per-process env var gate.
+                    p.enabled_if_env.as_ref()
+                        .map(|v| std::env::var(v).is_ok())
+                        .unwrap_or(true)
+                    // Also apply static enabled predicate if we know this worker.
+                    && CHILDREN.iter()
+                        .find(|c| c.name == p.name.as_str())
+                        .map(|c| (c.enabled)(&cfg))
+                        .unwrap_or(true)
+                })
+                .map(|p| {
+                    let child_exe = if p.command == "acc-agent" {
+                        exe.clone()
+                    } else {
+                        PathBuf::from(&p.command)
+                    };
+                    let direct = p.command != "acc-agent";
+                    (p.name.clone(), child_exe, p.args.clone(), direct)
+                })
+                .collect()
+        } else {
+            CHILDREN.iter()
+                .filter(|c| (c.enabled)(&cfg))
+                .map(|c| {
+                    let (child_exe, child_args) = if c.direct_exe {
+                        (PathBuf::from(c.args[0]), c.args[1..].iter().map(|s| s.to_string()).collect())
+                    } else {
+                        (exe.clone(), c.args.iter().map(|s| s.to_string()).collect())
+                    };
+                    (c.name.to_string(), child_exe, child_args, c.direct_exe)
+                })
+                .collect()
+        };
+
+    log(&cfg, &format!("spawning: {}", processes.iter().map(|(n, _, _, _)| n.as_str()).collect::<Vec<_>>().join(", ")));
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let mut join_handles = Vec::new();
-    for spec in &enabled {
-        let (child_exe, child_args) = if spec.direct_exe {
-            (
-                PathBuf::from(spec.args[0]),
-                spec.args[1..].iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-            )
-        } else {
-            (
-                exe.clone(),
-                spec.args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-            )
-        };
-
-        let child_name = spec.name.to_string();
+    for (name, child_exe, child_args, _direct) in processes {
+        let child_name = name;
         let rx         = shutdown_rx.clone();
         let agent_name = cfg.agent_name.clone();
         let acc_dir    = cfg.acc_dir.clone();
@@ -131,7 +190,6 @@ pub async fn run(args: &[String]) {
             child_loop(child_exe, child_name, child_args, rx, agent_name, acc_dir).await;
         }));
     }
-
     // Await a signal (handlers were already registered above)
     let do_restart = await_signal(&mut sigterm, &mut sigint, &mut sigusr1).await;
 

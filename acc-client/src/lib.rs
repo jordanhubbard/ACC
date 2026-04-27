@@ -21,6 +21,7 @@ pub mod items;
 pub mod memory;
 pub mod projects;
 pub mod queue;
+pub mod sessions;
 pub mod tasks;
 
 pub use acc_model as model;
@@ -156,5 +157,10 @@ impl Client {
     /// Entry point for memory search/store.
     pub fn memory(&self) -> memory::MemoryApi<'_> {
         memory::MemoryApi { client: self }
+    }
+
+    /// Entry point for hub-backed gateway conversation sessions.
+    pub fn sessions(&self) -> sessions::SessionsApi<'_> {
+        sessions::SessionsApi { client: self }
     }
 }

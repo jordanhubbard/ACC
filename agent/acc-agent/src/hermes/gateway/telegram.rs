@@ -1,9 +1,21 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tracing::Instrument;
 
 use super::session::SessionStore;
 use super::super::agent::HermesAgent;
+
+fn new_trace_id() -> String {
+    static CTR: AtomicU64 = AtomicU64::new(0);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0);
+    let seq = CTR.fetch_add(1, Ordering::Relaxed);
+    format!("{ts:016x}{seq:04x}")
+}
 
 const GATEWAY_SYSTEM: &str = "\
 You are a helpful AI assistant accessible via Telegram. \
@@ -130,8 +142,19 @@ impl TelegramAdapter {
         };
         let _guard = lock.lock().await;
 
+        let trace_id = new_trace_id();
+        let span = tracing::info_span!(
+            "telegram_turn",
+            trace_id = %trace_id,
+            chat_id  = %chat_id,
+            from_id  = %from_id,
+        );
+
         let mut history = self.sessions.load_history(&session_key).await;
-        let response = self.agent.run_gateway_turn(&mut history, &text_clean, GATEWAY_SYSTEM).await;
+        let response = self.agent
+            .run_gateway_turn(&mut history, &text_clean, GATEWAY_SYSTEM)
+            .instrument(span)
+            .await;
         self.sessions.save_history(&session_key, &history).await;
 
         // Split long messages — Telegram limit is 4096 chars.
