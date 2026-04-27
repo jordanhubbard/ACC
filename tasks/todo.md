@@ -46,3 +46,42 @@ See `tasks/plan.md` for dependencies, target files, and acceptance criteria.
 - [ ] T10: implement a shared PTY/tmux session adapter
 - [ ] T11: replace Claude one-shot subprocess execution
 - [ ] T15: rewrite dispatch to route by live executor/session readiness
+
+---
+
+## Follow-On Track: Hermes, Single DAG, and Outcome-Centric Scheduling
+
+See `docs/specs/hermes-dag-outcome-scheduling.md` and the follow-on section in `tasks/plan.md`.
+
+## Epic E8 — Hermes DAG Unification
+- [ ] T22: move Hermes durable work onto `/api/tasks`
+- [ ] T23: reduce `/api/queue` to compatibility ingress only
+- [ ] T24: reframe runtime modules as executors and interfaces, not schedulers
+
+## Epic E9 — Outcome Model
+- [ ] T25: add `outcome_id` and `workflow_role` to the task model
+- [ ] T26: add explicit join and commit-gate tasks to the workflow model
+- [ ] T27: add structured outcome result reporting
+
+## Epic E10 — Cooperative Scheduling
+- [ ] T28: select and persist one finisher agent per outcome
+- [ ] T29: make review and gap closure explicit workflow gates
+- [ ] T32: add project/session affinity routing for cooperative outcomes
+- [ ] T33: make Hermes a first-class executor class under the same routing model
+
+## Epic E11 — Commit Finalization
+- [ ] T30: file commit tasks from reviewed outcome readiness, not only dirty workspace state
+- [ ] T31: enforce a single-finisher claim policy for commit tasks
+
+## Epic E12 — Workflow Observability
+- [ ] T34: add workflow and outcome visibility to dashboards and APIs
+- [ ] T35: write the Hermes-to-DAG cutover runbook
+
+## Recommended First Slice
+- [ ] T22: move Hermes durable work onto `/api/tasks`
+- [ ] T23: reduce `/api/queue` to compatibility ingress only
+- [ ] T25: add `outcome_id` and `workflow_role`
+- [ ] T26: add explicit join and commit-gate tasks
+- [ ] T28: select and persist one finisher agent per outcome
+- [ ] T31: enforce a single-finisher claim policy
+- [ ] T30: file commit tasks from reviewed outcome readiness

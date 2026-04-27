@@ -42,6 +42,19 @@ pub enum ReviewResult {
     Rejected,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowRole {
+    Root,
+    Work,
+    Review,
+    Gap,
+    Join,
+    Commit,
+    #[serde(other)]
+    Unknown,
+}
+
 macro_rules! impl_fromstr_via_serde {
     ($ty:ty) => {
         impl std::str::FromStr for $ty {
@@ -56,6 +69,7 @@ macro_rules! impl_fromstr_via_serde {
 impl_fromstr_via_serde!(TaskStatus);
 impl_fromstr_via_serde!(TaskType);
 impl_fromstr_via_serde!(ReviewResult);
+impl_fromstr_via_serde!(WorkflowRole);
 
 /// A fleet task.
 ///
@@ -104,6 +118,14 @@ pub struct Task {
     pub assigned_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assigned_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_role: Option<WorkflowRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finisher_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finisher_session: Option<String>,
 
     #[serde(default = "default_task_type")]
     pub task_type: TaskType,
@@ -148,6 +170,14 @@ pub struct CreateTaskRequest {
     pub assigned_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assigned_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_role: Option<WorkflowRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finisher_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finisher_session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,7 +293,11 @@ mod tests {
             "required_executors": ["claude_cli", "codex_cli"],
             "preferred_agent": "natasha",
             "assigned_agent": "boris",
-            "assigned_session": "proj-main"
+            "assigned_session": "proj-main",
+            "outcome_id": "outcome-1",
+            "workflow_role": "work",
+            "finisher_agent": "natasha",
+            "finisher_session": "claude-proj-main"
         }"#;
         let t: Task = serde_json::from_str(json).unwrap();
         assert_eq!(t.preferred_executor.as_deref(), Some("claude_cli"));
@@ -271,6 +305,10 @@ mod tests {
         assert_eq!(t.preferred_agent.as_deref(), Some("natasha"));
         assert_eq!(t.assigned_agent.as_deref(), Some("boris"));
         assert_eq!(t.assigned_session.as_deref(), Some("proj-main"));
+        assert_eq!(t.outcome_id.as_deref(), Some("outcome-1"));
+        assert_eq!(t.workflow_role, Some(WorkflowRole::Work));
+        assert_eq!(t.finisher_agent.as_deref(), Some("natasha"));
+        assert_eq!(t.finisher_session.as_deref(), Some("claude-proj-main"));
     }
 
     #[test]

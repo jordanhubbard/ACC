@@ -1,5 +1,7 @@
 mod agent;
 mod bus;
+mod cli_sanity;
+mod cli_tmux_adapter;
 #[cfg(test)]
 mod hub_mock;
 mod config;
@@ -12,9 +14,12 @@ mod peers;
 mod proxy;
 mod queue;
 mod sdk;
+mod session_discovery;
+mod session_registry;
 mod services;
 mod supervise;
 mod tasks;
+mod tmux;
 mod upgrade;
 mod worker;
 
@@ -96,9 +101,10 @@ fn print_help() {
     eprintln!("  --once       poll once and exit");
     eprintln!();
     eprintln!("HERMES:");
-    eprintln!("  --item <id> --query <text>   run hermes for a queue item");
-    eprintln!("  --resume <session-id>         resume existing session");
-    eprintln!("  --poll                        poll queue continuously for hermes tasks");
+    eprintln!("  --task <id> --query <text>   run hermes for a fleet task");
+    eprintln!("  --item <id> --query <text>   run hermes for a legacy queue item");
+    eprintln!("  --poll                       poll /api/tasks continuously for hermes work");
+    eprintln!("  --poll-queue                 legacy mode: poll /api/queue continuously");
     eprintln!();
     eprintln!("PROXY:");
     eprintln!("  --port <n>    listen port (default: 9099)");

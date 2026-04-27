@@ -40,15 +40,19 @@ async fn native_run(args: &[String]) {
     eprintln!("[hermes-rust v{}] agent={} hub={}", VERSION, cfg.agent_name, cfg.acc_url);
 
     let mut item_id: Option<String> = None;
+    let mut task_id: Option<String> = None;
     let mut query: Option<String> = None;
     let mut poll = false;
+    let mut poll_queue_legacy = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--item" => { i += 1; item_id = args.get(i).cloned(); }
+            "--task" => { i += 1; task_id = args.get(i).cloned(); }
             "--query" => { i += 1; query = args.get(i).cloned(); }
             "--poll" => poll = true,
+            "--poll-queue" => poll_queue_legacy = true,
             _ => {}
         }
         i += 1;
@@ -65,14 +69,19 @@ async fn native_run(args: &[String]) {
     let hermes = HermesAgent::new(cfg, client, provider, tools);
 
     if poll {
-        hermes.poll_queue().await;
+        hermes.poll_tasks().await;
+    } else if poll_queue_legacy {
+        hermes.poll_queue_legacy().await;
+    } else if let Some(id) = task_id {
+        let q = query.unwrap_or_default();
+        hermes.run_task(id, q).await;
     } else if let Some(id) = item_id {
         let q = query.unwrap_or_default();
-        hermes.run_item(id, q).await;
+        hermes.run_queue_item(id, q).await;
     } else if let Some(q) = query {
         hermes.run_query(q).await;
     } else {
-        eprintln!("[hermes-rust] one of --item, --query, --poll required");
+        eprintln!("[hermes-rust] one of --poll, --poll-queue, --task, --item, or --query required");
         std::process::exit(1);
     }
 }

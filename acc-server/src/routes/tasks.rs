@@ -56,6 +56,10 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Value> {
     let preferred_agent = metadata.get("preferred_agent").cloned().unwrap_or(Value::Null);
     let assigned_agent = metadata.get("assigned_agent").cloned().unwrap_or(Value::Null);
     let assigned_session = metadata.get("assigned_session").cloned().unwrap_or(Value::Null);
+    let outcome_id = metadata.get("outcome_id").cloned().unwrap_or(Value::Null);
+    let workflow_role = metadata.get("workflow_role").cloned().unwrap_or(Value::Null);
+    let finisher_agent = metadata.get("finisher_agent").cloned().unwrap_or(Value::Null);
+    let finisher_session = metadata.get("finisher_session").cloned().unwrap_or(Value::Null);
     let blocked_by_str: String = row.get(16).unwrap_or_else(|_| "[]".to_string());
     let blocked_by: Value = serde_json::from_str(&blocked_by_str).unwrap_or(json!([]));
     let output_val: Value = {
@@ -86,6 +90,10 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Value> {
         "preferred_agent":  preferred_agent,
         "assigned_agent":   assigned_agent,
         "assigned_session": assigned_session,
+        "outcome_id":       outcome_id,
+        "workflow_role":    workflow_role,
+        "finisher_agent":   finisher_agent,
+        "finisher_session": finisher_session,
         "task_type":        row.get::<_, String>(13).unwrap_or_else(|_| "work".to_string()),
         "review_of":        row.get::<_, Option<String>>(14)?,
         "phase":            row.get::<_, Option<String>>(15)?,
@@ -197,6 +205,11 @@ async fn create_task(
     let description = body.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let priority = body.get("priority").and_then(|v| v.as_i64()).unwrap_or(2);
     let task_type = body.get("task_type").and_then(|v| v.as_str()).unwrap_or("work").to_string();
+    let workflow_role = body.get("workflow_role")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| default_workflow_role(&task_type).to_string());
     // For idea tasks, record creator so they can't vote on their own idea.
     let metadata = {
         let mut m: serde_json::Value = body.get("metadata")
@@ -213,6 +226,18 @@ async fn create_task(
         }
         if let Some(assigned_session) = body.get("assigned_session").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
             m["assigned_session"] = serde_json::json!(assigned_session);
+        }
+        if let Some(outcome_id) = body.get("outcome_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            m["outcome_id"] = serde_json::json!(outcome_id);
+        } else if m.get("outcome_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).is_none() {
+            m["outcome_id"] = serde_json::json!(&id);
+        }
+        m["workflow_role"] = serde_json::json!(workflow_role);
+        if let Some(finisher_agent) = body.get("finisher_agent").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            m["finisher_agent"] = serde_json::json!(finisher_agent);
+        }
+        if let Some(finisher_session) = body.get("finisher_session").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            m["finisher_session"] = serde_json::json!(finisher_session);
         }
         if let Some(required_executors) = body.get("required_executors").and_then(|v| v.as_array()) {
             let required: Vec<String> = required_executors
@@ -318,6 +343,39 @@ async fn update_task(
     if let Some(ph) = body.get("phase").and_then(|v| v.as_str()) {
         let _ = db.execute("UPDATE fleet_tasks SET phase=?1, updated_at=?2 WHERE id=?3", params![ph, now, id]);
     }
+    if body.get("preferred_executor").is_some()
+        || body.get("required_executors").is_some()
+        || body.get("preferred_agent").is_some()
+        || body.get("assigned_agent").is_some()
+        || body.get("assigned_session").is_some()
+        || body.get("outcome_id").is_some()
+        || body.get("workflow_role").is_some()
+        || body.get("finisher_agent").is_some()
+        || body.get("finisher_session").is_some()
+    {
+        let current_meta: String = db.query_row(
+            "SELECT metadata FROM fleet_tasks WHERE id=?1",
+            params![id],
+            |r| r.get(0),
+        ).unwrap_or_else(|_| "{}".to_string());
+        let mut meta: Value = serde_json::from_str(&current_meta).unwrap_or(json!({}));
+        maybe_set_meta_string(&mut meta, "preferred_executor", body.get("preferred_executor"));
+        maybe_set_meta_string(&mut meta, "preferred_agent", body.get("preferred_agent"));
+        maybe_set_meta_string(&mut meta, "assigned_agent", body.get("assigned_agent"));
+        maybe_set_meta_string(&mut meta, "assigned_session", body.get("assigned_session"));
+        maybe_set_meta_string(&mut meta, "outcome_id", body.get("outcome_id"));
+        maybe_set_meta_string(&mut meta, "workflow_role", body.get("workflow_role"));
+        maybe_set_meta_string(&mut meta, "finisher_agent", body.get("finisher_agent"));
+        maybe_set_meta_string(&mut meta, "finisher_session", body.get("finisher_session"));
+        if let Some(required_executors) = body.get("required_executors").and_then(|v| v.as_array()) {
+            let required: Vec<String> = required_executors
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            meta["required_executors"] = json!(required);
+        }
+        let _ = db.execute("UPDATE fleet_tasks SET metadata=?1, updated_at=?2 WHERE id=?3", params![meta.to_string(), now, id]);
+    }
     if let Some(bb) = body.get("blocked_by") {
         let new_blockers: Vec<String> = bb.as_array()
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
@@ -341,6 +399,28 @@ async fn update_task(
     match task {
         Ok(t) => Json(json!({"ok":true,"task":t})).into_response(),
         Err(_) => (StatusCode::NOT_FOUND, Json(json!({"error":"Task not found"}))).into_response(),
+    }
+}
+
+fn default_workflow_role(task_type: &str) -> &'static str {
+    match task_type {
+        "review" => "review",
+        "phase_commit" => "commit",
+        _ => "work",
+    }
+}
+
+fn maybe_set_meta_string(meta: &mut Value, key: &str, value: Option<&Value>) {
+    if let Some(value) = value {
+        if let Some(s) = value.as_str() {
+            if s.is_empty() {
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.remove(key);
+                }
+            } else {
+                meta[key] = json!(s);
+            }
+        }
     }
 }
 
@@ -873,15 +953,21 @@ async fn fanout_task(
 
     let now = chrono::Utc::now().to_rfc3339();
 
-    // Read parent task — specifically its project_id.
-    let project_id: String = {
+    // Read parent task — specifically its project_id and outcome identity.
+    let (project_id, parent_outcome_id): (String, Option<String>) = {
         let db = state.fleet_db.lock().await;
         match db.query_row(
-            "SELECT project_id FROM fleet_tasks WHERE id=?1",
+            "SELECT project_id, metadata FROM fleet_tasks WHERE id=?1",
             params![id],
-            |row| row.get::<_, String>(0),
+            |row| {
+                let project_id: String = row.get(0)?;
+                let metadata_str: String = row.get(1)?;
+                let metadata: Value = serde_json::from_str(&metadata_str).unwrap_or(json!({}));
+                let outcome_id = metadata.get("outcome_id").and_then(|v| v.as_str()).map(str::to_string);
+                Ok((project_id, outcome_id))
+            },
         ) {
-            Ok(pid) => pid,
+            Ok(row) => row,
             Err(rusqlite::Error::QueryReturnedNoRows) =>
                 return (StatusCode::NOT_FOUND, Json(json!({"error":"Task not found"}))).into_response(),
             Err(e) =>
@@ -899,9 +985,18 @@ async fn fanout_task(
             let desc = task_def.get("description").and_then(|v| v.as_str()).unwrap_or("");
             let task_type = task_def.get("task_type").and_then(|v| v.as_str()).unwrap_or("work");
             let priority = task_def.get("priority").and_then(|v| v.as_i64()).unwrap_or(2);
-            let metadata = task_def.get("metadata")
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "{}".to_string());
+            let metadata = {
+                let mut metadata = task_def.get("metadata").cloned().unwrap_or_else(|| json!({}));
+                if metadata.get("outcome_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).is_none() {
+                    if let Some(outcome_id) = parent_outcome_id.as_deref() {
+                        metadata["outcome_id"] = json!(outcome_id);
+                    }
+                }
+                if metadata.get("workflow_role").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).is_none() {
+                    metadata["workflow_role"] = json!(default_workflow_role(task_type));
+                }
+                metadata.to_string()
+            };
             let phase = task_def.get("phase").and_then(|v| v.as_str()).unwrap_or("build");
 
             if db.execute(

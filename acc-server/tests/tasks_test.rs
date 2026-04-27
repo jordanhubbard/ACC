@@ -366,6 +366,36 @@ async fn test_create_task_with_blocked_by() {
     assert_eq!(blocked.len(), 2);
 }
 
+#[tokio::test]
+async fn test_create_task_with_outcome_and_workflow_fields() {
+    let ts = helpers::TestServer::new().await;
+    let resp = helpers::call(
+        &ts.app,
+        helpers::post_json("/api/tasks", &json!({
+            "project_id": "proj-1",
+            "title": "Outcome task",
+            "outcome_id": "outcome-123",
+            "workflow_role": "join",
+            "finisher_agent": "natasha",
+            "finisher_session": "claude-proj-1"
+        })),
+    ).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = helpers::body_json(resp).await;
+    assert_eq!(body["task"]["outcome_id"], "outcome-123");
+    assert_eq!(body["task"]["workflow_role"], "join");
+    assert_eq!(body["task"]["finisher_agent"], "natasha");
+    assert_eq!(body["task"]["finisher_session"], "claude-proj-1");
+}
+
+#[tokio::test]
+async fn test_create_task_defaults_outcome_id_and_workflow_role() {
+    let ts = helpers::TestServer::new().await;
+    let task = create_task(&ts, "proj-1", "Default workflow").await;
+    assert_eq!(task["workflow_role"], "work");
+    assert_eq!(task["outcome_id"], task["id"]);
+}
+
 // ── Filtering ─────────────────────────────────────────────────────────────────
 
 #[tokio::test]

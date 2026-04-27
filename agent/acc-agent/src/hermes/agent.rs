@@ -5,8 +5,9 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use acc_client::Client;
-use acc_model::HeartbeatRequest;
+use acc_model::{HeartbeatRequest, Task, TaskStatus, TaskType};
 use crate::config::Config;
+use crate::session_registry;
 
 use super::conversation::ConversationHistory;
 use super::provider::LlmProvider;
@@ -17,6 +18,7 @@ const MAX_TOKENS: u32 = 8192;
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(120);
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const CLAUDE_ONLY_TAGS: &[&str] = &["claude", "claude_cli"];
+const CLI_EXECUTORS: &[&str] = &["claude_cli", "codex_cli", "cursor_cli", "opencode"];
 
 const SYSTEM_PROMPT_BASE: &str = "\
 You are a capable AI assistant executing a task on a remote machine. \
@@ -30,6 +32,12 @@ pub struct HermesAgent {
     provider: Box<dyn LlmProvider>,
     tools: ToolRegistry,
     shutdown: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Debug)]
+enum KeepaliveTarget {
+    QueueItem(String),
+    Task(String),
 }
 
 impl HermesAgent {
@@ -56,11 +64,11 @@ impl HermesAgent {
         Self { cfg, client, http, provider, tools, shutdown }
     }
 
-    pub async fn run_item(&self, item_id: String, query: String) {
+    pub async fn run_queue_item(&self, item_id: String, query: String) {
         self.register_capabilities().await;
         self.log(&format!("starting item={item_id} query_len={}", query.len()));
 
-        if !self.claim(&item_id).await {
+        if !self.claim_queue_item(&item_id).await {
             self.log(&format!("claim rejected for {item_id}"));
             return;
         }
@@ -77,25 +85,59 @@ impl HermesAgent {
             };
 
         let (ok, output) =
-            self.run_conversation(Some(item_id.clone()), workspace_query).await;
+            self.run_conversation(
+                Some(item_id.clone()),
+                Some(KeepaliveTarget::QueueItem(item_id.clone())),
+                workspace_query,
+            ).await;
         if ok {
-            self.post_complete(&item_id, &output).await;
+            self.post_queue_complete(&item_id, &output).await;
         } else {
-            self.post_fail(&item_id, &output).await;
+            self.post_queue_fail(&item_id, &output).await;
+        }
+    }
+
+    pub async fn run_task(&self, task_id: String, query: String) {
+        self.register_capabilities().await;
+        let query = if query.is_empty() {
+            match self.client.tasks().get(&task_id).await {
+                Ok(task) => self.task_query(&task),
+                Err(_) => query,
+            }
+        } else {
+            query
+        };
+        self.log(&format!("starting task={task_id} query_len={}", query.len()));
+
+        if !self.claim_task(&task_id).await {
+            self.log(&format!("claim rejected for {task_id}"));
+            return;
+        }
+
+        let workspace_query = self.workspace_query(query);
+        let (ok, output) = self.run_conversation(
+            Some(task_id.clone()),
+            Some(KeepaliveTarget::Task(task_id.clone())),
+            workspace_query,
+        ).await;
+        if ok {
+            self.post_task_complete(&task_id, &output).await;
+        } else {
+            self.unclaim_task(&task_id).await;
         }
     }
 
     pub async fn run_query(&self, query: String) {
         self.register_capabilities().await;
         self.log(&format!("running ad-hoc query len={}", query.len()));
-        let (_, output) = self.run_conversation(None, query).await;
+        let (_, output) = self.run_conversation(None, None, query).await;
         println!("{output}");
     }
 
-    pub async fn poll_queue(&self) {
+    pub async fn poll_tasks(&self) {
         self.register_capabilities().await;
         self.log(&format!(
-            "starting queue poll (agent={}, hub={})",
+            "starting task poll (agent={}, hub={})",
             self.cfg.agent_name, self.cfg.acc_url
         ));
         loop {
@@ -103,23 +145,59 @@ impl HermesAgent {
                 self.log("shutting down (SIGTERM)");
                 break;
             }
-            if let Some(item) = self.fetch_item().await {
-                let id = item["id"].as_str().unwrap_or("").to_string();
-                let query = format!(
-                    "{}\n\n{}",
-                    item["title"].as_str().unwrap_or(""),
-                    item["description"].as_str().unwrap_or("")
-                );
-                self.run_item(id, query).await;
+            if let Some(task) = self.fetch_task().await {
+                let id = task.id.clone();
+                if !self.claim_task(&id).await {
+                    self.log(&format!("claim rejected for {id}"));
+                    continue;
+                }
+                let query = self.workspace_query(self.task_query(&task));
+                let (ok, output) = self.run_conversation(
+                    Some(id.clone()),
+                    Some(KeepaliveTarget::Task(id.clone())),
+                    query,
+                ).await;
+                if ok {
+                    self.post_task_complete(&id, &output).await;
+                } else {
+                    self.log(&format!("task {id} failed: {output}"));
+                    self.unclaim_task(&id).await;
+                }
             } else {
                 sleep(POLL_INTERVAL).await;
             }
         }
     }
 
-    pub(crate) async fn run_conversation(
+    pub async fn poll_queue_legacy(&self) {
+        self.register_capabilities().await;
+        self.log(&format!(
+            "starting legacy queue poll (agent={}, hub={})",
+            self.cfg.agent_name, self.cfg.acc_url
+        ));
+        loop {
+            if self.shutdown.load(Ordering::SeqCst) {
+                self.log("shutting down (SIGTERM)");
+                break;
+            }
+            if let Some(item) = self.fetch_queue_item().await {
+                let id = item["id"].as_str().unwrap_or("").to_string();
+                let query = format!(
+                    "{}\n\n{}",
+                    item["title"].as_str().unwrap_or(""),
+                    item["description"].as_str().unwrap_or("")
+                );
+                self.run_queue_item(id, query).await;
+            } else {
+                sleep(POLL_INTERVAL).await;
+            }
+        }
+    }
+
+    async fn run_conversation(
         &self,
         item_id: Option<String>,
+        keepalive_target: Option<KeepaliveTarget>,
         query: String,
     ) -> (bool, String) {
         let system = self.system_prompt();
@@ -147,7 +225,7 @@ impl HermesAgent {
         {
             let cfg = self.cfg.clone();
             let client = self.client.clone();
-            let item_id2 = item_id.clone();
+            let keepalive_target2 = keepalive_target.clone();
             let tool_names = self.tools.names().join(", ");
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(KEEPALIVE_INTERVAL);
@@ -157,8 +235,11 @@ impl HermesAgent {
                         _ = interval.tick() => {
                             let note = format!("hermes-rust running (tools: {tool_names})");
                             post_heartbeat(&cfg, &client, &note).await;
-                            if let Some(ref id) = item_id2 {
-                                post_keepalive(&cfg, &client, id, &note).await;
+                            if let Some(target) = keepalive_target2.as_ref() {
+                                match target {
+                                    KeepaliveTarget::QueueItem(id) => post_queue_keepalive(&cfg, &client, id, &note).await,
+                                    KeepaliveTarget::Task(id) => post_task_keepalive(&cfg, &client, id, &note).await,
+                                }
                             }
                         }
                         _ = &mut ka_rx => break,
@@ -264,6 +345,18 @@ impl HermesAgent {
 
         let _ = ka_stop.send(());
         (success, final_output)
+    }
+
+    fn workspace_query(&self, query: String) -> String {
+        if let Ok(ws) = std::env::var("TASK_WORKSPACE_LOCAL") {
+            format!(
+                "Your task workspace is: {ws}\n\
+                 Work only within this directory. \
+                 Do NOT run git commit or git push.\n\n{query}"
+            )
+        } else {
+            query
+        }
     }
 
     /// One conversational turn for the gateway. Appends the user message to the provided
@@ -436,7 +529,7 @@ impl HermesAgent {
         })
     }
 
-    async fn fetch_item(&self) -> Option<Value> {
+    async fn fetch_queue_item(&self) -> Option<Value> {
         let items = self.client.queue().list().await.ok()?;
         for item in items {
             let raw = serde_json::to_value(&item).ok()?;
@@ -464,7 +557,55 @@ impl HermesAgent {
         None
     }
 
-    async fn claim(&self, item_id: &str) -> bool {
+    async fn fetch_task(&self) -> Option<Task> {
+        for task_type in [TaskType::Work, TaskType::Feature, TaskType::Bug, TaskType::Task] {
+            let tasks = self.client
+                .tasks()
+                .list()
+                .status(TaskStatus::Open)
+                .task_type(task_type)
+                .limit(25)
+                .send()
+                .await
+                .ok()?;
+            if let Some(task) = tasks.into_iter().find(|task| self.is_hermes_task(task)) {
+                return Some(task);
+            }
+        }
+        None
+    }
+
+    fn is_hermes_task(&self, task: &Task) -> bool {
+        if task.review_of.is_some() {
+            return false;
+        }
+        if matches!(task.task_type, TaskType::Review | TaskType::Idea | TaskType::Discovery | TaskType::PhaseCommit | TaskType::Epic | TaskType::Unknown) {
+            return false;
+        }
+        if task.assigned_agent.as_deref().is_some_and(|name| name != self.cfg.agent_name) {
+            return false;
+        }
+        if task.preferred_agent.as_deref().is_some_and(|name| name != self.cfg.agent_name) {
+            return false;
+        }
+        if let Some(exec) = task.preferred_executor.as_deref() {
+            if CLI_EXECUTORS.contains(&exec) {
+                return false;
+            }
+        }
+        if !task.required_executors.is_empty()
+            && !task.required_executors.iter().any(|req| req == "hermes" || req == "llm")
+        {
+            return false;
+        }
+        true
+    }
+
+    fn task_query(&self, task: &Task) -> String {
+        format!("{}\n\n{}", task.title, task.description)
+    }
+
+    async fn claim_queue_item(&self, item_id: &str) -> bool {
         self.client
             .items()
             .claim(item_id, &self.cfg.agent_name, Some("hermes-rust claiming"))
@@ -472,7 +613,15 @@ impl HermesAgent {
             .is_ok()
     }
 
-    async fn post_complete(&self, item_id: &str, result: &str) {
+    async fn claim_task(&self, task_id: &str) -> bool {
+        self.client
+            .tasks()
+            .claim(task_id, &self.cfg.agent_name)
+            .await
+            .is_ok()
+    }
+
+    async fn post_queue_complete(&self, item_id: &str, result: &str) {
         let truncated = &result[..result.len().min(4000)];
         let _ = self
             .client
@@ -481,12 +630,29 @@ impl HermesAgent {
             .await;
     }
 
-    async fn post_fail(&self, item_id: &str, reason: &str) {
+    async fn post_queue_fail(&self, item_id: &str, reason: &str) {
         let truncated = &reason[..reason.len().min(2000)];
         let _ = self
             .client
             .items()
             .fail(item_id, &self.cfg.agent_name, truncated)
+            .await;
+    }
+
+    async fn post_task_complete(&self, task_id: &str, result: &str) {
+        let truncated = &result[..result.len().min(4000)];
+        let _ = self
+            .client
+            .tasks()
+            .complete(task_id, Some(&self.cfg.agent_name), Some(truncated))
+            .await;
+    }
+
+    async fn unclaim_task(&self, task_id: &str) {
+        let _ = self
+            .client
+            .tasks()
+            .unclaim(task_id, Some(&self.cfg.agent_name))
             .await;
     }
 
@@ -533,13 +699,30 @@ async fn post_heartbeat(cfg: &Config, client: &Client, note: &str) {
         executors: vec![],
         sessions: vec![],
     };
+    let mut req = req;
+    session_registry::augment_heartbeat(cfg, &mut req).await;
     let _ = client.items().heartbeat(&cfg.agent_name, &req).await;
 }
 
-async fn post_keepalive(cfg: &Config, client: &Client, item_id: &str, note: &str) {
+async fn post_queue_keepalive(cfg: &Config, client: &Client, item_id: &str, note: &str) {
     let _ = client
         .items()
         .keepalive(item_id, &cfg.agent_name, Some(note))
+        .await;
+}
+
+async fn post_task_keepalive(cfg: &Config, _client: &Client, task_id: &str, note: &str) {
+    let url = format!("{}/api/tasks/{}/keepalive", cfg.acc_url, task_id);
+    let body = serde_json::json!({
+        "agent": cfg.agent_name,
+        "extend_mins": 30,
+        "note": note,
+    });
+    let _ = reqwest::Client::new()
+        .put(&url)
+        .header("Authorization", format!("Bearer {}", cfg.acc_token))
+        .json(&body)
+        .send()
         .await;
 }
 
@@ -680,7 +863,7 @@ mod tests {
             Box::new(EchoProvider { reply: "task done".to_string() }),
             ToolRegistry::default_tools(),
         );
-        let (ok, output) = agent.run_conversation(None, "do the thing".to_string()).await;
+        let (ok, output) = agent.run_conversation(None, None, "do the thing".to_string()).await;
         assert!(ok, "EchoProvider returns end_turn so conversation must succeed");
         assert_eq!(output, "task done", "output must be the provider's text reply");
     }
@@ -698,7 +881,7 @@ mod tests {
         // Step 1: provider returns tool_use(bash, echo tool_ran)
         // Step 2: agent executes bash, adds result to history, calls provider again
         // Step 3: provider returns end_turn with "tool executed successfully"
-        let (ok, output) = agent.run_conversation(None, "run a tool".to_string()).await;
+        let (ok, output) = agent.run_conversation(None, None, "run a tool".to_string()).await;
         assert!(ok, "should succeed after tool execution");
         assert_eq!(output, "tool executed successfully");
     }
@@ -713,7 +896,7 @@ mod tests {
             Box::new(MaxTokensProvider),
             ToolRegistry::default_tools(),
         );
-        let (ok, output) = agent.run_conversation(None, "a query".to_string()).await;
+        let (ok, output) = agent.run_conversation(None, None, "a query".to_string()).await;
         assert!(!ok, "max_tokens must signal failure");
         assert!(
             output.contains("Token budget exhausted"),
@@ -721,42 +904,149 @@ mod tests {
         );
     }
 
-    // ── fetch_item tests ───────────────────────────────────────────────────────
+    // ── fetch_queue_item tests ─────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn fetch_item_returns_none_on_empty_queue() {
+    async fn fetch_queue_item_returns_none_on_empty_queue() {
         let mock = HubMock::new().await;
         let agent = make_agent(&mock.url);
-        assert!(agent.fetch_item().await.is_none());
+        assert!(agent.fetch_queue_item().await.is_none());
     }
 
     #[tokio::test]
-    async fn fetch_item_skips_claude_only_tag() {
+    async fn fetch_queue_item_skips_claude_only_tag() {
         let mock = HubMock::with_queue(vec![json!({
             "id": "wq-c1", "status": "pending", "assignee": "all",
             "tags": ["claude_cli"], "preferred_executor": ""
         })]).await;
-        assert!(make_agent(&mock.url).fetch_item().await.is_none());
+        assert!(make_agent(&mock.url).fetch_queue_item().await.is_none());
     }
 
     #[tokio::test]
-    async fn fetch_item_skips_claude_only_preferred_executor() {
+    async fn fetch_queue_item_skips_claude_only_preferred_executor() {
         let mock = HubMock::with_queue(vec![json!({
             "id": "wq-c2", "status": "pending", "assignee": "all",
             "tags": [], "preferred_executor": "claude_cli"
         })]).await;
-        assert!(make_agent(&mock.url).fetch_item().await.is_none());
+        assert!(make_agent(&mock.url).fetch_queue_item().await.is_none());
     }
 
     #[tokio::test]
-    async fn fetch_item_returns_eligible_item() {
+    async fn fetch_queue_item_returns_eligible_item() {
         let mock = HubMock::with_queue(vec![json!({
             "id": "wq-ok", "status": "pending", "assignee": "all",
             "tags": ["gpu"], "preferred_executor": ""
         })]).await;
-        let item = make_agent(&mock.url).fetch_item().await;
+        let item = make_agent(&mock.url).fetch_queue_item().await;
         assert!(item.is_some());
         assert_eq!(item.unwrap()["id"], "wq-ok");
+    }
+
+    #[tokio::test]
+    async fn fetch_task_returns_hermes_eligible_task() {
+        let mock = HubMock::with_tasks(vec![
+            json!({
+                "id": "task-cli",
+                "status": "open",
+                "task_type": "work",
+                "title": "CLI only",
+                "description": "skip me",
+                "preferred_executor": "claude_cli"
+            }),
+            json!({
+                "id": "task-hermes",
+                "status": "open",
+                "task_type": "work",
+                "title": "Hermes task",
+                "description": "handle me",
+                "preferred_executor": "hermes"
+            })
+        ]).await;
+        let task = make_agent(&mock.url).fetch_task().await.expect("eligible task");
+        assert_eq!(task.id, "task-hermes");
+    }
+
+    #[tokio::test]
+    async fn fetch_task_skips_task_assigned_to_other_agent() {
+        let mock = HubMock::with_tasks(vec![json!({
+            "id": "task-foreign",
+            "status": "open",
+            "task_type": "work",
+            "title": "Assigned elsewhere",
+            "description": "skip me",
+            "assigned_agent": "boris"
+        })]).await;
+        assert!(make_agent(&mock.url).fetch_task().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn is_hermes_task_skips_cli_executor() {
+        let agent = make_agent("http://example.invalid");
+        let task = Task {
+            id: "task-1".to_string(),
+            project_id: String::new(),
+            title: "CLI task".to_string(),
+            description: String::new(),
+            status: TaskStatus::Open,
+            priority: 2,
+            claimed_by: None,
+            claimed_at: None,
+            claim_expires_at: None,
+            completed_at: None,
+            completed_by: None,
+            created_at: None,
+            metadata: json!({}),
+            preferred_executor: Some("claude_cli".to_string()),
+            required_executors: vec![],
+            preferred_agent: None,
+            assigned_agent: None,
+            assigned_session: None,
+            outcome_id: None,
+            workflow_role: None,
+            finisher_agent: None,
+            finisher_session: None,
+            task_type: TaskType::Work,
+            review_of: None,
+            phase: None,
+            blocked_by: vec![],
+            review_result: None,
+        };
+        assert!(!agent.is_hermes_task(&task));
+    }
+
+    #[tokio::test]
+    async fn task_query_combines_title_and_description() {
+        let agent = make_agent("http://example.invalid");
+        let task = Task {
+            id: "task-2".to_string(),
+            project_id: String::new(),
+            title: "Title".to_string(),
+            description: "Body".to_string(),
+            status: TaskStatus::Open,
+            priority: 2,
+            claimed_by: None,
+            claimed_at: None,
+            claim_expires_at: None,
+            completed_at: None,
+            completed_by: None,
+            created_at: None,
+            metadata: json!({}),
+            preferred_executor: None,
+            required_executors: vec![],
+            preferred_agent: None,
+            assigned_agent: None,
+            assigned_session: None,
+            outcome_id: None,
+            workflow_role: None,
+            finisher_agent: None,
+            finisher_session: None,
+            task_type: TaskType::Work,
+            review_of: None,
+            phase: None,
+            blocked_by: vec![],
+            review_result: None,
+        };
+        assert_eq!(agent.task_query(&task), "Title\n\nBody");
     }
 
     // ── claim tests ────────────────────────────────────────────────────────────
@@ -764,14 +1054,14 @@ mod tests {
     #[tokio::test]
     async fn claim_succeeds_against_mock() {
         let mock = HubMock::new().await;
-        assert!(make_agent(&mock.url).claim("wq-test").await);
+        assert!(make_agent(&mock.url).claim_queue_item("wq-test").await);
     }
 
     #[tokio::test]
     async fn claim_conflict_returns_false() {
         use crate::hub_mock::HubState;
         let mock = HubMock::with_state(HubState { item_claim_status: 409, ..Default::default() }).await;
-        assert!(!make_agent(&mock.url).claim("wq-clash").await);
+        assert!(!make_agent(&mock.url).claim_queue_item("wq-clash").await);
     }
 
     // ── tool advertisement ─────────────────────────────────────────────────────
@@ -790,7 +1080,7 @@ mod tests {
     // ── run_item tests ─────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn run_item_completes_on_success() {
+    async fn run_queue_item_completes_on_success() {
         use crate::hub_mock::HubState;
         let mock = HubMock::with_state(HubState {
             queue_items: vec![json!({
@@ -806,7 +1096,7 @@ mod tests {
             Box::new(EchoProvider { reply: "done".to_string() }),
             ToolRegistry::default_tools(),
         );
-        agent.run_item("wq-item-1".to_string(), "test task".to_string()).await;
+        agent.run_queue_item("wq-item-1".to_string(), "test task".to_string()).await;
         let log = mock.state.read().await.call_log.lock().await.clone();
         assert!(
             log.iter().any(|e| e.contains("/api/item/wq-item-1/complete")),
@@ -815,7 +1105,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_item_fails_on_max_tokens() {
+    async fn run_queue_item_fails_on_max_tokens() {
         let mock = HubMock::new().await;
         let cfg = test_cfg(&mock.url);
         let client = build_client(&cfg);
@@ -824,11 +1114,61 @@ mod tests {
             Box::new(MaxTokensProvider),
             ToolRegistry::default_tools(),
         );
-        agent.run_item("wq-item-2".to_string(), "another task".to_string()).await;
+        agent.run_queue_item("wq-item-2".to_string(), "another task".to_string()).await;
         let log = mock.state.read().await.call_log.lock().await.clone();
         assert!(
             log.iter().any(|e| e.contains("/api/item/wq-item-2/fail")),
             "fail must be called when max_tokens hit; log={log:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_task_completes_on_success() {
+        let mock = HubMock::with_tasks(vec![json!({
+            "id": "task-1",
+            "status": "open",
+            "task_type": "work",
+            "title": "Hermes task",
+            "description": "complete me",
+            "preferred_executor": "hermes"
+        })]).await;
+        let cfg = test_cfg(&mock.url);
+        let client = build_client(&cfg);
+        let agent = HermesAgent::new(
+            cfg, client,
+            Box::new(EchoProvider { reply: "done".to_string() }),
+            ToolRegistry::default_tools(),
+        );
+        agent.run_task("task-1".to_string(), "test task".to_string()).await;
+        let log = mock.state.read().await.call_log.lock().await.clone();
+        assert!(
+            log.iter().any(|e| e.contains("/api/tasks/task-1/complete")),
+            "task complete must be called after successful run; log={log:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_task_unclaims_on_failure() {
+        let mock = HubMock::with_tasks(vec![json!({
+            "id": "task-2",
+            "status": "open",
+            "task_type": "work",
+            "title": "Hermes task",
+            "description": "fail me",
+            "preferred_executor": "hermes"
+        })]).await;
+        let cfg = test_cfg(&mock.url);
+        let client = build_client(&cfg);
+        let agent = HermesAgent::new(
+            cfg, client,
+            Box::new(MaxTokensProvider),
+            ToolRegistry::default_tools(),
+        );
+        agent.run_task("task-2".to_string(), "another task".to_string()).await;
+        let log = mock.state.read().await.call_log.lock().await.clone();
+        assert!(
+            log.iter().any(|e| e.contains("/api/tasks/task-2/unclaim")),
+            "task unclaim must be called on failure; log={log:?}"
         );
     }
 

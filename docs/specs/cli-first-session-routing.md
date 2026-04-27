@@ -1,5 +1,8 @@
 # Spec: CLI-First Session Routing and Task Plane Unification
 
+Spec index:
+- `docs/specs/README.md`
+
 ## Objective
 
 ACC currently mixes several orchestration models:

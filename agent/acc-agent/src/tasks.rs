@@ -16,6 +16,7 @@ use acc_client::Client;
 use acc_model::{CreateTaskRequest, HeartbeatRequest, ReviewResult, TaskStatus, TaskType};
 use crate::config::Config;
 use crate::peers;
+use crate::session_registry;
 
 const POLL_IDLE: Duration = Duration::from_secs(30);
 const POLL_BUSY: Duration = Duration::from_secs(5);
@@ -81,6 +82,8 @@ fn spawn_keepalive(
                         executors: vec![],
                         sessions: vec![],
                     };
+                    let mut req = req;
+                    session_registry::augment_heartbeat(&cfg, &mut req).await;
                     let _ = client.items().heartbeat(&cfg.agent_name, &req).await;
                 }
                 _ = &mut stop_rx => break,
@@ -521,6 +524,11 @@ async fn submit_for_review(cfg: &Config, client: &Client, task: &Value, output: 
     let title = task["title"].as_str().unwrap_or("(task)");
     let priority = task["priority"].as_i64().unwrap_or(2);
     let phase = task["phase"].as_str();
+    let outcome_id = task.get("outcome_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| task["metadata"]["outcome_id"].as_str().filter(|s| !s.is_empty()))
+        .unwrap_or(task_id);
 
     // Work is done — complete it first
     complete_task(cfg, client, task_id, output).await;
@@ -546,6 +554,8 @@ async fn submit_for_review(cfg: &Config, client: &Client, task: &Value, output: 
         review_of: Some(task_id.to_string()),
         phase: phase.map(|p| p.to_string()),
         metadata: Some(meta),
+        outcome_id: Some(outcome_id.to_string()),
+        workflow_role: Some(acc_model::WorkflowRole::Review),
         preferred_agent: (!reviewer.is_empty()).then(|| reviewer.to_string()),
         ..Default::default()
     };
@@ -565,6 +575,11 @@ async fn execute_review_task(cfg: &Config, client: &Client, task: &Value) {
     let task_id = task["id"].as_str().unwrap_or("unknown");
     let review_of_id = task["review_of"].as_str().unwrap_or("");
     let phase = task["phase"].as_str().unwrap_or("");
+    let outcome_id = task.get("outcome_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| task["metadata"]["outcome_id"].as_str().filter(|s| !s.is_empty()))
+        .unwrap_or(review_of_id);
 
     log(cfg, &format!("executing review {task_id} (reviewing {review_of_id})"));
 
@@ -636,7 +651,7 @@ async fn execute_review_task(cfg: &Config, client: &Client, task: &Value) {
 
     // File gap tasks
     for gap in &gaps {
-        create_gap_task(cfg, client, &project_id, phase, task_id, gap).await;
+        create_gap_task(cfg, client, &project_id, phase, task_id, outcome_id, gap).await;
     }
 
     // Record verdict on the original work task
@@ -676,7 +691,7 @@ fn parse_review_output(output: &str) -> (String, String, Vec<Value>) {
     }
 }
 
-async fn create_gap_task(cfg: &Config, client: &Client, project_id: &str, phase: &str, review_task_id: &str, gap: &Value) {
+async fn create_gap_task(cfg: &Config, client: &Client, project_id: &str, phase: &str, review_task_id: &str, outcome_id: &str, gap: &Value) {
     let title = gap["title"].as_str().unwrap_or("Gap task").to_string();
     let description = gap["description"].as_str().unwrap_or("").to_string();
     let priority = gap["priority"].as_i64().unwrap_or(2);
@@ -689,6 +704,8 @@ async fn create_gap_task(cfg: &Config, client: &Client, project_id: &str, phase:
         task_type: Some(TaskType::Work),
         phase: (!phase.is_empty()).then(|| phase.to_string()),
         metadata: Some(serde_json::json!({"spawned_by_review": review_task_id})),
+        outcome_id: Some(outcome_id.to_string()),
+        workflow_role: Some(acc_model::WorkflowRole::Gap),
         ..Default::default()
     };
 

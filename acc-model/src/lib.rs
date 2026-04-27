@@ -23,5 +23,5 @@ pub use queue::{
 };
 pub use task::{
     ClaimRequest, CompleteRequest, CreateTaskRequest, ReviewResult, ReviewResultRequest, Task,
-    TaskStatus, TaskType, UnclaimRequest,
+    TaskStatus, TaskType, UnclaimRequest, WorkflowRole,
 };

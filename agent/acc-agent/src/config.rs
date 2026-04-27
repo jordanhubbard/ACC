@@ -111,6 +111,43 @@ impl Config {
     pub fn quench_file(&self) -> PathBuf {
         self.acc_dir.join("quench")
     }
+
+    pub fn session_data_dir(&self) -> PathBuf {
+        self.acc_dir.join("data")
+    }
+
+    pub fn session_registry_file(&self) -> PathBuf {
+        self.session_data_dir().join("coding-sessions.json")
+    }
+
+    pub fn max_cli_sessions(&self) -> u32 {
+        std::env::var("ACC_MAX_CLI_SESSIONS")
+            .or_else(|_| std::env::var("AGENT_MAX_CLI_SESSIONS"))
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4)
+    }
+
+    pub fn session_busy_window_secs(&self) -> i64 {
+        std::env::var("ACC_SESSION_BUSY_WINDOW_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(120)
+    }
+
+    pub fn session_stuck_threshold_secs(&self) -> i64 {
+        std::env::var("ACC_SESSION_STUCK_THRESHOLD_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15 * 60)
+    }
+
+    pub fn session_min_free_memory_mb(&self) -> u64 {
+        std::env::var("ACC_SESSION_MIN_FREE_MEMORY_MB")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2048)
+    }
 }
 
 pub fn load_env_file(path: &PathBuf) {

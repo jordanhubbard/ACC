@@ -130,9 +130,10 @@ fn build_router(state: S) -> Router {
         .route("/api/item/:id/comment",         post(ok))
         // Fleet task routes
         .route("/api/tasks",                    get(task_list).post(task_create))
+        .route("/api/tasks/:id",                get(task_get))
         .route("/api/tasks/:id/claim",          put(task_claim))
-        .route("/api/tasks/:id/complete",       put(ok))
-        .route("/api/tasks/:id/unclaim",        put(ok))
+        .route("/api/tasks/:id/complete",       put(logged_task_complete))
+        .route("/api/tasks/:id/unclaim",        put(logged_task_unclaim))
         .route("/api/tasks/:id/review-result",  put(task_review_result))
         .route("/api/tasks/:id/turns",          get(get_task_turns).post(append_task_turn))
         .route("/api/tasks/:id/keepalive",      put(logged_keepalive))
@@ -197,6 +198,14 @@ async fn task_create(State(st): State<S>, Json(body): Json<Value>) -> impl IntoR
     (sc, Json(json!({"ok": true, "task": task}))).into_response()
 }
 
+async fn task_get(State(st): State<S>, Path(id): Path<String>) -> impl IntoResponse {
+    let s = st.read().await;
+    if let Some(task) = s.tasks.iter().find(|task| task["id"].as_str() == Some(id.as_str())) {
+        return (StatusCode::OK, Json(task.clone())).into_response();
+    }
+    (StatusCode::NOT_FOUND, Json(json!({"error": "Task not found"}))).into_response()
+}
+
 async fn task_review_result(State(st): State<S>, Path(_id): Path<String>) -> impl IntoResponse {
     let code = st.read().await.review_result_status;
     let sc = StatusCode::from_u16(code).unwrap_or(StatusCode::OK);
@@ -219,7 +228,13 @@ async fn sse_stream(State(st): State<S>) -> impl IntoResponse {
 async fn task_claim(State(st): State<S>, Path(id): Path<String>) -> impl IntoResponse {
     let code = st.read().await.task_claim_status;
     let sc = StatusCode::from_u16(code).unwrap_or(StatusCode::OK);
-    (sc, Json(json!({"ok": code == 200, "task": {"id": id, "title": "mock task", "status": "claimed"}}))).into_response()
+    let task = st.read().await.tasks.iter()
+        .find(|task| task["id"].as_str() == Some(id.as_str()))
+        .cloned()
+        .unwrap_or_else(|| json!({"id": id, "title": "mock task"}));
+    let mut claimed = task.clone();
+    claimed["status"] = json!("claimed");
+    (sc, Json(json!({"ok": code == 200, "task": claimed}))).into_response()
 }
 
 async fn request_claim(State(st): State<S>, Path(id): Path<String>) -> impl IntoResponse {
@@ -256,6 +271,16 @@ async fn logged_fail(State(st): State<S>, Path(id): Path<String>) -> Json<Value>
 
 async fn logged_keepalive(State(st): State<S>, Path(id): Path<String>) -> Json<Value> {
     st.read().await.call_log.lock().await.push(format!("PUT /api/tasks/{id}/keepalive"));
+    Json(json!({"ok": true}))
+}
+
+async fn logged_task_complete(State(st): State<S>, Path(id): Path<String>) -> Json<Value> {
+    st.read().await.call_log.lock().await.push(format!("PUT /api/tasks/{id}/complete"));
+    Json(json!({"ok": true}))
+}
+
+async fn logged_task_unclaim(State(st): State<S>, Path(id): Path<String>) -> Json<Value> {
+    st.read().await.call_log.lock().await.push(format!("PUT /api/tasks/{id}/unclaim"));
     Json(json!({"ok": true}))
 }
 

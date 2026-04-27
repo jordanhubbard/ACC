@@ -2,6 +2,8 @@
 
 Source spec: `docs/specs/cli-first-session-routing.md`
 
+Related follow-on spec: `docs/specs/hermes-dag-outcome-scheduling.md`
+
 Primary goals:
 - Make `/api/tasks` the only durable task plane
 - Make persistent CLI sessions the default coding executor model
@@ -537,3 +539,397 @@ If the team wants the shortest path to a coherent CLI-first system, ship this sl
 - T15 — session-aware dispatch
 
 That slice removes the current semantic ambiguity and establishes persistent CLI sessions as the primary coding path without requiring the full cleanup in one shot.
+
+---
+
+# Follow-On Plan: Hermes, Single DAG, and Outcome-Centric Cooperative Scheduling
+
+Source spec: `docs/specs/hermes-dag-outcome-scheduling.md`
+
+Primary goals:
+- move Hermes durable work onto `/api/tasks`
+- make the task DAG the only orchestration model
+- introduce first-class outcome/workflow grouping
+- make cooperative work multi-agent and final commit single-finisher
+
+---
+
+## Epic Registry
+
+| Epic | Slug | Purpose |
+|------|------|---------|
+| E8 | `hermes-dag-unification` | Move Hermes and remaining durable work onto `/api/tasks` |
+| E9 | `outcome-model` | Introduce `outcome_id`, workflow roles, and structured outcome results |
+| E10 | `cooperative-scheduling` | Add explicit finisher selection and workflow-aware routing |
+| E11 | `commit-finalization` | Finalize outcomes from reviewed join gates instead of dirty-bit heuristics |
+| E12 | `workflow-observability` | Expose workflows, finishers, and cutover status to operators |
+
+---
+
+## Dependency Graph
+
+```text
+T18 minimal-agent-runtime
+  └── T22 hermes-on-api-tasks
+        ├── T23 queue-as-compat-ingress-only
+        └── T24 executor-not-worker-runtime-model
+
+T22 hermes-on-api-tasks
+  └── T25 outcome-id-and-workflow-role-schema
+        ├── T26 explicit-join-and-commit-gate-model
+        ├── T27 structured-outcome-results
+        └── T28 finisher-affinity-selection
+
+T26 explicit-join-and-commit-gate-model
+  ├── T29 review-and-gap-closure-gating
+  ├── T30 commit-from-outcome-readiness-not-dirty-bit
+  └── T31 single-finisher-claim-policy
+
+T31 single-finisher-claim-policy
+  ├── T32 session-and-project-affinity-dispatch
+  ├── T33 hermes-as-executor-class
+  └── T34 workflow-and-outcome-dashboard-views
+
+T34 workflow-and-outcome-dashboard-views
+  └── T35 migration-runbook-for-hermes-dag-cutover
+```
+
+---
+
+## Tasks
+
+### T22 — Move Hermes durable work onto `/api/tasks`
+
+**Epic:** E8 `hermes-dag-unification`
+
+**What:**
+- Add Hermes polling/claiming against `/api/tasks`
+- Preserve Hermes gateway/chat behavior without relying on queue semantics for durable work
+- Keep queue polling only as temporary compatibility behavior
+
+**Files:**
+- `agent/acc-agent/src/hermes/mod.rs`
+- `agent/acc-agent/src/hermes/agent.rs`
+- `acc-client/src/tasks.rs`
+
+**Acceptance criteria:**
+- Hermes can claim and complete durable work from `/api/tasks`
+- Hermes no longer depends on `/api/queue` for normal durable execution
+- Queue polling is clearly compatibility-only
+
+---
+
+### T23 — Reduce `/api/queue` to compatibility ingress only
+
+**Epic:** E8 `hermes-dag-unification`
+
+**What:**
+- Stop treating `/api/queue` as a peer orchestration plane
+- Convert queue-originated durable work into root DAG tasks
+- Add warnings and docs for legacy-only use
+
+**Files:**
+- `acc-server/src/routes/queue.rs`
+- `README.md`
+- `ARCHITECTURE.md`
+
+**Acceptance criteria:**
+- New durable workflow features are not implemented on the queue path
+- Queue-originated work can materialize into task DAG nodes
+- Docs describe `/api/queue` as ingress compatibility only
+
+---
+
+### T24 — Reframe runtime modules as executors and interfaces, not schedulers
+
+**Epic:** E8 `hermes-dag-unification`
+
+**What:**
+- Simplify worker/runtime descriptions so there is one scheduler and many executors/interfaces
+- Keep gateway/proxy surfaces optional and secondary
+- Stop presenting Hermes and queue as parallel orchestration systems
+
+**Files:**
+- `agent/acc-agent/src/worker.rs`
+- `docs/acc-executor-design.md`
+- `docs/specs/hermes-dag-outcome-scheduling.md`
+
+**Acceptance criteria:**
+- Runtime docs describe one scheduler with executor backends
+- Worker capability descriptions match the new mental model
+- Hermes is described as an executor/runtime mode, not a separate durable plane
+
+---
+
+### T25 — Add `outcome_id` and `workflow_role` to the task model
+
+**Epic:** E9 `outcome-model`
+
+**What:**
+- Group all work/review/gap/join/commit tasks under an `outcome_id`
+- Add an explicit workflow role rather than relying only on `task_type`
+- Expose those fields through the task API
+
+**Files:**
+- `acc-model/src/task.rs`
+- `acc-server/src/routes/tasks.rs`
+- `acc-client/src/tasks.rs`
+
+**Acceptance criteria:**
+- Tasks can be created and read with `outcome_id`
+- Tasks expose `workflow_role`
+- Existing clients remain backward compatible during rollout
+
+---
+
+### T26 — Add explicit join and commit-gate tasks to the workflow model
+
+**Epic:** E9 `outcome-model`
+
+**What:**
+- Add explicit DAG nodes for join gates and final commit gates
+- Stop relying on implicit worker behavior to represent workflow transitions
+- Preserve existing fanout support while making join semantics outcome-aware
+
+**Files:**
+- `acc-server/src/routes/tasks.rs`
+- `acc-server/src/dag.rs`
+- `acc-server/src/db.rs`
+
+**Acceptance criteria:**
+- Outcome DAGs can represent root, work, review, gap, join, and commit nodes
+- Join nodes become claimable only when blockers are satisfied
+- Commit tasks can be blocked on explicit join nodes
+
+---
+
+### T27 — Add structured outcome result reporting
+
+**Epic:** E9 `outcome-model`
+
+**What:**
+- Record whether code changed, review passed, and commit succeeded as explicit fields
+- Preserve commit SHA, branch, and review summary in a structured result
+- Avoid forcing operators to reconstruct workflow state from logs alone
+
+**Files:**
+- `acc-model/src/task.rs`
+- `acc-server/src/routes/tasks.rs`
+- `agent/acc-agent/src/tasks.rs`
+
+**Acceptance criteria:**
+- APIs can answer whether an outcome changed code, passed review, and committed
+- Commit SHA and branch are persisted when available
+- Structured result fields are available without ad hoc log parsing
+
+---
+
+### T28 — Select and persist one finisher agent per outcome
+
+**Epic:** E10 `cooperative-scheduling`
+
+**What:**
+- Choose one finisher agent or session for each outcome
+- Persist finisher affinity once chosen
+- Allow reassignment only on explicit failure or offline conditions
+
+**Files:**
+- `acc-server/src/dispatch.rs`
+- `acc-server/src/routes/tasks.rs`
+- `acc-model/src/task.rs`
+
+**Acceptance criteria:**
+- Outcomes can record `finisher_agent` and optional `finisher_session`
+- Finisher affinity is sticky across work/review subtasks
+- Reassignment rules are explicit and testable
+
+---
+
+### T29 — Make review and gap closure explicit workflow gates
+
+**Epic:** E10 `cooperative-scheduling`
+
+**What:**
+- Ensure rejected review and open required gaps block outcome finalization
+- Distinguish optional follow-up work from blocking review gaps
+- Make join readiness derive from workflow state, not only raw completion
+
+**Files:**
+- `agent/acc-agent/src/tasks.rs`
+- `acc-server/src/routes/tasks.rs`
+- `acc-server/src/db.rs`
+
+**Acceptance criteria:**
+- Outcome finalization does not proceed with unresolved blocking gaps
+- Review verdicts affect downstream readiness deterministically
+- Gap tasks can be marked as blocking or non-blocking
+
+---
+
+### T30 — File commit tasks from reviewed outcome readiness, not only dirty workspace state
+
+**Epic:** E11 `commit-finalization`
+
+**What:**
+- Replace or demote dirty-bit-only `phase_commit` auto-filing
+- Create commit tasks when an outcome join gate is satisfied
+- Keep workspace dirtiness as telemetry, not the primary readiness signal
+
+**Files:**
+- `acc-server/src/dispatch.rs`
+- `acc-server/src/routes/projects.rs`
+- `agent/acc-agent/src/tasks.rs`
+
+**Acceptance criteria:**
+- Commit tasks can be generated from outcome readiness
+- Dirty workspaces alone do not imply commit readiness
+- Auto-filed commit logic references reviewed workflow state
+
+---
+
+### T31 — Enforce a single-finisher claim policy for commit tasks
+
+**Epic:** E11 `commit-finalization`
+
+**What:**
+- Restrict commit task claiming to the selected finisher
+- Preserve multi-agent cooperation for work and review tasks
+- Make finalization accountability explicit
+
+**Files:**
+- `acc-server/src/routes/tasks.rs`
+- `acc-server/src/dispatch.rs`
+- `agent/acc-agent/src/tasks.rs`
+
+**Acceptance criteria:**
+- Commit tasks are claimable only by the selected finisher agent/session
+- Work and review tasks may still fan out across peers
+- Final commit ownership is visible in task/outcome state
+
+---
+
+### T32 — Add project/session affinity routing for cooperative outcomes
+
+**Epic:** E10 `cooperative-scheduling`
+
+**What:**
+- Prefer agents/sessions already working on the same outcome or project
+- Route commit work to the bound finisher session when possible
+- Use session telemetry to avoid shifting ownership unnecessarily
+
+**Files:**
+- `acc-server/src/dispatch.rs`
+- `agent/acc-agent/src/session_registry.rs`
+- `acc-model/src/agent.rs`
+
+**Acceptance criteria:**
+- Dispatch favors project- and session-affine routing
+- Commit tasks prefer the finisher session when healthy
+- Affinity decisions degrade cleanly when the bound agent is unavailable
+
+---
+
+### T33 — Make Hermes a first-class executor class under the same routing model
+
+**Epic:** E10 `cooperative-scheduling`
+
+**What:**
+- Register Hermes in the canonical executor model
+- Route eligible tasks to Hermes through the same dispatch rules used for other executors
+- Remove Hermes-only durable scheduling semantics
+
+**Files:**
+- `agent/acc-agent/src/hermes/agent.rs`
+- `acc-server/src/routes/agents.rs`
+- `acc-server/src/dispatch.rs`
+
+**Acceptance criteria:**
+- Hermes appears in executor registration with readiness/capacity signals
+- Dispatch can target Hermes without special-case queue logic
+- Hermes no longer needs a separate durable scheduling contract
+
+---
+
+### T34 — Add workflow and outcome visibility to dashboards and APIs
+
+**Epic:** E12 `workflow-observability`
+
+**What:**
+- Show `outcome_id`, workflow role, finisher, review state, and commit state in operator views
+- Add task/outcome graph visibility beyond raw task rows
+- Surface degraded modes such as self-review or finisher reassignment
+
+**Files:**
+- `acc-server/src/dashboard.html`
+- `acc-server/src/routes/tasks.rs`
+- `acc-server/src/routes/agents.rs`
+
+**Acceptance criteria:**
+- Operators can inspect an outcome end-to-end
+- UI shows whether code changed, review passed, and commit landed
+- Degraded workflow conditions are visible without reading logs
+
+---
+
+### T35 — Write the Hermes-to-DAG cutover runbook
+
+**Epic:** E12 `workflow-observability`
+
+**What:**
+- Document rollout phases for moving Hermes durable work from queue to tasks
+- Document finisher reassignment, outcome recovery, and degraded review modes
+- Provide rollback guidance while queue compatibility still exists
+
+**Files:**
+- `docs/specs/hermes-dag-outcome-scheduling.md`
+- `docs/`
+
+**Acceptance criteria:**
+- Operators can execute and roll back the cutover deliberately
+- Recovery procedures exist for stuck outcomes and orphaned finishers
+- Migration guidance distinguishes compatibility mode from target state
+
+---
+
+## Milestones
+
+### Checkpoint 6 — Hermes and queue consolidation
+- [ ] T22 complete
+- [ ] T23 complete
+- [ ] T24 complete
+- [ ] Hermes durable work no longer depends on `/api/queue`
+
+### Checkpoint 7 — Outcome-aware workflow model
+- [ ] T25 complete
+- [ ] T26 complete
+- [ ] T27 complete
+- [ ] Task DAG can represent root, work, review, gap, join, and commit nodes
+
+### Checkpoint 8 — Cooperative scheduling with one finisher
+- [ ] T28 complete
+- [ ] T29 complete
+- [ ] T31 complete
+- [ ] T32 complete
+- [ ] Final commit ownership is explicit and sticky
+
+### Checkpoint 9 — Commit finalization cutover
+- [ ] T30 complete
+- [ ] T33 complete
+- [ ] T34 complete
+- [ ] T35 complete
+- [ ] Outcome readiness, not only dirty workspace state, drives commit filing
+
+---
+
+## Smallest Useful Delivery Slice
+
+If the team wants the shortest path from the current state to a coherent DAG-first workflow, ship this slice first:
+- T22 — move Hermes durable work onto `/api/tasks`
+- T23 — reduce `/api/queue` to compatibility ingress only
+- T25 — add `outcome_id` and `workflow_role`
+- T26 — add explicit join and commit-gate tasks
+- T28 — select and persist one finisher agent per outcome
+- T31 — enforce a single-finisher claim policy
+- T30 — file commit tasks from reviewed outcome readiness
+
+That slice collapses the remaining orchestration split and makes “code changed, reviewed, and committed by one accountable agent” an explicit workflow instead of an emergent side effect.

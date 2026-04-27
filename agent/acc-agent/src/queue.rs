@@ -20,8 +20,11 @@ use tokio::time::sleep;
 
 use acc_client::Client;
 use acc_model::HeartbeatRequest;
+use crate::cli_sanity;
+use crate::cli_tmux_adapter;
 use crate::config::Config;
 use crate::peers;
+use crate::session_registry;
 
 const POLL_INTERVAL_IDLE: Duration = Duration::from_secs(60);
 const POLL_INTERVAL_BUSY: Duration = Duration::from_secs(5);
@@ -147,13 +150,29 @@ async fn execute_item(cfg: &Config, client: &Client, item: &serde_json::Value) {
     )).await;
 
     // Execute
+    let preferred_executor = item["preferred_executor"].as_str().filter(|s| !s.is_empty());
     let (output, exit_code) = if is_hermes_task(item) {
         log(cfg, &format!("[{item_id}] routing to acc-agent hermes"));
         run_hermes_driver(cfg, item, &item_id, &task_env, &workspace_local).await
     } else {
         let prompt = build_prompt(item, &workspace_local);
-        log(cfg, &format!("[{item_id}] running claude"));
-        run_claude(cfg, &prompt, &item_id, &task_env, &workspace_local).await
+        match cli_sanity::choose_ready_executor(cfg, preferred_executor, &workspace_local).await {
+            Some(executor) => {
+                log(cfg, &format!("[{item_id}] running {executor} after readiness probe"));
+                let (output, exit_code) =
+                    run_session_executor(cfg, &executor, &prompt, &item_id, &task_env, &workspace_local).await;
+                if exit_code == 0 {
+                    (output, exit_code)
+                } else {
+                    log(cfg, &format!("[{item_id}] {executor} session path failed, falling back to API"));
+                    run_api_coding(cfg, &prompt, &item_id, &workspace_local).await
+                }
+            }
+            None => {
+                log(cfg, &format!("[{item_id}] all coding CLIs unavailable or failed readiness probe — falling back to API"));
+                run_api_coding(cfg, &prompt, &item_id, &workspace_local).await
+            }
+        }
     };
 
     // Finalize
@@ -473,14 +492,46 @@ async fn write_agentfs_meta(
 
 // ── Task execution ─────────────────────────────────────────────────────────────
 
-async fn run_claude(
+async fn run_session_executor(
+    cfg: &Config,
+    executor: &str,
+    prompt: &str,
+    item_id: &str,
+    task_env: &[(String, String)],
+    workspace: &PathBuf,
+) -> (String, i32) {
+    if is_debug_one_shot_enabled(executor) {
+        return run_cli_subprocess(executor, cfg, prompt, item_id, task_env, workspace).await;
+    }
+
+    let Some(adapter) = cli_tmux_adapter::adapter_for_executor(executor) else {
+        return (format!("unsupported session executor: {executor}"), 1);
+    };
+
+    match cli_tmux_adapter::run_task(cfg, &adapter, workspace, item_id, prompt, CLAUDE_TIMEOUT).await {
+        Ok(result) => (result.output, 0),
+        Err(e) => {
+            log(cfg, &format!("[{item_id}] {executor} tmux session failed: {e}"));
+            (format!("{executor} tmux session failed: {e}"), 1)
+        }
+    }
+}
+
+async fn run_cli_subprocess(
+    executor: &str,
     cfg: &Config,
     prompt: &str,
     item_id: &str,
     task_env: &[(String, String)],
     workspace: &PathBuf,
 ) -> (String, i32) {
-    let claude_bin = which_bin("claude").unwrap_or_else(|| "claude".into());
+    let (binary, args): (&str, &[&str]) = match executor {
+        "claude_cli" => ("claude", &["-p"]),
+        "codex_cli" => ("codex", &["--approval-mode", "full-auto", "--task"]),
+        "cursor_cli" => ("cursor", &["--headless", "--task"]),
+        _ => return (format!("unsupported one-shot executor: {executor}"), 1),
+    };
+    let cli_bin = which_bin(binary).unwrap_or_else(|| binary.into());
 
     // Keepalive task
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -503,12 +554,14 @@ async fn run_claude(
 
     let result = tokio::time::timeout(
         CLAUDE_TIMEOUT,
-        Command::new(&claude_bin)
-            .arg("-p")
-            .arg(prompt)
+        {
+            let mut cmd = Command::new(&cli_bin);
+            cmd.args(args)
+                .arg(prompt)
             .envs(task_env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-            .current_dir(workspace)
-            .output(),
+                .current_dir(workspace);
+            cmd.output()
+        },
     )
     .await;
 
@@ -527,6 +580,51 @@ async fn run_claude(
             (output, code)
         }
         Ok(Err(e)) => (format!("ERROR: {e}"), 1),
+        Err(_) => (format!("[timed out after {}s]", CLAUDE_TIMEOUT.as_secs()), 124),
+    }
+}
+
+fn is_debug_one_shot_enabled(executor: &str) -> bool {
+    let env_key = match executor {
+        "claude_cli" => "ACC_DEBUG_ONE_SHOT_CLAUDE",
+        "codex_cli" => "ACC_DEBUG_ONE_SHOT_CODEX",
+        "cursor_cli" => "ACC_DEBUG_ONE_SHOT_CURSOR",
+        _ => return false,
+    };
+    std::env::var(env_key)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+async fn run_api_coding(
+    cfg: &Config,
+    prompt: &str,
+    item_id: &str,
+    workspace: &PathBuf,
+) -> (String, i32) {
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let ka_cfg = cfg.clone();
+    let ka_item = item_id.to_string();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(KEEPALIVE_INTERVAL);
+        interval.tick().await;
+        tokio::select! {
+            _ = async {
+                loop {
+                    interval.tick().await;
+                    let client = build_client(&ka_cfg);
+                    post_keepalive(&ka_cfg, &client, &ka_item, "api coding agent still working").await;
+                }
+            } => {}
+            _ = stop_rx => {}
+        }
+    });
+
+    let result = tokio::time::timeout(CLAUDE_TIMEOUT, crate::sdk::run_agent(prompt, workspace)).await;
+    let _ = stop_tx.send(());
+    match result {
+        Ok(Ok(output)) => (output, 0),
+        Ok(Err(e)) => (format!("API fallback error: {e}"), 1),
         Err(_) => (format!("[timed out after {}s]", CLAUDE_TIMEOUT.as_secs()), 124),
     }
 }
@@ -672,6 +770,8 @@ async fn post_heartbeat(cfg: &Config, client: &Client, note: &str, tasks_in_flig
         executors: vec![],
         sessions: vec![],
     };
+    let mut req = req;
+    session_registry::augment_heartbeat(cfg, &mut req).await;
     let _ = client.items().heartbeat(&cfg.agent_name, &req).await;
 }
 
@@ -712,6 +812,15 @@ fn detect_capabilities() -> Vec<String> {
     if which_bin("claude").is_some() {
         caps.push("claude_cli".into());
         caps.push("claude_sdk".into());
+    }
+    if which_bin("codex").is_some() {
+        caps.push("codex_cli".into());
+    }
+    if which_bin("cursor").is_some() {
+        caps.push("cursor_cli".into());
+    }
+    if which_bin("opencode").is_some() {
+        caps.push("opencode".into());
     }
     if which_bin("hermes").is_some() {
         caps.push("hermes".into());
