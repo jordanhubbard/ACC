@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-VENV="${HOME}/.acc/hermes-venv"
-if [ ! -x "${VENV}/bin/hermes" ]; then
-    echo "[hermes] venv missing — run: bash ~/Src/ACC/deploy/setup-hermes-venv.sh" >&2
-    exit 1
-fi
-exec "${VENV}/bin/hermes" "$@"
