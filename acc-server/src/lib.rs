@@ -7,6 +7,7 @@ pub mod dispatch;
 pub mod routes;
 pub mod state;
 pub mod supervisor;
+pub mod vault;
 
 pub use state::AppState;
 
@@ -53,6 +54,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .merge(routes::logs::router())
         .merge(routes::panes::router())
         .merge(routes::chat_sessions::router())
+        .merge(routes::vault::router())
         .layer(cors)
         .with_state(state)
 }
@@ -105,6 +107,7 @@ pub mod testing {
             queue:    RwLock::new(state::QueueData::default()),
             agents:   RwLock::new(serde_json::Value::Object(serde_json::Map::new())),
             secrets:  RwLock::new(serde_json::Map::new()),
+            vault:    crate::vault::Vault::new(false),
             projects: tokio::sync::RwLock::new(Vec::new()),
             brain:    Arc::new(brain::BrainQueue::new()),
             bus_tx:   tokio::sync::broadcast::channel(256).0,

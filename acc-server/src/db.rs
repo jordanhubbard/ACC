@@ -10,7 +10,7 @@ use rusqlite::{Connection, Result, params};
 use serde_json::Value;
 use std::path::Path;
 
-const CURRENT_VERSION: i64 = 7;
+const CURRENT_VERSION: i64 = 8;
 
 /// Open a database connection, create schema if needed, run any pending migrations.
 pub fn open(path: &str) -> Result<Connection> {
@@ -179,6 +179,17 @@ fn init_schema(conn: &Connection) -> Result<()> {
             messages_json TEXT NOT NULL DEFAULT '[]',
             workspace     TEXT NOT NULL DEFAULT 'default',
             updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS vault_meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS vault_secrets (
+            key        TEXT PRIMARY KEY,
+            value_b64  TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
         );
     ")?;
     Ok(())
@@ -350,6 +361,21 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         }
         conn.execute("INSERT INTO schema_version (version) VALUES (?1)", params![7])?;
         tracing::info!("Migration v7 applied: source column on fleet_tasks");
+    }
+
+    if version < 8 {
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS vault_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS vault_secrets (
+                key        TEXT PRIMARY KEY,
+                value_b64  TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            );
+        ")?;
+        tracing::info!("Migration v8 applied: vault_meta and vault_secrets tables");
     }
 
     set_schema_version(conn, CURRENT_VERSION)?;
@@ -1023,6 +1049,57 @@ pub fn db_populate_inputs(
         rusqlite::params![inputs_str, task_id],
     )?;
     Ok(())
+}
+
+// ── Vault persistence helpers ─────────────────────────────────────────────────
+
+/// Load the vault salt from vault_meta. Returns None if not yet set.
+pub fn db_load_vault_salt(conn: &Connection) -> Option<Vec<u8>> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    conn.query_row(
+        "SELECT value FROM vault_meta WHERE key = 'salt'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|s| B64.decode(s).ok())
+}
+
+/// Persist the vault salt (base64-encoded) into vault_meta.
+pub fn db_save_vault_salt(conn: &Connection, salt: &[u8]) {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    let b64 = B64.encode(salt);
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('salt', ?1)",
+        params![b64],
+    );
+}
+
+/// Load all encrypted blobs from vault_secrets (key → base64 ciphertext).
+pub fn db_load_vault_blobs(conn: &Connection) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT key, value_b64 FROM vault_secrets") {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }) {
+            for row in rows.flatten() {
+                map.insert(row.0, row.1);
+            }
+        }
+    }
+    map
+}
+
+/// Replace all encrypted blobs in vault_secrets with the given map.
+pub fn db_flush_vault_blobs(conn: &Connection, blobs: &std::collections::HashMap<String, String>) {
+    let _ = conn.execute("DELETE FROM vault_secrets", []);
+    let now = chrono::Utc::now().to_rfc3339();
+    for (key, b64) in blobs {
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO vault_secrets (key, value_b64, updated_at) VALUES (?1, ?2, ?3)",
+            params![key, b64, now],
+        );
+    }
 }
 
 // ── Gateway session helpers ───────────────────────────────────────────────────

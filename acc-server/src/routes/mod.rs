@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod health;
+pub mod vault;
 pub mod queue;
 pub mod agents;
 pub mod secrets;

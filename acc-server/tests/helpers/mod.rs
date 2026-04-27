@@ -50,6 +50,7 @@ pub async fn make_state(tmp: &TempDir) -> Arc<AppState> {
         queue:    RwLock::new(state::QueueData::default()),
         agents:   RwLock::new(serde_json::Value::Object(serde_json::Map::new())),
         secrets:  RwLock::new(serde_json::Map::new()),
+        vault:    acc_server::vault::Vault::new(false),
         projects: tokio::sync::RwLock::new(Vec::new()),
         brain:    Arc::new(brain::BrainQueue::new()),
         bus_tx:   tokio::sync::broadcast::channel(256).0,

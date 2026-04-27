@@ -27,6 +27,9 @@ pub struct AppState {
     pub queue: RwLock<QueueData>,
     pub agents: RwLock<serde_json::Value>,
     pub secrets: RwLock<serde_json::Map<String, serde_json::Value>>,
+    /// Encrypted secret vault. Enabled when VAULT_PASSWORD env var is set.
+    /// When enabled, /api/secrets/* routes through the vault instead of the plaintext map.
+    pub vault: crate::vault::Vault,
     pub projects: RwLock<Vec<serde_json::Value>>,
     pub brain: Arc<BrainQueue>,
     pub bus_tx: broadcast::Sender<String>,
@@ -180,6 +183,17 @@ pub async fn load_all(state: &Arc<AppState>) {
     *state.queue.write().await   = QueueData { items, completed };
     *state.secrets.write().await = crate::db::db_load_secrets(&conn);
     *state.projects.write().await = crate::db::db_load_projects(&conn);
+
+    // Load vault persistence data (salt + encrypted blobs).
+    let vault_salt  = crate::db::db_load_vault_salt(&conn);
+    let vault_blobs = crate::db::db_load_vault_blobs(&conn);
+    drop(conn);
+
+    if let Some(salt) = vault_salt {
+        state.vault.set_salt(salt).await;
+    }
+    state.vault.import(vault_blobs).await.ok();
+
     tracing::info!("State loaded from SQLite (fleet_db)");
 }
 

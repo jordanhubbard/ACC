@@ -87,6 +87,7 @@ async fn main() {
 
     let fs_root = cfg.fs_root.clone();
 
+    let vault_enabled = std::env::var("VAULT_PASSWORD").is_ok();
     let app_state = Arc::new(AppState {
         auth_tokens: cfg.auth_tokens,
         user_token_hashes: std::sync::RwLock::new(initial_hashes),
@@ -95,6 +96,7 @@ async fn main() {
         queue: RwLock::new(state::QueueData::default()),
         agents: RwLock::new(serde_json::Value::Object(serde_json::Map::new())),
         secrets: RwLock::new(serde_json::Map::new()),
+        vault: acc_server::vault::Vault::new(vault_enabled),
         projects: tokio::sync::RwLock::new(Vec::new()),
         brain: Arc::new(brain::BrainQueue::from_config(&cfg.llm_providers)),
         bus_tx: tokio::sync::broadcast::channel(256).0,
@@ -115,6 +117,19 @@ async fn main() {
 
     // Load in-memory caches from fleet_db (single source of truth).
     state::load_all(&app_state).await;
+
+    // Auto-unlock vault from VAULT_PASSWORD env var if set.
+    if let Ok(pw) = std::env::var("VAULT_PASSWORD") {
+        match app_state.vault.unlock(pw.as_bytes()).await {
+            Ok(_) => tracing::info!("[vault] auto-unlocked from VAULT_PASSWORD"),
+            Err(e) => tracing::warn!("[vault] auto-unlock failed: {}", e),
+        }
+        acc_server::vault::spawn_auto_lock(
+            app_state.vault.clone(),
+            acc_server::vault::DEFAULT_AUTO_LOCK,
+        );
+    }
+
     routes::lessons::load_lessons().await;
     routes::metrics::load_metrics().await;
     routes::issues::load_issues().await;
