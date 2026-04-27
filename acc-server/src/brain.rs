@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 /// acc-server/src/brain.rs — CCC LLM Request Queue + Retry Engine (Rust port of brain/index.mjs)
 ///
 /// Runs as a tokio background task. Accepts requests via the shared BrainQueue.
-/// Routes all calls through tokenhub (localhost:8090).
+/// Routes all calls through whatever OPENAI_BASE_URL points at (Ollama, OpenAI, vLLM, etc.).
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -53,8 +53,8 @@ pub struct BrainState {
 pub struct BrainQueue {
     pub state: RwLock<BrainState>,
     pub state_path: String,
-    pub tokenhub_url: String,
-    pub tokenhub_key: String,
+    pub llm_url: String,
+    pub llm_key: String,
     pub models: Vec<String>,
     pub tick_ms: u64,
     // Notify the worker when a new request is enqueued
@@ -63,10 +63,12 @@ pub struct BrainQueue {
 
 impl BrainQueue {
     pub fn new() -> Self {
-        let tokenhub_url =
-            std::env::var("TOKENHUB_URL").unwrap_or_else(|_| "http://localhost:8090".to_string());
-        let tokenhub_key = std::env::var("TOKENHUB_AGENT_KEY")
-            .or_else(|_| std::env::var("TOKENHUB_API_KEY"))
+        let llm_url = std::env::var("OPENAI_BASE_URL")
+            .or_else(|_| std::env::var("LLM_URL"))
+            .unwrap_or_else(|_| "http://localhost:8090".to_string());
+        let llm_key = std::env::var("OPENAI_API_KEY")
+            .or_else(|_| std::env::var("LLM_KEY"))
+            .or_else(|_| std::env::var("TOKENHUB_AGENT_KEY"))
             .unwrap_or_default();
         let models: Vec<String> = std::env::var("BRAIN_MODELS")
             .unwrap_or_else(|_| {
@@ -89,8 +91,8 @@ impl BrainQueue {
         BrainQueue {
             state: RwLock::new(BrainState::default()),
             state_path,
-            tokenhub_url,
-            tokenhub_key,
+            llm_url,
+            llm_key,
             models,
             tick_ms,
             notify: tokio::sync::Notify::new(),
@@ -147,8 +149,8 @@ impl BrainQueue {
         let state = self.state.read().await;
         json!({
             "ok": true,
-            "backend": "tokenhub",
-            "url": self.tokenhub_url,
+            "backend": "openai-compat",
+            "url": self.llm_url,
             "queueDepth": state.queue.len(),
             "completedCount": state.completed.len(),
             "lastTick": state.last_tick,
@@ -220,7 +222,7 @@ impl BrainQueue {
             match result {
                 Ok((text, tokens_used)) => {
                     req.attempts.push(json!({
-                        "model": "tokenhub",
+                        "model": "llm",
                         "ts": attempt_ts,
                         "tokensUsed": tokens_used,
                     }));
@@ -255,12 +257,12 @@ impl BrainQueue {
                 }
                 Err(e) => {
                     req.attempts.push(json!({
-                        "model": "tokenhub",
+                        "model": "llm",
                         "ts": attempt_ts,
                         "error": e.to_string(),
                     }));
                     req.status = "pending".to_string(); // retry next tick
-                    warn!("brain: {} tokenhub error: {} — will retry", id, e);
+                    warn!("brain: {} llm error: {} — will retry", id, e);
                 }
             }
         }
@@ -293,8 +295,8 @@ impl BrainQueue {
         max_tokens: u32,
     ) -> Result<(String, u32), String> {
         let resp = client
-            .post(format!("{}/v1/chat/completions", self.tokenhub_url))
-            .bearer_auth(&self.tokenhub_key)
+            .post(format!("{}/v1/chat/completions", self.llm_url))
+            .bearer_auth(&self.llm_key)
             .json(&json!({
                 "model": model,
                 "messages": messages,

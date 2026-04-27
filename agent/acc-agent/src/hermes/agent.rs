@@ -155,7 +155,7 @@ impl HermesAgent {
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
-                            let note = format!("hermes-native running (tools: {tool_names})");
+                            let note = format!("hermes-rust running (tools: {tool_names})");
                             post_heartbeat(&cfg, &client, &note).await;
                             if let Some(ref id) = item_id2 {
                                 post_keepalive(&cfg, &client, id, &note).await;
@@ -396,7 +396,7 @@ impl HermesAgent {
     async fn claim(&self, item_id: &str) -> bool {
         self.client
             .items()
-            .claim(item_id, &self.cfg.agent_name, Some("hermes-native claiming"))
+            .claim(item_id, &self.cfg.agent_name, Some("hermes-rust claiming"))
             .await
             .is_ok()
     }
@@ -428,11 +428,11 @@ impl HermesAgent {
     }
 
     fn log(&self, msg: &str) {
-        tracing::info!(component = "hermes-native", agent = %self.cfg.agent_name, "{msg}");
+        tracing::info!(component = "hermes-rust", agent = %self.cfg.agent_name, "{msg}");
         let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
-        let line = format!("[{ts}] [{}] [hermes-native] {msg}", self.cfg.agent_name);
+        let line = format!("[{ts}] [{}] [hermes-rust] {msg}", self.cfg.agent_name);
         eprintln!("{line}");
-        let log_path = self.cfg.log_file("hermes-native");
+        let log_path = self.cfg.log_file("hermes-rust");
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)

@@ -1,3 +1,4 @@
+use crate::db::{db_fleet_sync_claim, db_fleet_sync_complete, db_fleet_sync_fail, db_fleet_sync_keepalive};
 use crate::state::db_flush_queue;
 use crate::AppState;
 use axum::{
@@ -560,6 +561,10 @@ async fn claim_item(
             let updated = item.clone();
             drop(q);
             db_flush_queue(&state).await;
+            {
+                let conn = state.fleet_db.lock().await;
+                db_fleet_sync_claim(&conn, &id, &agent, &now);
+            }
             (StatusCode::OK, Json(json!({"ok": true, "item": updated}))).into_response()
         }
     }
@@ -627,6 +632,12 @@ async fn complete_item(
             q.completed.push(item.clone());
             drop(q);
             db_flush_queue(&state).await;
+            {
+                let conn = state.fleet_db.lock().await;
+                let output_str = body.get("resolution").or_else(|| body.get("result"))
+                    .and_then(|v| v.as_str()).unwrap_or("");
+                db_fleet_sync_complete(&conn, &id, &agent, output_str);
+            }
             (StatusCode::OK, Json(json!({"ok": true, "item": item}))).into_response()
         }
     }
@@ -711,6 +722,11 @@ async fn fail_item(
             let updated = item.clone();
             drop(q);
             db_flush_queue(&state).await;
+            {
+                let conn = state.fleet_db.lock().await;
+                let blocked = attempts >= max_attempts;
+                db_fleet_sync_fail(&conn, &id, blocked);
+            }
             (StatusCode::OK, Json(json!({"ok": true, "item": updated}))).into_response()
         }
     }
@@ -746,6 +762,10 @@ async fn keepalive_item(
             }
             let updated = item.clone();
             drop(q);
+            {
+                let conn = state.fleet_db.lock().await;
+                db_fleet_sync_keepalive(&conn, &id);
+            }
             (StatusCode::OK, Json(json!({"ok": true, "item": updated}))).into_response()
         }
     }

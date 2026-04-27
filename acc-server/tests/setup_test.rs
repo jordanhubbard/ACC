@@ -39,7 +39,7 @@ async fn test_setup_config_get_shape() {
         helpers::call(&ts.app, helpers::get("/api/setup/config")).await,
     ).await;
     assert!(body["agent_name"].is_string());
-    assert!(body["tokenhub_url"].is_string());
+    assert!(body["llm_url"].is_string());
     assert!(body["ccc_port"].is_number());
 }
 

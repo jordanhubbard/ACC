@@ -21,14 +21,16 @@ pub fn router() -> Router<Arc<AppState>> {
 async fn get_setup_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let first_run = state.auth_tokens.is_empty();
 
-    let tokenhub_url = std::env::var("TOKENHUB_URL").unwrap_or_default();
+    let llm_url = std::env::var("OPENAI_BASE_URL")
+        .or_else(|_| std::env::var("LLM_URL"))
+        .unwrap_or_default();
     let fs_root = std::env::var("ACC_FS_ROOT").unwrap_or_else(|_| "/srv/accfs".to_string());
     let has_accfs = std::path::Path::new(&fs_root).exists();
     let agent_name = std::env::var("AGENT_NAME").unwrap_or_else(|_| "ccc".to_string());
 
     Json(json!({
         "first_run": first_run,
-        "has_tokenhub": !tokenhub_url.is_empty(),
+        "has_llm": !llm_url.is_empty(),
         "has_accfs": has_accfs,
         "agent_name": agent_name,
         "version": env!("CARGO_PKG_VERSION"),
@@ -50,7 +52,7 @@ async fn get_config(State(state): State<Arc<AppState>>, headers: HeaderMap) -> i
     Json(json!({
         "agent_name":         std::env::var("AGENT_NAME").unwrap_or_else(|_| "ccc".to_string()),
         "public_url":         std::env::var("ACC_HOST_PUBLIC").unwrap_or_default(),
-        "tokenhub_url":       std::env::var("TOKENHUB_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string()),
+        "llm_url":            std::env::var("OPENAI_BASE_URL").or_else(|_| std::env::var("LLM_URL")).unwrap_or_default(),
         "supervisor_enabled": std::env::var("SUPERVISOR_ENABLED").unwrap_or_default() == "true",
         "fs_root":            std::env::var("ACC_FS_ROOT").unwrap_or_else(|_| "/srv/accfs".to_string()),
         "ccc_port":           port,
@@ -87,7 +89,7 @@ async fn put_config(
     let allowed = [
         ("agent_name",    "AGENT_NAME"),
         ("public_url",    "ACC_HOST_PUBLIC"),
-        ("tokenhub_url",  "TOKENHUB_URL"),
+        ("llm_url",       "OPENAI_BASE_URL"),
         ("fs_root",       "ACC_FS_ROOT"),
         ("log_level",     "RUST_LOG"),
     ];

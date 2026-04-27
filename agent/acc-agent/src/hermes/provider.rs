@@ -33,17 +33,17 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     pub fn new(api_key: String, model: String) -> Self {
+        let base_url = std::env::var("ANTHROPIC_BASE_URL")
+            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+        Self::with_base_url(api_key, model, base_url)
+    }
+
+    pub fn with_base_url(api_key: String, model: String, base_url: String) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("failed to build reqwest client for AnthropicProvider");
-        Self {
-            api_key,
-            model,
-            client,
-            base_url: std::env::var("ANTHROPIC_BASE_URL")
-                .unwrap_or_else(|_| "https://api.anthropic.com".to_string()),
-        }
+        Self { api_key, model, client, base_url }
     }
 }
 
@@ -119,18 +119,18 @@ pub struct OpenAiProvider {
 
 impl OpenAiProvider {
     pub fn new(api_key: String, model: String) -> Self {
+        let base_url = std::env::var("OPENAI_BASE_URL")
+            .or_else(|_| std::env::var("HERMES_BACKEND_URL"))
+            .unwrap_or_else(|_| "https://api.openai.com".to_string());
+        Self::with_base_url(api_key, model, base_url)
+    }
+
+    pub fn with_base_url(api_key: String, model: String, base_url: String) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("failed to build reqwest client for OpenAiProvider");
-        Self {
-            api_key,
-            model,
-            client,
-            base_url: std::env::var("OPENAI_BASE_URL")
-                .or_else(|_| std::env::var("HERMES_BACKEND_URL"))
-                .unwrap_or_else(|_| "https://api.openai.com".to_string()),
-        }
+        Self { api_key, model, client, base_url }
     }
 }
 
@@ -272,5 +272,189 @@ pub fn make_provider(api_key: String, model: String) -> Box<dyn LlmProvider> {
         Box::new(OpenAiProvider::new(oai_key, model))
     } else {
         Box::new(AnthropicProvider::new(api_key, model))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Json, Router, routing::post};
+    use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    // ── Minimal mock LLM servers ─────────────────────────────────────────────
+
+    /// Spin up an axum server on a random port, return its URL and the
+    /// recorded request bodies so tests can inspect what was sent.
+    async fn mock_server(
+        handler: Router,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{}", addr);
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, handler).await.ok();
+        });
+        (url, handle)
+    }
+
+    fn anthropic_mock_router(recorded: Arc<Mutex<Vec<Value>>>) -> Router {
+        Router::new().route(
+            "/v1/messages",
+            post(move |Json(body): Json<Value>| {
+                let recorded = recorded.clone();
+                async move {
+                    recorded.lock().await.push(body);
+                    Json(json!({
+                        "content": [{"type": "text", "text": "mock reply"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 10, "output_tokens": 5}
+                    }))
+                }
+            }),
+        )
+    }
+
+    fn openai_mock_router(recorded: Arc<Mutex<Vec<Value>>>) -> Router {
+        Router::new().route(
+            "/v1/chat/completions",
+            post(move |Json(body): Json<Value>| {
+                let recorded = recorded.clone();
+                async move {
+                    recorded.lock().await.push(body);
+                    Json(json!({
+                        "choices": [{"message": {"content": "oai reply", "role": "assistant"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 8, "completion_tokens": 3}
+                    }))
+                }
+            }),
+        )
+    }
+
+    // ── AnthropicProvider tests ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn anthropic_provider_returns_text_on_success() {
+        let recorded = Arc::new(Mutex::new(vec![]));
+        let (url, _h) = mock_server(anthropic_mock_router(recorded.clone())).await;
+        let p = AnthropicProvider::with_base_url("key".into(), "claude-test".into(), url);
+        let resp = p.complete("sys", &[], &[], 1024).await.unwrap();
+        assert_eq!(resp.stop_reason, "end_turn");
+        assert_eq!(resp.content[0]["text"], "mock reply");
+        assert_eq!(resp.input_tokens, 10);
+        assert_eq!(resp.output_tokens, 5);
+    }
+
+    #[tokio::test]
+    async fn anthropic_provider_sends_tools_when_nonempty() {
+        let recorded = Arc::new(Mutex::new(vec![]));
+        let (url, _h) = mock_server(anthropic_mock_router(recorded.clone())).await;
+        let p = AnthropicProvider::with_base_url("key".into(), "m".into(), url);
+        let tools = vec![json!({"name":"bash","description":"run bash","input_schema":{"type":"object","properties":{}}})];
+        p.complete("sys", &[], &tools, 512).await.unwrap();
+        let req = recorded.lock().await[0].clone();
+        assert!(req.get("tools").is_some(), "tools must be included when non-empty");
+    }
+
+    #[tokio::test]
+    async fn anthropic_provider_omits_tools_when_empty() {
+        let recorded = Arc::new(Mutex::new(vec![]));
+        let (url, _h) = mock_server(anthropic_mock_router(recorded.clone())).await;
+        let p = AnthropicProvider::with_base_url("key".into(), "m".into(), url);
+        p.complete("sys", &[], &[], 512).await.unwrap();
+        let req = recorded.lock().await[0].clone();
+        assert!(req.get("tools").is_none(), "tools must be omitted when empty");
+    }
+
+    #[tokio::test]
+    async fn anthropic_provider_returns_error_on_4xx() {
+        // Return 401 from a plain axum handler
+        use axum::http::StatusCode;
+        use axum::response::IntoResponse;
+        let router = Router::new().route(
+            "/v1/messages",
+            post(|| async { (StatusCode::UNAUTHORIZED, "Unauthorized").into_response() }),
+        );
+        let (url, _h) = mock_server(router).await;
+        let p = AnthropicProvider::with_base_url("bad-key".into(), "m".into(), url);
+        let result = p.complete("sys", &[], &[], 512).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("API error 401"));
+    }
+
+    // ── OpenAiProvider tests ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn openai_provider_returns_text_on_success() {
+        let recorded = Arc::new(Mutex::new(vec![]));
+        let (url, _h) = mock_server(openai_mock_router(recorded.clone())).await;
+        let p = OpenAiProvider::with_base_url("key".into(), "gpt-test".into(), url);
+        let resp = p.complete("sys", &[], &[], 1024).await.unwrap();
+        assert_eq!(resp.stop_reason, "end_turn");
+        assert_eq!(resp.content[0]["text"], "oai reply");
+        assert_eq!(resp.input_tokens, 8);
+        assert_eq!(resp.output_tokens, 3);
+    }
+
+    #[tokio::test]
+    async fn openai_provider_translates_tool_calls_to_tool_use_blocks() {
+        let router = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "content": null,
+                            "role": "assistant",
+                            "tool_calls": [{
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "bash", "arguments": "{\"command\":\"echo hi\"}"}
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2}
+                }))
+            }),
+        );
+        let (url, _h) = mock_server(router).await;
+        let p = OpenAiProvider::with_base_url("key".into(), "m".into(), url);
+        let resp = p.complete("sys", &[], &[], 512).await.unwrap();
+        assert_eq!(resp.stop_reason, "tool_use");
+        assert_eq!(resp.content.len(), 1);
+        assert_eq!(resp.content[0]["type"], "tool_use");
+        assert_eq!(resp.content[0]["name"], "bash");
+        assert_eq!(resp.content[0]["input"]["command"], "echo hi");
+    }
+
+    #[tokio::test]
+    async fn openai_provider_normalizes_length_stop_to_max_tokens() {
+        let router = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(json!({
+                    "choices": [{"message": {"content": "partial", "role": "assistant"}, "finish_reason": "length"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+                }))
+            }),
+        );
+        let (url, _h) = mock_server(router).await;
+        let p = OpenAiProvider::with_base_url("key".into(), "m".into(), url);
+        let resp = p.complete("sys", &[], &[], 512).await.unwrap();
+        assert_eq!(resp.stop_reason, "max_tokens");
+    }
+
+    #[tokio::test]
+    async fn openai_provider_sends_system_message_as_first_element() {
+        let recorded = Arc::new(Mutex::new(vec![]));
+        let (url, _h) = mock_server(openai_mock_router(recorded.clone())).await;
+        let p = OpenAiProvider::with_base_url("key".into(), "m".into(), url);
+        p.complete("my system prompt", &[], &[], 512).await.unwrap();
+        let req = recorded.lock().await[0].clone();
+        let messages = req["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "my system prompt");
     }
 }

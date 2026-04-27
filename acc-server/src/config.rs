@@ -23,14 +23,12 @@ pub struct CccConfig {
     pub fs_root: Option<String>,
     pub supervisor: SupervisorConfig,
     pub qdrant: QdrantConfig,
-    pub tokenhub: TokenhubConfig,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct SupervisorConfig {
     pub enabled: bool,
-    pub tokenhub_bin: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -38,12 +36,6 @@ pub struct SupervisorConfig {
 pub struct QdrantConfig {
     pub url: Option<String>,
     pub api_key: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
-#[serde(default)]
-pub struct TokenhubConfig {
-    pub url: Option<String>,
 }
 
 // ── Resolved (all fields concrete after merging JSON + env) ──────────────────
@@ -66,10 +58,8 @@ pub struct ResolvedConfig {
     pub auth_db_path: String,
     pub fs_root: String,
     pub supervisor_enabled: bool,
-    pub tokenhub_bin: String,
     pub qdrant_url: String,
     pub qdrant_api_key: Option<String>,
-    pub tokenhub_url: String,
 }
 
 // ── Loader ────────────────────────────────────────────────────────────────────
@@ -187,11 +177,6 @@ pub fn load() -> ResolvedConfig {
         .map(|s| s == "true")
         .unwrap_or(j.supervisor.enabled);
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    let tokenhub_bin = resolve_str(
-        "TOKENHUB_BIN",
-        j.supervisor.tokenhub_bin,
-        &format!("{}/tokenhub/bin/tokenhub", home),
-    );
 
     let qdrant_url = resolve_str(
         "QDRANT_FLEET_URL",
@@ -199,7 +184,6 @@ pub fn load() -> ResolvedConfig {
         "http://qdrant.service.consul:6333",
     );
     let qdrant_api_key = evar("QDRANT_FLEET_KEY").or(j.qdrant.api_key);
-    let tokenhub_url = resolve_str("TOKENHUB_URL", j.tokenhub.url, "http://tokenhub.service.consul:8090");
 
     let db_path = evar("ACC_DB_PATH");
 
@@ -219,9 +203,7 @@ pub fn load() -> ResolvedConfig {
         auth_db_path,
         fs_root,
         supervisor_enabled,
-        tokenhub_bin,
         qdrant_url,
         qdrant_api_key,
-        tokenhub_url,
     }
 }

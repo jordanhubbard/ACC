@@ -54,11 +54,13 @@ async fn get_bootstrap(
     if !global_bootstrap.is_empty() && token == global_bootstrap {
         return Json(json!({
             "ok": true,
-            "ccc_url": format!("http://{}:{}", 
+            "ccc_url": format!("http://{}:{}",
                 std::env::var("PUBLIC_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
                 std::env::var("ACC_PORT").unwrap_or_else(|_| "8789".to_string())
             ),
-            "tokenhub_url": std::env::var("TOKENHUB_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string()),
+            "llm_url": std::env::var("OPENAI_BASE_URL")
+                .or_else(|_| std::env::var("LLM_URL"))
+                .unwrap_or_default(),
         })).into_response();
     }
 

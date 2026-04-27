@@ -29,18 +29,8 @@ async fn main() {
     let port = cfg.port;
 
     let supervisor_handle = if cfg.supervisor_enabled {
-        let processes = vec![acc_server::supervisor::ManagedProcess {
-            name: "tokenhub".to_string(),
-            command: cfg.tokenhub_bin.clone(),
-            args: vec![],
-            env: vec![],
-            health_url: Some("http://127.0.0.1:8090/health".to_string()),
-            restart_delay_ms: 5000,
-        }];
-        let (sup, handle) = acc_server::supervisor::Supervisor::new(processes);
-        tokio::spawn(sup.run());
-        tracing::info!("Supervisor enabled: managing tokenhub");
-        Some(handle)
+        tracing::info!("Supervisor enabled (no managed processes configured)");
+        None
     } else {
         tracing::info!("Supervisor disabled");
         None

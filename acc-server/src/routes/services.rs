@@ -16,13 +16,10 @@ use crate::AppState;
 fn build_catalog() -> Vec<(String, String, String, String)> {
     let hub = std::env::var("AGENT_NAME").unwrap_or_else(|_| "hub".to_string());
     let ccc_port = std::env::var("ACC_PORT").unwrap_or_else(|_| "8789".to_string());
-    let tokenhub_port = std::env::var("TOKENHUB_PORT").unwrap_or_else(|_| "8090".to_string());
     let public_host = std::env::var("PUBLIC_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let mut entries = vec![
         ("acc-server".to_string(),  "ACC Server".to_string(),
          format!("http://{public_host}:{ccc_port}/health"), hub.clone()),
-        ("tokenhub".to_string(), "Tokenhub".to_string(),
-         format!("http://127.0.0.1:{tokenhub_port}/health"), hub.clone()),
         ("agentbus".to_string(), "AgentBus".to_string(),
          format!("http://127.0.0.1:{ccc_port}/api/health"), hub.clone()),
     ];

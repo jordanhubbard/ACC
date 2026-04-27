@@ -1,8 +1,10 @@
-//! Hermes session driver — native Rust implementation.
+//! hermes-rust — native Rust agent session driver.
 //!
-//! Routes to the native agent loop by default.
+//! Routes to the native Rust agent loop by default.
 //! Set HERMES_BACKEND=python to use the Python subprocess wrapper instead
 //! (useful for in-flight sessions that started under the old backend).
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 mod agent;
 mod conversation;
@@ -28,10 +30,12 @@ async fn native_run(args: &[String]) {
     let cfg = match Config::load() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[hermes] config error: {e}");
+            eprintln!("[hermes-rust] config error: {e}");
             std::process::exit(1);
         }
     };
+
+    eprintln!("[hermes-rust v{}] agent={} hub={}", VERSION, cfg.agent_name, cfg.acc_url);
 
     let mut item_id: Option<String> = None;
     let mut query: Option<String> = None;
@@ -46,7 +50,7 @@ async fn native_run(args: &[String]) {
             "--gateway" | "--resume" => {
                 // Gateway and session-resume modes require the Python backend.
                 eprintln!(
-                    "[hermes] {} requires HERMES_BACKEND=python",
+                    "[hermes-rust] {} requires HERMES_BACKEND=python",
                     args[i].as_str()
                 );
                 std::process::exit(1);
@@ -76,7 +80,7 @@ async fn native_run(args: &[String]) {
     } else if let Some(q) = query {
         hermes.run_query(q).await;
     } else {
-        eprintln!("[hermes] one of --item, --query, --poll required");
+        eprintln!("[hermes-rust] one of --item, --query, --poll required");
         std::process::exit(1);
     }
 }

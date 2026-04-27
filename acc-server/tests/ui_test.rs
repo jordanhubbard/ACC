@@ -57,7 +57,7 @@ async fn test_bootstrap_correct_token_returns_200() {
     let body = helpers::body_json(resp).await;
     assert_eq!(body["ok"], true);
     assert!(body["ccc_url"].is_string());
-    assert!(body["tokenhub_url"].is_string());
+    assert!(body["llm_url"].is_string());
 }
 
 // ── POST /api/bootstrap/token ─────────────────────────────────────────────────

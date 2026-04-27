@@ -892,6 +892,68 @@ pub fn db_load_turns(conn: &Connection, task_id: &str) -> Vec<serde_json::Value>
     .unwrap_or_default()
 }
 
+/// Mirror a queue item claim into the corresponding fleet_task (source='queue').
+/// Best-effort — silently ignores errors so queue lifecycle is never blocked.
+pub fn db_fleet_sync_claim(
+    conn: &rusqlite::Connection,
+    item_id: &str,
+    claimed_by: &str,
+    claimed_at: &str,
+) {
+    let expires = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::minutes(30))
+        .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .unwrap_or_default();
+    let _ = conn.execute(
+        "UPDATE fleet_tasks SET status='claimed', claimed_by=?1, claimed_at=?2,
+         claim_expires_at=?3, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE id=?4 AND source='queue'",
+        rusqlite::params![claimed_by, claimed_at, expires, item_id],
+    );
+}
+
+/// Mirror a queue item completion into the corresponding fleet_task (source='queue').
+pub fn db_fleet_sync_complete(
+    conn: &rusqlite::Connection,
+    item_id: &str,
+    completed_by: &str,
+    output: &str,
+) {
+    let _ = conn.execute(
+        "UPDATE fleet_tasks SET status='completed', completed_by=?1, completed_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+         output=?2, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE id=?3 AND source='queue'",
+        rusqlite::params![completed_by, output, item_id],
+    );
+}
+
+/// Mirror a queue item failure into the corresponding fleet_task (source='queue').
+/// If attempts < max_attempts the queue item goes back to pending (unclaimed);
+/// if blocked (max attempts exceeded) we set fleet_task to 'failed'.
+pub fn db_fleet_sync_fail(
+    conn: &rusqlite::Connection,
+    item_id: &str,
+    blocked: bool,
+) {
+    let status = if blocked { "failed" } else { "open" };
+    let _ = conn.execute(
+        "UPDATE fleet_tasks SET status=?1, claimed_by=NULL, claimed_at=NULL,
+         claim_expires_at=NULL, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE id=?2 AND source='queue'",
+        rusqlite::params![status, item_id],
+    );
+}
+
+/// Extend fleet_task claim expiry for a queue item keepalive.
+pub fn db_fleet_sync_keepalive(conn: &rusqlite::Connection, item_id: &str) {
+    let _ = conn.execute(
+        "UPDATE fleet_tasks SET claim_expires_at=datetime('now','+30 minutes'),
+         updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE id=?1 AND source='queue'",
+        rusqlite::params![item_id],
+    );
+}
+
 /// Create a fleet_task record mirroring a queue item, with source='queue'.
 /// Called when POST /api/queue creates a new item so it's visible to the fleet task system.
 pub fn db_create_fleet_task_from_queue(
@@ -976,5 +1038,106 @@ mod tests {
         let (q, a, s, p) = migrate_from_json(&conn, "/nonexistent/q.json", "/nonexistent/a.json",
                                               "/nonexistent/s.json", "/nonexistent/p.json");
         assert_eq!((q, a, s, p), (0, 0, 0, 0));
+    }
+
+    fn make_test_conn_with_queue_task(item_id: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        init_schema(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+        // Insert a fleet_task with source='queue' to act as the mirror target.
+        conn.execute(
+            "INSERT INTO fleet_tasks (id, project_id, title, description, status, priority, source)
+             VALUES (?1, 'queue', 'Test task', '', 'open', 2, 'queue')",
+            params![item_id],
+        ).unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_fleet_sync_claim_updates_status() {
+        let conn = make_test_conn_with_queue_task("wq-test-001");
+        db_fleet_sync_claim(&conn, "wq-test-001", "hermes", "2026-04-26T00:00:00Z");
+        let (status, claimed_by): (String, String) = conn.query_row(
+            "SELECT status, claimed_by FROM fleet_tasks WHERE id='wq-test-001'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(status, "claimed");
+        assert_eq!(claimed_by, "hermes");
+    }
+
+    #[test]
+    fn test_fleet_sync_complete_updates_status() {
+        let conn = make_test_conn_with_queue_task("wq-test-002");
+        db_fleet_sync_complete(&conn, "wq-test-002", "hermes", "done");
+        let (status, completed_by, output): (String, String, String) = conn.query_row(
+            "SELECT status, completed_by, output FROM fleet_tasks WHERE id='wq-test-002'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, Option<String>>(2)?.unwrap_or_default())),
+        ).unwrap();
+        assert_eq!(status, "completed");
+        assert_eq!(completed_by, "hermes");
+        assert_eq!(output, "done");
+    }
+
+    #[test]
+    fn test_fleet_sync_fail_blocked() {
+        let conn = make_test_conn_with_queue_task("wq-test-003");
+        // First claim it
+        db_fleet_sync_claim(&conn, "wq-test-003", "hermes", "2026-04-26T00:00:00Z");
+        // Then fail with blocked=true
+        db_fleet_sync_fail(&conn, "wq-test-003", true);
+        let (status, claimed_by): (String, Option<String>) = conn.query_row(
+            "SELECT status, claimed_by FROM fleet_tasks WHERE id='wq-test-003'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(status, "failed");
+        assert!(claimed_by.is_none());
+    }
+
+    #[test]
+    fn test_fleet_sync_fail_retry() {
+        let conn = make_test_conn_with_queue_task("wq-test-004");
+        db_fleet_sync_claim(&conn, "wq-test-004", "hermes", "2026-04-26T00:00:00Z");
+        db_fleet_sync_fail(&conn, "wq-test-004", false);
+        let status: String = conn.query_row(
+            "SELECT status FROM fleet_tasks WHERE id='wq-test-004'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(status, "open");
+    }
+
+    #[test]
+    fn test_fleet_sync_keepalive_updates_expiry() {
+        let conn = make_test_conn_with_queue_task("wq-test-005");
+        db_fleet_sync_claim(&conn, "wq-test-005", "hermes", "2026-04-26T00:00:00Z");
+        db_fleet_sync_keepalive(&conn, "wq-test-005");
+        // Just verify it doesn't error and the row still exists
+        let status: String = conn.query_row(
+            "SELECT status FROM fleet_tasks WHERE id='wq-test-005'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(status, "claimed");
+    }
+
+    #[test]
+    fn test_fleet_sync_no_op_on_missing_id() {
+        let conn = make_test_conn_with_queue_task("wq-test-006");
+        // Calling sync on a non-existent item should silently do nothing
+        db_fleet_sync_claim(&conn, "wq-NONEXISTENT", "hermes", "2026-04-26T00:00:00Z");
+        db_fleet_sync_complete(&conn, "wq-NONEXISTENT", "hermes", "done");
+        db_fleet_sync_fail(&conn, "wq-NONEXISTENT", false);
+        db_fleet_sync_keepalive(&conn, "wq-NONEXISTENT");
+        // The real row should be unchanged
+        let status: String = conn.query_row(
+            "SELECT status FROM fleet_tasks WHERE id='wq-test-006'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(status, "open");
     }
 }

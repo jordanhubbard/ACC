@@ -39,15 +39,19 @@ async fn test_list_providers_each_has_required_fields() {
 }
 
 #[tokio::test]
-async fn test_list_providers_includes_tokenhub() {
+async fn test_list_providers_returns_infrastructure() {
     let ts = helpers::TestServer::new().await;
     let body = helpers::body_json(
         helpers::call(&ts.app, helpers::get("/api/providers")).await,
     ).await;
     let providers = body["providers"].as_array().unwrap();
     assert!(
-        providers.iter().any(|p| p["id"] == "tokenhub"),
-        "providers must include tokenhub"
+        providers.iter().any(|p| p["id"] == "qdrant"),
+        "providers must include qdrant"
+    );
+    assert!(
+        providers.iter().any(|p| p["id"] == "accfs"),
+        "providers must include accfs"
     );
 }
 
@@ -80,7 +84,7 @@ async fn test_list_models_no_auth_required() {
 }
 
 #[tokio::test]
-async fn test_list_models_returns_503_when_tokenhub_offline() {
+async fn test_list_models_returns_503_when_llm_offline() {
     let ts = helpers::TestServer::new().await;
     let resp = helpers::call(&ts.app, helpers::get("/api/providers/models")).await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
