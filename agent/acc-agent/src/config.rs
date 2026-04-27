@@ -111,10 +111,6 @@ impl Config {
     pub fn quench_file(&self) -> PathBuf {
         self.acc_dir.join("quench")
     }
-
-    pub fn work_signal_file(&self) -> PathBuf {
-        self.acc_dir.join("work-signal")
-    }
 }
 
 pub fn load_env_file(path: &PathBuf) {

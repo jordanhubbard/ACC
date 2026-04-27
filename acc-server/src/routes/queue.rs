@@ -324,6 +324,10 @@ async fn post_queue(
 
     db_flush_queue(&state).await;
 
+    let _ = state.bus_tx.send(
+        serde_json::json!({"type": "work.available", "item_id": final_id}).to_string(),
+    );
+
     (StatusCode::CREATED, Json(json!({"ok": true, "item": item}))).into_response()
 }
 

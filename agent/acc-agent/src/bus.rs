@@ -1,10 +1,13 @@
 //! AgentBus SSE listener daemon.
 //!
 //! Replaces bus-listener.sh. Connects to /bus/stream, dispatches:
-//!   acc.update  → runs agent-pull.sh; touches work-signal
+//!   acc.update  → runs git pull then upgrade orchestrator
 //!   acc.quench  → writes quench timestamp file
 //!   acc.exec    → dispatches via exec_registry (or deprecated shell mode)
-//!   work signals → touches work-signal
+//!
+//! Work signals (work.available, queue.item.created, project.arrived) are
+//! handled by the queue worker's own embedded bus subscriber — this daemon
+//! no longer touches the filesystem work-signal file.
 
 use std::time::Duration;
 
@@ -148,8 +151,7 @@ async fn dispatch(cfg: &Config, client: &Client, raw_json: &str) {
             log(cfg, &format!("ping from {from}"));
         }
         "project.arrived" | "queue.item.created" | "work.available" => {
-            log(cfg, &format!("work signal: {msg_type}"));
-            touch_work_signal(cfg);
+            log(cfg, &format!("work signal: {msg_type} (handled by queue worker's SSE subscriber)"));
         }
         "bus.blob_ready" => handle_blob_ready(cfg, &msg),
         "heartbeat" | "queue_sync" | "pong" | "handoff" | "blob" | "status-response" => {}
@@ -175,7 +177,6 @@ async fn handle_user_request(cfg: &Config, client: &Client, msg: &BusMessage) {
 
     if try_claim_request(cfg, client, &request_id).await {
         log(cfg, &format!("user.request {request_id}: claimed — handling"));
-        touch_work_signal(cfg);
     } else {
         log(cfg, &format!("user.request {request_id}: already claimed by peer — backing off"));
     }
@@ -216,12 +217,10 @@ async fn handle_update(cfg: &Config, msg: &BusMessage) {
             Ok(s) if s.success() => {}
             Ok(s) => {
                 log(cfg, &format!("WARNING: git fetch failed (exit {s}) — aborting update"));
-                touch_work_signal(cfg);
                 return;
             }
             Err(e) => {
                 log(cfg, &format!("WARNING: git fetch error: {e} — aborting update"));
-                touch_work_signal(cfg);
                 return;
             }
         }
@@ -247,12 +246,10 @@ async fn handle_update(cfg: &Config, msg: &BusMessage) {
             Ok(s) if s.success() => log(cfg, &format!("git pull complete (branch={current_branch})")),
             Ok(s) => {
                 log(cfg, &format!("WARNING: git merge --ff-only failed (exit {s}) — local changes? Skipping upgrade."));
-                touch_work_signal(cfg);
                 return;
             }
             Err(e) => {
                 log(cfg, &format!("WARNING: git merge error: {e} — skipping upgrade"));
-                touch_work_signal(cfg);
                 return;
             }
         }
@@ -262,8 +259,6 @@ async fn handle_update(cfg: &Config, msg: &BusMessage) {
 
     // ── Run upgrade orchestrator (migrations → restarts → heartbeat) ──────────
     crate::upgrade::run_upgrade(cfg, crate::upgrade::UpgradeOptions { dry_run: false }).await;
-
-    touch_work_signal(cfg);
 }
 
 fn handle_quench(cfg: &Config, msg: &BusMessage) {
@@ -602,10 +597,6 @@ fn hmac_sign(payload: &Value, secret: &str) -> String {
     hex::encode(mac.finalize().into_bytes())
 }
 
-fn touch_work_signal(cfg: &Config) {
-    let _ = std::fs::write(cfg.work_signal_file(), "");
-}
-
 fn str_field(body: &Option<Value>, key: &str) -> Option<String> {
     body.as_ref()?.get(key)?.as_str().map(String::from)
 }
@@ -715,21 +706,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dispatch_work_available_touches_signal() {
+    async fn test_dispatch_work_available_no_panic() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = test_cfg_in_dir(dir.path(), "http://unused");
         let client = Client::new("http://unused", "test-tok").unwrap();
+        // Bus daemon logs and returns; queue worker's embedded SSE subscriber handles wakeup.
         dispatch(&cfg, &client, &mk_event("work.available", "all")).await;
-        assert!(cfg.work_signal_file().exists(), "work-signal must be created");
     }
 
     #[tokio::test]
-    async fn test_dispatch_project_arrived_touches_signal() {
+    async fn test_dispatch_project_arrived_no_panic() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = test_cfg_in_dir(dir.path(), "http://unused");
         let client = Client::new("http://unused", "test-tok").unwrap();
         dispatch(&cfg, &client, &mk_event("project.arrived", "natasha")).await;
-        assert!(cfg.work_signal_file().exists());
     }
 
     #[tokio::test]
@@ -746,9 +736,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = test_cfg_in_dir(dir.path(), "http://unused");
         let client = Client::new("http://unused", "test-tok").unwrap();
-        // to="boris" — natasha should ignore it
+        // to="boris" — natasha should ignore it (no observable side-effect)
         dispatch(&cfg, &client, &mk_event("work.available", "boris")).await;
-        assert!(!cfg.work_signal_file().exists(), "natasha must not react to boris's message");
     }
 
     #[tokio::test]
@@ -803,7 +792,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_listen_once_work_signal_event_touches_file() {
+    async fn test_listen_once_work_signal_event_no_panic() {
         let dir = tempfile::tempdir().unwrap();
         let mock = crate::hub_mock::HubMock::with_sse(vec![
             serde_json::json!({"type":"work.available","to":"all"}).to_string(),
@@ -811,7 +800,7 @@ mod tests {
         let cfg = test_cfg_in_dir(dir.path(), &mock.url);
         let client = build_client(&cfg);
         listen_once(&cfg, &client).await;
-        assert!(cfg.work_signal_file().exists());
+        // Bus daemon logs and returns; wakeup is handled by the queue worker's SSE subscriber.
     }
 
     #[tokio::test]
@@ -825,7 +814,6 @@ mod tests {
         let client = build_client(&cfg);
         listen_once(&cfg, &client).await;
         assert!(cfg.quench_file().exists(), "quench file from first event");
-        assert!(cfg.work_signal_file().exists(), "work signal from second event");
     }
 
     #[tokio::test]
@@ -836,8 +824,8 @@ mod tests {
         ]).await;
         let cfg = test_cfg_in_dir(dir.path(), &mock.url);
         let client = build_client(&cfg);
+        // must not panic; nothing observable for a message directed at another agent
         listen_once(&cfg, &client).await;
-        assert!(!cfg.work_signal_file().exists(), "natasha must not react to boris's work signal");
     }
 
     #[tokio::test]
@@ -849,9 +837,8 @@ mod tests {
         ]).await;
         let cfg = test_cfg_in_dir(dir.path(), &mock.url);
         let client = build_client(&cfg);
+        // must not panic on bad JSON; valid event after bad one is still processed
         listen_once(&cfg, &client).await;
-        // valid event after bad one is still processed
-        assert!(cfg.work_signal_file().exists());
     }
 
     // ── user.request first-responder tests ───────────────────────────────────
@@ -879,17 +866,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dispatch_user_request_claims_and_touches_signal() {
+    async fn test_dispatch_user_request_claim_win_no_panic() {
         let dir = tempfile::tempdir().unwrap();
         let mock = crate::hub_mock::HubMock::new().await; // default 200
         let cfg = test_cfg_in_dir(dir.path(), &mock.url);
         let client = Client::new(&mock.url, "test-tok").unwrap();
+        // Claim succeeds — bus daemon logs; queue worker's SSE subscriber handles the wakeup.
         dispatch(&cfg, &client, r#"{"type":"user.request","to":"all","body":{"request_id":"req-123"}}"#).await;
-        assert!(cfg.work_signal_file().exists(), "claim win must touch work-signal");
     }
 
     #[tokio::test]
-    async fn test_dispatch_user_request_409_no_signal() {
+    async fn test_dispatch_user_request_409_no_panic() {
         use crate::hub_mock::HubState;
         let dir = tempfile::tempdir().unwrap();
         let mock = crate::hub_mock::HubMock::with_state(
@@ -898,7 +885,6 @@ mod tests {
         let cfg = test_cfg_in_dir(dir.path(), &mock.url);
         let client = Client::new(&mock.url, "test-tok").unwrap();
         dispatch(&cfg, &client, r#"{"type":"user.request","to":"all","body":{"request_id":"req-456"}}"#).await;
-        assert!(!cfg.work_signal_file().exists(), "claim loss must NOT touch work-signal");
     }
 
     #[tokio::test]

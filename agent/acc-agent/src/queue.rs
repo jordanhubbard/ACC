@@ -12,8 +12,10 @@
 //!   4. Abandon: on failure, preserve workspace in AgentFS for debugging
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::Notify;
 use tokio::time::sleep;
 
 use acc_client::Client;
@@ -25,7 +27,6 @@ const POLL_INTERVAL_IDLE: Duration = Duration::from_secs(60);
 const POLL_INTERVAL_BUSY: Duration = Duration::from_secs(5);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(25 * 60);
 const CLAUDE_TIMEOUT: Duration = Duration::from_secs(7200);
-const WORK_SIGNAL_CHECK: Duration = Duration::from_secs(1);
 
 const HERMES_TAGS: &[&str] = &["hermes", "gpu", "render", "simulation", "omniverse", "isaaclab"];
 
@@ -57,6 +58,15 @@ pub async fn run(args: &[String]) {
     let client = build_client(&cfg);
     post_heartbeat(&cfg, &client, "queue-worker starting").await;
 
+    // SSE-driven wakeup: mirrors the pattern in tasks.rs.
+    let nudge = Arc::new(Notify::new());
+    {
+        let cfg2 = cfg.clone();
+        let client2 = client.clone();
+        let nudge2 = nudge.clone();
+        tokio::spawn(bus_subscriber(cfg2, client2, nudge2));
+    }
+
     let mut poll_interval = POLL_INTERVAL_IDLE;
 
     loop {
@@ -67,9 +77,6 @@ pub async fn run(args: &[String]) {
         }
 
         post_heartbeat(&cfg, &client, "idle").await;
-
-        // Consume work-signal if present
-        let _ = std::fs::remove_file(cfg.work_signal_file());
 
         let items = match fetch_queue(&cfg, &client).await {
             Ok(v) => v,
@@ -100,13 +107,11 @@ pub async fn run(args: &[String]) {
         } else {
             log(&cfg, "no claimable items — sleeping");
             if once { break; }
-            // Interruptible idle sleep
-            let deadline = tokio::time::Instant::now() + poll_interval;
-            while tokio::time::Instant::now() < deadline {
-                if cfg.work_signal_file().exists() {
-                    break;
+            tokio::select! {
+                _ = sleep(poll_interval) => {}
+                _ = nudge.notified() => {
+                    log(&cfg, "woke early — SSE work signal received");
                 }
-                sleep(WORK_SIGNAL_CHECK).await;
             }
             poll_interval = POLL_INTERVAL_IDLE;
         }
@@ -786,6 +791,35 @@ fn log(cfg: &Config, msg: &str) {
 
 fn build_client(cfg: &Config) -> Client {
     Client::new(&cfg.acc_url, &cfg.acc_token).expect("failed to build HTTP client")
+}
+
+// ── SSE bus subscriber — wakes the poll loop on work.available ────────────────
+
+async fn bus_subscriber(cfg: Config, client: Client, nudge: Arc<Notify>) {
+    loop {
+        match subscribe_bus(&cfg, &client, &nudge).await {
+            Ok(()) => {}
+            Err(e) => {
+                log(&cfg, &format!("[bus] disconnected: {e}, reconnecting in 5s"));
+                sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
+}
+
+async fn subscribe_bus(cfg: &Config, client: &Client, nudge: &Arc<Notify>) -> Result<(), String> {
+    use futures_util::StreamExt;
+    let stream = client.bus().stream();
+    tokio::pin!(stream);
+    while let Some(msg) = stream.next().await {
+        let msg = msg.map_err(|e| e.to_string())?;
+        let kind = msg.kind.as_deref().unwrap_or("");
+        if matches!(kind, "work.available" | "queue.item.created" | "project.arrived") {
+            log(cfg, &format!("SSE work signal: {kind}"));
+            nudge.notify_one();
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
