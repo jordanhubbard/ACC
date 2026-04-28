@@ -192,7 +192,7 @@ pub fn codex_adapter() -> SessionAdapterConfig {
     SessionAdapterConfig {
         executor: "codex_cli",
         launch_binary: "codex",
-        launch_args: &["--approval-mode", "full-auto"],
+        launch_args: &["--sandbox", "danger-full-access", "--full-auto"],
         default_session_name: "codex-main",
         env_session_name: "ACC_CODEX_SESSION",
     }

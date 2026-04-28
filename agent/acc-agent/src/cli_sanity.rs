@@ -12,6 +12,32 @@ const PROBE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 const PROBE_QUESTION: &str = "Reply with only one lowercase word: what is the capital of France?";
 const PROBE_EXPECTED_ANSWER: &str = "paris";
 
+// Canonical contents for an ACC-managed Claude CLI agent's settings file.
+// Written to $HOME/.claude/settings.json before the Claude vetting probe so
+// the agent never hits a permission prompt during automated execution.
+const CLAUDE_SETTINGS_JSON: &str = r#"{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Edit",
+      "Write",
+      "Read",
+      "WebFetch",
+      "WebSearch",
+      "mcp__*"
+    ],
+    "defaultMode": "dontAsk"
+  },
+  "enabledPlugins": {
+    "swift-lsp@claude-plugins-official": true,
+    "clangd-lsp@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true
+  },
+  "theme": "light",
+  "model": "opus[1m]"
+}
+"#;
+
 #[derive(Debug, Clone)]
 struct ProbeCacheEntry {
     checked_at: Instant,
@@ -87,6 +113,15 @@ fn cached_probe(executor: &str) -> Option<ProbeCacheEntry> {
 }
 
 async fn run_probe(_cfg: &Config, executor: &str, workspace: &Path) -> ProbeResult {
+    if executor == "claude_cli" {
+        if let Err(e) = ensure_claude_settings() {
+            return ProbeResult {
+                healthy: false,
+                detail: format!("settings_write_failed:{e}"),
+            };
+        }
+    }
+
     let Some(command) = launch_command(executor) else {
         return ProbeResult {
             healthy: false,
@@ -193,6 +228,28 @@ fn is_supported_executor(executor: &str) -> bool {
     matches!(executor, "claude_cli" | "codex_cli" | "cursor_cli")
 }
 
+/// Writes the canonical ACC-managed Claude settings to
+/// `$HOME/.claude/settings.json`, creating the directory if needed.
+/// Idempotent: re-reads the file first and skips the write when the
+/// content already matches.
+fn ensure_claude_settings() -> std::io::Result<()> {
+    let home = std::env::var_os("HOME").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set")
+    })?;
+    let dir = PathBuf::from(home).join(".claude");
+    let file = dir.join("settings.json");
+
+    if let Ok(existing) = std::fs::read_to_string(&file) {
+        if existing == CLAUDE_SETTINGS_JSON {
+            return Ok(());
+        }
+    }
+
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(&file, CLAUDE_SETTINGS_JSON)?;
+    Ok(())
+}
+
 fn which_bin(name: &str) -> Option<PathBuf> {
     std::env::var("PATH").ok().and_then(|path_var| {
         path_var.split(':').find_map(|dir| {
@@ -220,7 +277,7 @@ impl LaunchCommand {
 fn launch_command(executor: &str) -> Option<LaunchCommand> {
     match executor {
         "claude_cli" => Some(LaunchCommand { binary: "claude", args: &["--dangerously-skip-permissions"] }),
-        "codex_cli" => Some(LaunchCommand { binary: "codex", args: &["--approval-mode", "full-auto"] }),
+        "codex_cli" => Some(LaunchCommand { binary: "codex", args: &["--sandbox", "danger-full-access", "--full-auto"] }),
         "cursor_cli" => Some(LaunchCommand { binary: "cursor", args: &["--headless"] }),
         _ => None,
     }

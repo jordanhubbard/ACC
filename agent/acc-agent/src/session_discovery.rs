@@ -122,6 +122,7 @@ fn build_executor_status(cfg: &Config, executor: &str, sessions: &[AgentSession]
     let ready = installed && auth_state != "unauthenticated";
 
     let mut extra = BTreeMap::new();
+    extra.insert("type".into(), serde_json::json!(executor));
     extra.insert("session_count".into(), serde_json::json!(executor_sessions.len()));
 
     AgentExecutor {
@@ -246,7 +247,7 @@ mod tests {
     #[test]
     fn infer_executor_from_tmux_metadata() {
         assert_eq!(infer_executor(&pane("claude:proj", "bash", "claude")), Some("claude_cli"));
-        assert_eq!(infer_executor(&pane("codex-main", "bash", "codex --approval-mode full-auto")), Some("codex_cli"));
+        assert_eq!(infer_executor(&pane("codex-main", "bash", "codex --sandbox danger-full-access --full-auto")), Some("codex_cli"));
         assert_eq!(infer_executor(&pane("misc", "zsh", "sleep 5")), None);
     }
 

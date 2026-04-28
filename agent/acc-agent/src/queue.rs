@@ -527,7 +527,7 @@ async fn run_cli_subprocess(
 ) -> (String, i32) {
     let (binary, args): (&str, &[&str]) = match executor {
         "claude_cli" => ("claude", &["-p"]),
-        "codex_cli" => ("codex", &["--approval-mode", "full-auto", "--task"]),
+        "codex_cli" => ("codex", &["--sandbox", "danger-full-access", "--full-auto", "--task"]),
         "cursor_cli" => ("cursor", &["--headless", "--task"]),
         _ => return (format!("unsupported one-shot executor: {executor}"), 1),
     };
