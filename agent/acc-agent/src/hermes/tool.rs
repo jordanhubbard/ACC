@@ -25,12 +25,18 @@ impl ToolRegistry {
     }
 
     pub fn default_tools() -> Self {
-        Self::new(vec![
+        Self::new(Self::default_tools_vec())
+    }
+
+    /// Same set as [`default_tools`], but as a raw `Vec` so callers can
+    /// extend it (e.g., add Slack tools) before constructing the registry.
+    pub fn default_tools_vec() -> Vec<Box<dyn Tool>> {
+        vec![
             Box::new(BashTool),
             Box::new(ReadFileTool),
             Box::new(WriteFileTool),
             Box::new(WebFetchTool::new()),
-        ])
+        ]
     }
 
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {

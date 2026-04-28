@@ -37,26 +37,19 @@ pub struct SlackAdapter {
 }
 
 impl SlackAdapter {
-    /// Returns None if required tokens are missing.
+    /// Build a SlackAdapter from already-resolved tokens. The gateway is
+    /// responsible for fetching tokens (secret store with env-var fallback);
+    /// this constructor only validates the bot token via `auth.test` to
+    /// derive the bot user ID used for mention detection.
     ///
-    /// `workspace` is an optional uppercase suffix: None → primary vars,
-    /// Some("OFTERRA") → SLACK_APP_TOKEN_OFTERRA, SLACK_BOT_TOKEN_OFTERRA.
+    /// Returns None when `auth.test` fails — the caller logs the workspace
+    /// label and continues without Slack on this gateway.
     pub async fn new(
         sessions: Arc<SessionStore>,
         agent: Arc<HermesAgent>,
-        workspace: Option<&str>,
+        bot_token: String,
+        app_token: String,
     ) -> Option<Self> {
-        let suffix = workspace.map(|w| format!("_{}", w.to_uppercase())).unwrap_or_default();
-
-        let app_token = std::env::var(format!("SLACK_APP_TOKEN{suffix}")).ok()
-            .filter(|t| t.starts_with("xapp-"))?;
-        // For the default workspace also try the legacy SLACK_OMGJKH_TOKEN name.
-        let bot_token = std::env::var(format!("SLACK_BOT_TOKEN{suffix}")).ok()
-            .or_else(|| {
-                if suffix.is_empty() { std::env::var("SLACK_OMGJKH_TOKEN").ok() } else { None }
-            })
-            .filter(|t| !t.is_empty())?;
-
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()

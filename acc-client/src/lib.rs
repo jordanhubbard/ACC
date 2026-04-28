@@ -16,12 +16,13 @@
 pub mod agents;
 pub mod auth;
 pub mod bus;
-pub mod llm_config;
 pub mod error;
 pub mod items;
+pub mod llm_config;
 pub mod memory;
 pub mod projects;
 pub mod queue;
+pub mod secrets;
 pub mod sessions;
 pub mod tasks;
 
@@ -46,8 +47,8 @@ impl Client {
     /// Construct a client with an explicit base URL and bearer token.
     pub fn new(base_url: impl Into<String>, token: &str) -> Result<Self> {
         let mut headers = HeaderMap::new();
-        let auth = HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|_| Error::InvalidToken)?;
+        let auth =
+            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| Error::InvalidToken)?;
         headers.insert(AUTHORIZATION, auth);
         let http = reqwest::Client::builder()
             .default_headers(headers)
@@ -163,5 +164,10 @@ impl Client {
     /// Entry point for hub-backed gateway conversation sessions.
     pub fn sessions(&self) -> sessions::SessionsApi<'_> {
         sessions::SessionsApi { client: self }
+    }
+
+    /// Entry point for the hub-node secret store.
+    pub fn secrets(&self) -> secrets::SecretsApi<'_> {
+        secrets::SecretsApi { client: self }
     }
 }

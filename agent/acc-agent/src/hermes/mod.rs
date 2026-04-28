@@ -6,6 +6,8 @@ mod agent;
 mod conversation;
 mod gateway;
 mod provider;
+mod slack_api;
+mod slack_tools;
 mod tool;
 
 use agent::HermesAgent;
