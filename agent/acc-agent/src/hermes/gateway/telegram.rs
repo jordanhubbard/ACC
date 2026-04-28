@@ -1,11 +1,12 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tracing::Instrument;
 
 use super::session::SessionStore;
 use super::super::agent::HermesAgent;
+use acc_client::Client;
 
 fn new_trace_id() -> String {
     static CTR: AtomicU64 = AtomicU64::new(0);
@@ -28,6 +29,7 @@ pub struct TelegramAdapter {
     token: String,
     bot_username: String,
     http: reqwest::Client,
+    client: Client,
     sessions: Arc<SessionStore>,
     agent: Arc<HermesAgent>,
     /// Per-session mutex to serialize turns within a conversation.
@@ -36,7 +38,11 @@ pub struct TelegramAdapter {
 
 impl TelegramAdapter {
     /// Returns None if TELEGRAM_BOT_TOKEN is not set.
-    pub async fn new(sessions: Arc<SessionStore>, agent: Arc<HermesAgent>) -> Option<Self> {
+    pub async fn new(
+        sessions: Arc<SessionStore>,
+        agent: Arc<HermesAgent>,
+        client: Client,
+    ) -> Option<Self> {
         let token = std::env::var("TELEGRAM_BOT_TOKEN").ok()?;
         if token.is_empty() { return None; }
         let http = reqwest::Client::builder()
@@ -51,7 +57,7 @@ impl TelegramAdapter {
         tracing::info!("[telegram] connected as @{bot_username}");
 
         Some(Self {
-            token, bot_username, http,
+            token, bot_username, http, client,
             sessions, agent,
             active: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
@@ -78,6 +84,8 @@ impl TelegramAdapter {
                 offset = offset.max(update_id + 1);
                 if let Some(msg) = update.get("message") {
                     self.handle_message(msg).await;
+                } else if let Some(reaction) = update.get("message_reaction") {
+                    self.handle_reaction(reaction).await;
                 }
             }
         }
@@ -110,6 +118,49 @@ impl TelegramAdapter {
             Some(t) if !t.is_empty() => t,
             _ => return,
         };
+        let message_id = msg["message_id"].as_i64().unwrap_or(0);
+        let root_id = msg["message_thread_id"]
+            .as_i64()
+            .or_else(|| msg["reply_to_message"]["message_id"].as_i64())
+            .unwrap_or(message_id);
+        let chain_id = telegram_chain_id(chat_id, root_id);
+        let from_name = telegram_display_name(&msg["from"]);
+        self.record_chain_event(
+            &chain_id,
+            json!({
+                "id": chain_id,
+                "source": "telegram",
+                "workspace": "telegram",
+                "channel_id": chat_id.to_string(),
+                "thread_id": root_id.to_string(),
+                "root_event_id": root_id.to_string(),
+                "participants": [{
+                    "id": from_id.to_string(),
+                    "platform": "telegram",
+                    "name": from_name,
+                    "kind": if msg["from"]["is_bot"].as_bool().unwrap_or(false) { "bot" } else { "human" }
+                }],
+                "entities": [{
+                    "type": "telegram_chat",
+                    "id": chat_id.to_string()
+                }]
+            }),
+            json!({
+                "event_type": "message",
+                "source": "telegram",
+                "source_event_id": format!("{chat_id}:{message_id}"),
+                "actor_id": from_id.to_string(),
+                "actor_name": from_name,
+                "actor_kind": if msg["from"]["is_bot"].as_bool().unwrap_or(false) { "bot" } else { "human" },
+                "text": text,
+                "occurred_at": telegram_date_to_rfc3339(msg["date"].as_i64()),
+                "metadata": {
+                    "chat_type": chat_type,
+                    "message_id": message_id,
+                    "root_message_id": root_id
+                }
+            }),
+        ).await;
 
         // In groups, only respond if the bot is @mentioned.
         let (should_respond, text_clean) = if chat_type == "private" {
@@ -129,6 +180,17 @@ impl TelegramAdapter {
             let key = session_key(chat_id, from_id, chat_type);
             self.sessions.clear(&key).await;
             let _ = self.send_message(chat_id, None, "Conversation reset.").await;
+            self.record_chain_event(
+                &chain_id,
+                json!({"id": chain_id, "source": "telegram", "workspace": "telegram", "channel_id": chat_id.to_string(), "thread_id": root_id.to_string()}),
+                json!({
+                    "event_type": "session_reset",
+                    "source": "telegram",
+                    "actor_id": from_id.to_string(),
+                    "actor_kind": "human",
+                    "text": text_clean
+                }),
+            ).await;
             return;
         }
 
@@ -162,6 +224,70 @@ impl TelegramAdapter {
             if let Err(e) = self.send_message(chat_id, reply_to, &chunk).await {
                 tracing::warn!("[telegram] send error: {e}");
             }
+        }
+        self.record_chain_event(
+            &chain_id,
+            json!({"id": chain_id, "source": "telegram", "workspace": "telegram", "channel_id": chat_id.to_string(), "thread_id": root_id.to_string()}),
+            json!({
+                "event_type": if response.starts_with("I encountered an error:") { "error" } else { "bot_reply" },
+                "source": "telegram",
+                "actor_id": self.bot_username,
+                "actor_kind": "bot",
+                "text": response,
+                "metadata": {
+                    "trace_id": trace_id
+                }
+            }),
+        ).await;
+    }
+
+    async fn handle_reaction(&self, reaction: &Value) {
+        let chat_id = match reaction["chat"]["id"].as_i64() {
+            Some(id) => id,
+            None => return,
+        };
+        let message_id = reaction["message_id"].as_i64().unwrap_or(0);
+        let user_id = reaction["user"]["id"].as_i64().unwrap_or(0);
+        if message_id == 0 || user_id == 0 { return; }
+        let chain_id = telegram_chain_id(chat_id, message_id);
+        let emoji = reaction["new_reaction"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|v| v["emoji"].as_str())
+            .unwrap_or("");
+        self.record_chain_event(
+            &chain_id,
+            json!({
+                "id": chain_id,
+                "source": "telegram",
+                "workspace": "telegram",
+                "channel_id": chat_id.to_string(),
+                "thread_id": message_id.to_string(),
+                "root_event_id": message_id.to_string()
+            }),
+            json!({
+                "event_type": "reaction",
+                "source": "telegram",
+                "source_event_id": format!("reaction:{chat_id}:{message_id}:{user_id}:{emoji}"),
+                "actor_id": user_id.to_string(),
+                "actor_kind": "human",
+                "text": emoji,
+                "occurred_at": telegram_date_to_rfc3339(reaction["date"].as_i64()),
+                "metadata": {
+                    "message_id": message_id,
+                    "emoji": emoji
+                }
+            }),
+        ).await;
+    }
+
+    async fn record_chain_event(&self, chain_id: &str, chain: Value, event: Value) {
+        if let Err(e) = self.client.chains().upsert(&chain).await {
+            tracing::warn!("[telegram] chain upsert failed for {chain_id}: {e}");
+            return;
+        }
+        if let Err(e) = self.client.chains().append_event(chain_id, &event).await {
+            tracing::warn!("[telegram] chain event append failed for {chain_id}: {e}");
         }
     }
 
@@ -200,6 +326,49 @@ fn session_key(chat_id: i64, from_id: i64, chat_type: &str) -> String {
     } else {
         format!("telegram_{chat_id}_{from_id}")
     }
+}
+
+fn telegram_chain_id(chat_id: i64, root_id: i64) -> String {
+    safe_chain_id(&["telegram", &chat_id.to_string(), &root_id.to_string()])
+}
+
+fn safe_chain_id(parts: &[&str]) -> String {
+    let mut id = parts
+        .iter()
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            p.chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect::<String>()
+                .trim_matches('-')
+                .to_ascii_lowercase()
+        })
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if !id.starts_with("chain-") {
+        id = format!("chain-{id}");
+    }
+    id
+}
+
+fn telegram_display_name(user: &Value) -> String {
+    let first = user["first_name"].as_str().unwrap_or("");
+    let last = user["last_name"].as_str().unwrap_or("");
+    let username = user["username"].as_str().unwrap_or("");
+    let name = format!("{first} {last}").trim().to_string();
+    if !name.is_empty() {
+        name
+    } else {
+        username.to_string()
+    }
+}
+
+fn telegram_date_to_rfc3339(date: Option<i64>) -> String {
+    let secs = date.unwrap_or_else(|| chrono::Utc::now().timestamp());
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
+        .unwrap_or_else(chrono::Utc::now)
+        .to_rfc3339()
 }
 
 /// Split text into chunks at paragraph or sentence boundaries.

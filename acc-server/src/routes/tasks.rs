@@ -92,6 +92,12 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Value> {
         .get("finisher_session")
         .cloned()
         .unwrap_or(Value::Null);
+    let chain_id = metadata.get("chain_id").cloned().unwrap_or_else(|| {
+        metadata
+            .get("source_chain_id")
+            .cloned()
+            .unwrap_or(Value::Null)
+    });
     let blocked_by_str: String = row.get(16).unwrap_or_else(|_| "[]".to_string());
     let blocked_by: Value = serde_json::from_str(&blocked_by_str).unwrap_or(json!([]));
     let output_val: Value = {
@@ -127,6 +133,7 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Value> {
         "workflow_role":    workflow_role,
         "finisher_agent":   finisher_agent,
         "finisher_session": finisher_session,
+        "chain_id":         chain_id,
         "task_type":        task_type,
         "review_of":        row.get::<_, Option<String>>(14)?,
         "phase":            row.get::<_, Option<String>>(15)?,
@@ -381,6 +388,22 @@ async fn create_task(
         {
             m["finisher_session"] = serde_json::json!(finisher_session);
         }
+        if let Some(chain_id) = body
+            .get("chain_id")
+            .or_else(|| body.get("source_chain_id"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                m.get("chain_id")
+                    .or_else(|| m.get("source_chain_id"))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+        {
+            m["chain_id"] = serde_json::json!(chain_id);
+        }
         if let Some(required_executors) = body.get("required_executors").and_then(|v| v.as_array())
         {
             let required: Vec<String> = required_executors
@@ -447,6 +470,15 @@ async fn create_task(
             params![id, project_id, title, description, priority, metadata, task_type, review_of, phase, blocked_by],
         ) {
             Ok(_) => {
+                if let Some(chain_id) = task_chain_id_from_metadata(&metadata) {
+                    let _ = crate::routes::chains::link_task_to_chain(
+                        &db,
+                        &chain_id,
+                        &id,
+                        "spawned",
+                        &json!({"source": "task_create"}),
+                    );
+                }
                 let task = db.query_row(
                     &format!("SELECT {TASK_COLS} FROM fleet_tasks WHERE id=?1"),
                     params![id],
@@ -512,6 +544,7 @@ async fn update_task(
             "UPDATE fleet_tasks SET status=?1, updated_at=?2 WHERE id=?3",
             params![s, now, id],
         );
+        let _ = crate::routes::chains::mark_task_status(&db, &id, s);
     }
     if let Some(tt) = body.get("task_type").and_then(|v| v.as_str()) {
         let _ = db.execute(
@@ -534,6 +567,8 @@ async fn update_task(
         || body.get("workflow_role").is_some()
         || body.get("finisher_agent").is_some()
         || body.get("finisher_session").is_some()
+        || body.get("chain_id").is_some()
+        || body.get("source_chain_id").is_some()
     {
         let current_meta: String = db
             .query_row(
@@ -555,6 +590,8 @@ async fn update_task(
         maybe_set_meta_string(&mut meta, "workflow_role", body.get("workflow_role"));
         maybe_set_meta_string(&mut meta, "finisher_agent", body.get("finisher_agent"));
         maybe_set_meta_string(&mut meta, "finisher_session", body.get("finisher_session"));
+        maybe_set_meta_string(&mut meta, "chain_id", body.get("chain_id"));
+        maybe_set_meta_string(&mut meta, "source_chain_id", body.get("source_chain_id"));
         if let Some(required_executors) = body.get("required_executors").and_then(|v| v.as_array())
         {
             let required: Vec<String> = required_executors
@@ -567,6 +604,20 @@ async fn update_task(
             "UPDATE fleet_tasks SET metadata=?1, updated_at=?2 WHERE id=?3",
             params![meta.to_string(), now, id],
         );
+        if let Some(chain_id) = meta
+            .get("chain_id")
+            .or_else(|| meta.get("source_chain_id"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let _ = crate::routes::chains::link_task_to_chain(
+                &db,
+                chain_id,
+                &id,
+                "spawned",
+                &json!({"source": "task_update"}),
+            );
+        }
     }
     if let Some(bb) = body.get("blocked_by") {
         let new_blockers: Vec<String> = bb
@@ -629,6 +680,18 @@ fn maybe_set_meta_string(meta: &mut Value, key: &str, value: Option<&Value>) {
     }
 }
 
+fn task_chain_id_from_metadata(metadata: &str) -> Option<String> {
+    serde_json::from_str::<Value>(metadata)
+        .ok()
+        .and_then(|m| {
+            m.get("chain_id")
+                .or_else(|| m.get("source_chain_id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+}
+
 async fn cancel_task(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -652,7 +715,10 @@ async fn cancel_task(
             Json(json!({"error":"Task not found"})),
         )
             .into_response(),
-        Ok(_) => Json(json!({"ok":true})).into_response(),
+        Ok(_) => {
+            let _ = crate::routes::chains::mark_task_status(&db, &id, "cancelled");
+            Json(json!({"ok":true})).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error":e.to_string()})),
@@ -982,6 +1048,7 @@ async fn complete_task(
         )
             .into_response();
     }
+    let _ = crate::routes::chains::mark_task_status(&db, &id, "completed");
     let task = db
         .query_row(
             &format!("SELECT {TASK_COLS} FROM fleet_tasks WHERE id=?1"),
@@ -1178,6 +1245,11 @@ async fn set_review_result(
         )
             .into_response();
     }
+    let _ = crate::routes::chains::mark_task_status(
+        &db,
+        &id,
+        if result == "rejected" { "rejected" } else { "review_approved" },
+    );
 
     drop(db);
     let event_type = if result == "approved" {

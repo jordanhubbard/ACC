@@ -10,7 +10,7 @@ use rusqlite::{Connection, Result, params};
 use serde_json::Value;
 use std::path::Path;
 
-const CURRENT_VERSION: i64 = 8;
+const CURRENT_VERSION: i64 = 9;
 
 /// Open a database connection, create schema if needed, run any pending migrations.
 pub fn open(path: &str) -> Result<Connection> {
@@ -180,6 +180,85 @@ fn init_schema(conn: &Connection) -> Result<()> {
             workspace     TEXT NOT NULL DEFAULT 'default',
             updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
         );
+
+        CREATE TABLE IF NOT EXISTS conversation_chains (
+            id            TEXT PRIMARY KEY,
+            source        TEXT NOT NULL,
+            workspace     TEXT NOT NULL DEFAULT '',
+            channel_id    TEXT NOT NULL DEFAULT '',
+            thread_id     TEXT NOT NULL DEFAULT '',
+            root_event_id TEXT,
+            title         TEXT NOT NULL DEFAULT '',
+            summary       TEXT NOT NULL DEFAULT '',
+            status        TEXT NOT NULL DEFAULT 'active',
+            outcome       TEXT,
+            created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            closed_at     TEXT,
+            metadata      TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_chains_source
+            ON conversation_chains(source, workspace, channel_id, thread_id);
+        CREATE INDEX IF NOT EXISTS idx_conversation_chains_status
+            ON conversation_chains(status, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS conversation_chain_events (
+            id              TEXT PRIMARY KEY,
+            chain_id        TEXT NOT NULL,
+            event_type      TEXT NOT NULL,
+            source_event_id TEXT,
+            actor_id        TEXT,
+            actor_name      TEXT,
+            actor_kind      TEXT,
+            text            TEXT,
+            occurred_at     TEXT NOT NULL,
+            created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            metadata        TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_chain_events_chain
+            ON conversation_chain_events(chain_id, occurred_at ASC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_chain_events_source
+            ON conversation_chain_events(chain_id, source_event_id)
+            WHERE source_event_id IS NOT NULL AND source_event_id != '';
+
+        CREATE TABLE IF NOT EXISTS conversation_chain_participants (
+            chain_id         TEXT NOT NULL,
+            participant_id   TEXT NOT NULL,
+            platform         TEXT NOT NULL DEFAULT '',
+            display_name     TEXT,
+            participant_kind TEXT NOT NULL DEFAULT 'human',
+            first_seen_at    TEXT NOT NULL,
+            last_seen_at     TEXT NOT NULL,
+            metadata         TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (chain_id, participant_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_chain_participants_id
+            ON conversation_chain_participants(participant_id);
+
+        CREATE TABLE IF NOT EXISTS conversation_chain_entities (
+            chain_id      TEXT NOT NULL,
+            entity_type   TEXT NOT NULL,
+            entity_id     TEXT NOT NULL,
+            label         TEXT,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at  TEXT NOT NULL,
+            metadata      TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (chain_id, entity_type, entity_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_chain_entities_id
+            ON conversation_chain_entities(entity_type, entity_id);
+
+        CREATE TABLE IF NOT EXISTS conversation_chain_tasks (
+            chain_id     TEXT NOT NULL,
+            task_id      TEXT NOT NULL,
+            relationship TEXT NOT NULL DEFAULT 'spawned',
+            created_at   TEXT NOT NULL,
+            resolved_at  TEXT,
+            metadata     TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (chain_id, task_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_chain_tasks_task
+            ON conversation_chain_tasks(task_id);
 
         CREATE TABLE IF NOT EXISTS vault_meta (
             key   TEXT PRIMARY KEY,
@@ -376,6 +455,90 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             );
         ")?;
         tracing::info!("Migration v8 applied: vault_meta and vault_secrets tables");
+    }
+
+    if version < 9 {
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS conversation_chains (
+                id            TEXT PRIMARY KEY,
+                source        TEXT NOT NULL,
+                workspace     TEXT NOT NULL DEFAULT '',
+                channel_id    TEXT NOT NULL DEFAULT '',
+                thread_id     TEXT NOT NULL DEFAULT '',
+                root_event_id TEXT,
+                title         TEXT NOT NULL DEFAULT '',
+                summary       TEXT NOT NULL DEFAULT '',
+                status        TEXT NOT NULL DEFAULT 'active',
+                outcome       TEXT,
+                created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                closed_at     TEXT,
+                metadata      TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversation_chains_source
+                ON conversation_chains(source, workspace, channel_id, thread_id);
+            CREATE INDEX IF NOT EXISTS idx_conversation_chains_status
+                ON conversation_chains(status, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS conversation_chain_events (
+                id              TEXT PRIMARY KEY,
+                chain_id        TEXT NOT NULL,
+                event_type      TEXT NOT NULL,
+                source_event_id TEXT,
+                actor_id        TEXT,
+                actor_name      TEXT,
+                actor_kind      TEXT,
+                text            TEXT,
+                occurred_at     TEXT NOT NULL,
+                created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                metadata        TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversation_chain_events_chain
+                ON conversation_chain_events(chain_id, occurred_at ASC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_chain_events_source
+                ON conversation_chain_events(chain_id, source_event_id)
+                WHERE source_event_id IS NOT NULL AND source_event_id != '';
+
+            CREATE TABLE IF NOT EXISTS conversation_chain_participants (
+                chain_id         TEXT NOT NULL,
+                participant_id   TEXT NOT NULL,
+                platform         TEXT NOT NULL DEFAULT '',
+                display_name     TEXT,
+                participant_kind TEXT NOT NULL DEFAULT 'human',
+                first_seen_at    TEXT NOT NULL,
+                last_seen_at     TEXT NOT NULL,
+                metadata         TEXT NOT NULL DEFAULT '{}',
+                PRIMARY KEY (chain_id, participant_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversation_chain_participants_id
+                ON conversation_chain_participants(participant_id);
+
+            CREATE TABLE IF NOT EXISTS conversation_chain_entities (
+                chain_id      TEXT NOT NULL,
+                entity_type   TEXT NOT NULL,
+                entity_id     TEXT NOT NULL,
+                label         TEXT,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at  TEXT NOT NULL,
+                metadata      TEXT NOT NULL DEFAULT '{}',
+                PRIMARY KEY (chain_id, entity_type, entity_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversation_chain_entities_id
+                ON conversation_chain_entities(entity_type, entity_id);
+
+            CREATE TABLE IF NOT EXISTS conversation_chain_tasks (
+                chain_id     TEXT NOT NULL,
+                task_id      TEXT NOT NULL,
+                relationship TEXT NOT NULL DEFAULT 'spawned',
+                created_at   TEXT NOT NULL,
+                resolved_at  TEXT,
+                metadata     TEXT NOT NULL DEFAULT '{}',
+                PRIMARY KEY (chain_id, task_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversation_chain_tasks_task
+                ON conversation_chain_tasks(task_id);
+        ")?;
+        tracing::info!("Migration v9 applied: conversation chain tables");
     }
 
     set_schema_version(conn, CURRENT_VERSION)?;

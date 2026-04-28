@@ -72,6 +72,8 @@ Queue items with `preferred_executor: claude_cli` are dispatched to this session
 
 Finalization is single-owner: commit role tasks are claimable only by the persisted `finisher_agent`. See [docs/workflow-runbook.md](docs/workflow-runbook.md).
 
+Slack and Telegram provenance is captured as durable conversation chains linking messages, reactions, participants, entities, outcomes, and spawned tasks. See [docs/conversation-chains.md](docs/conversation-chains.md).
+
 ## Executor Routing
 
 Each task may carry executor and affinity fields:

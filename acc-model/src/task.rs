@@ -126,6 +126,8 @@ pub struct Task {
     pub finisher_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finisher_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_id: Option<String>,
 
     #[serde(default = "default_task_type")]
     pub task_type: TaskType,
@@ -178,6 +180,10 @@ pub struct CreateTaskRequest {
     pub finisher_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finisher_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_chain_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -81,8 +81,15 @@ pub async fn run(workspace: Option<&str>) {
     // Start Slack if tokens were resolved.
     match slack_tokens {
         Some((bot_token, app_token)) => {
-            match slack::SlackAdapter::new(sessions.clone(), agent.clone(), bot_token, app_token)
-                .await
+            match slack::SlackAdapter::new(
+                sessions.clone(),
+                agent.clone(),
+                client.clone(),
+                ws_label.clone(),
+                bot_token,
+                app_token,
+            )
+            .await
             {
                 Some(adapter) => {
                     eprintln!(
@@ -104,7 +111,7 @@ pub async fn run(workspace: Option<&str>) {
 
     // Start Telegram if configured (only for default workspace — no per-workspace Telegram).
     if workspace.is_none() {
-        match telegram::TelegramAdapter::new(sessions.clone(), agent.clone()).await {
+        match telegram::TelegramAdapter::new(sessions.clone(), agent.clone(), client.clone()).await {
             Some(adapter) => {
                 eprintln!("[hermes-gateway/default] Telegram adapter started");
                 let adapter = Arc::new(adapter);

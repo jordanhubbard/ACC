@@ -16,6 +16,7 @@
 pub mod agents;
 pub mod auth;
 pub mod bus;
+pub mod chains;
 pub mod error;
 pub mod items;
 pub mod llm_config;
@@ -154,6 +155,11 @@ impl Client {
     /// Entry point for bus send/messages/SSE stream.
     pub fn bus(&self) -> bus::BusApi<'_> {
         bus::BusApi { client: self }
+    }
+
+    /// Entry point for durable conversation-chain provenance.
+    pub fn chains(&self) -> chains::ChainsApi<'_> {
+        chains::ChainsApi { client: self }
     }
 
     /// Entry point for memory search/store.

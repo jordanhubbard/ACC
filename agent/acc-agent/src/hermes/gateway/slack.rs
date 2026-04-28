@@ -8,6 +8,7 @@ use tracing::Instrument;
 
 use super::session::SessionStore;
 use super::super::agent::HermesAgent;
+use acc_client::Client;
 
 fn new_trace_id() -> String {
     static CTR: AtomicU64 = AtomicU64::new(0);
@@ -31,6 +32,8 @@ pub struct SlackAdapter {
     bot_token: String,
     bot_user_id: String,
     http: reqwest::Client,
+    client: Client,
+    workspace: String,
     sessions: Arc<SessionStore>,
     agent: Arc<HermesAgent>,
     active: Arc<Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>>,
@@ -47,6 +50,8 @@ impl SlackAdapter {
     pub async fn new(
         sessions: Arc<SessionStore>,
         agent: Arc<HermesAgent>,
+        client: Client,
+        workspace: String,
         bot_token: String,
         app_token: String,
     ) -> Option<Self> {
@@ -68,7 +73,7 @@ impl SlackAdapter {
         tracing::info!("[slack] connected as {} ({})", resp["user"].as_str().unwrap_or("?"), bot_user_id);
 
         Some(Self {
-            app_token, bot_token, bot_user_id, http, sessions, agent,
+            app_token, bot_token, bot_user_id, http, client, workspace, sessions, agent,
             active: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
     }
@@ -159,10 +164,19 @@ impl SlackAdapter {
 
     async fn handle_event(&self, event: &Value) {
         let event_type = event["type"].as_str().unwrap_or("");
-        let user = event["user"].as_str().unwrap_or("");
+        if event_type == "reaction_added" {
+            self.handle_reaction(event).await;
+            return;
+        }
 
-        // Ignore bot's own messages and other bots.
-        if user == self.bot_user_id || event["bot_id"].is_string() { return; }
+        let user = event["user"]
+            .as_str()
+            .or_else(|| event["bot_id"].as_str())
+            .unwrap_or("");
+
+        // Ignore our own messages. Other bots are recorded as context, but we
+        // don't respond to them.
+        if user == self.bot_user_id { return; }
         // Ignore message_changed / message_deleted subtypes.
         if event["subtype"].is_string() { return; }
 
@@ -172,6 +186,57 @@ impl SlackAdapter {
         let channel_type = event["channel_type"].as_str().unwrap_or("");
 
         let raw_text = event["text"].as_str().unwrap_or("").to_string();
+        if raw_text.is_empty() && event_type == "message" {
+            return;
+        }
+
+        let root_ts = thread_ts.clone().unwrap_or_else(|| msg_ts.clone());
+        let chain_id = slack_chain_id(&self.workspace, &channel, &root_ts);
+        self.record_chain_event(
+            &chain_id,
+            json!({
+                "id": chain_id,
+                "source": "slack",
+                "workspace": self.workspace,
+                "channel_id": channel,
+                "thread_id": root_ts,
+                "root_event_id": root_ts,
+                "participants": [{
+                    "id": user,
+                    "platform": "slack",
+                    "kind": if event["bot_id"].is_string() { "bot" } else { "human" }
+                }],
+                "entities": [{
+                    "type": "slack_channel",
+                    "id": channel
+                }]
+            }),
+            json!({
+                "event_type": "message",
+                "source": "slack",
+                "source_event_id": msg_ts,
+                "actor_id": user,
+                "actor_kind": if event["bot_id"].is_string() { "bot" } else { "human" },
+                "text": raw_text,
+                "occurred_at": slack_ts_to_rfc3339(event["ts"].as_str()),
+                "participants": [{
+                    "id": user,
+                    "platform": "slack",
+                    "kind": if event["bot_id"].is_string() { "bot" } else { "human" }
+                }],
+                "entities": [{
+                    "type": "slack_channel",
+                    "id": channel
+                }],
+                "metadata": {
+                    "channel_type": channel_type,
+                    "thread_ts": event["thread_ts"],
+                    "slack_type": event_type
+                }
+            }),
+        ).await;
+
+        if event["bot_id"].is_string() { return; }
 
         // Determine if we should respond.
         let (should_respond, clean_text) = match event_type {
@@ -195,6 +260,17 @@ impl SlackAdapter {
             let key = session_key(&channel, user, channel_type);
             self.sessions.clear(&key).await;
             let _ = self.post_message(&channel, thread_ts.as_deref(), "Conversation reset.").await;
+            self.record_chain_event(
+                &chain_id,
+                json!({"id": chain_id, "source": "slack", "workspace": self.workspace, "channel_id": channel, "thread_id": root_ts}),
+                json!({
+                    "event_type": "session_reset",
+                    "source": "slack",
+                    "actor_id": user,
+                    "actor_kind": "human",
+                    "text": "/reset"
+                }),
+            ).await;
             return;
         }
 
@@ -234,9 +310,77 @@ impl SlackAdapter {
                 tracing::warn!("[slack] post error: {e}");
             }
         }
+        self.record_chain_event(
+            &chain_id,
+            json!({"id": chain_id, "source": "slack", "workspace": self.workspace, "channel_id": channel, "thread_id": root_ts}),
+            json!({
+                "event_type": if response.starts_with("I encountered an error:") { "error" } else { "bot_reply" },
+                "source": "slack",
+                "actor_id": self.bot_user_id,
+                "actor_kind": "bot",
+                "text": response,
+                "metadata": {
+                    "trace_id": trace_id
+                }
+            }),
+        ).await;
     }
 
-    async fn post_message(&self, channel: &str, thread_ts: Option<&str>, text: &str) -> Result<(), String> {
+    async fn handle_reaction(&self, event: &Value) {
+        let user = event["user"].as_str().unwrap_or("");
+        if user == self.bot_user_id || user.is_empty() { return; }
+        let channel = event["item"]["channel"].as_str().unwrap_or("");
+        let item_ts = event["item"]["ts"].as_str().unwrap_or("");
+        if channel.is_empty() || item_ts.is_empty() { return; }
+        let chain_id = slack_chain_id(&self.workspace, channel, item_ts);
+        let reaction = event["reaction"].as_str().unwrap_or("");
+        self.record_chain_event(
+            &chain_id,
+            json!({
+                "id": chain_id,
+                "source": "slack",
+                "workspace": self.workspace,
+                "channel_id": channel,
+                "thread_id": item_ts,
+                "root_event_id": item_ts,
+                "participants": [{
+                    "id": user,
+                    "platform": "slack",
+                    "kind": "human"
+                }],
+                "entities": [{
+                    "type": "slack_channel",
+                    "id": channel
+                }]
+            }),
+            json!({
+                "event_type": "reaction",
+                "source": "slack",
+                "source_event_id": format!("reaction:{channel}:{item_ts}:{user}:{reaction}"),
+                "actor_id": user,
+                "actor_kind": "human",
+                "text": format!(":{reaction}:"),
+                "occurred_at": slack_ts_to_rfc3339(event["event_ts"].as_str()),
+                "metadata": {
+                    "reaction": reaction,
+                    "item_ts": item_ts,
+                    "item_type": event["item"]["type"]
+                }
+            }),
+        ).await;
+    }
+
+    async fn record_chain_event(&self, chain_id: &str, chain: Value, event: Value) {
+        if let Err(e) = self.client.chains().upsert(&chain).await {
+            tracing::warn!("[slack] chain upsert failed for {chain_id}: {e}");
+            return;
+        }
+        if let Err(e) = self.client.chains().append_event(chain_id, &event).await {
+            tracing::warn!("[slack] chain event append failed for {chain_id}: {e}");
+        }
+    }
+
+    async fn post_message(&self, channel: &str, thread_ts: Option<&str>, text: &str) -> Result<Option<String>, String> {
         let mut body = json!({
             "channel": channel,
             "text": text,
@@ -256,7 +400,7 @@ impl SlackAdapter {
         if !resp["ok"].as_bool().unwrap_or(false) {
             return Err(format!("chat.postMessage: {}", resp["error"].as_str().unwrap_or("?")));
         }
-        Ok(())
+        Ok(resp["ts"].as_str().map(str::to_string))
     }
 }
 
@@ -266,6 +410,40 @@ fn session_key(channel: &str, user: &str, channel_type: &str) -> String {
     } else {
         format!("slack_{channel}_{user}")
     }
+}
+
+fn slack_chain_id(workspace: &str, channel: &str, root_ts: &str) -> String {
+    safe_chain_id(&["slack", workspace, channel, root_ts])
+}
+
+fn safe_chain_id(parts: &[&str]) -> String {
+    let mut id = parts
+        .iter()
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            p.chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect::<String>()
+                .trim_matches('-')
+                .to_ascii_lowercase()
+        })
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if !id.starts_with("chain-") {
+        id = format!("chain-{id}");
+    }
+    id
+}
+
+fn slack_ts_to_rfc3339(ts: Option<&str>) -> String {
+    let secs = ts
+        .and_then(|s| s.split('.').next())
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or_else(|| chrono::Utc::now().timestamp());
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
+        .unwrap_or_else(chrono::Utc::now)
+        .to_rfc3339()
 }
 
 fn split_message(text: &str, limit: usize) -> Vec<String> {

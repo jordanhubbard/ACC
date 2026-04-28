@@ -54,6 +54,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .merge(routes::logs::router())
         .merge(routes::panes::router())
         .merge(routes::chat_sessions::router())
+        .merge(routes::chains::router())
         .merge(routes::vault::router())
         .layer(cors)
         .with_state(state)
