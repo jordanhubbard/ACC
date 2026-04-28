@@ -35,6 +35,17 @@ const HISTORY_LIMIT: u32 = 100;
 const CHANNELS_PAGE_LIMIT: u32 = 200;
 const MIN_TEXT_LEN: usize = 10;
 
+// Pacing for the embed endpoint: keep one call per channel, but space
+// them out so a single cycle does not burst-trip the per-minute quota
+// upstream providers like NIM enforce. Coupled with retry-on-429
+// below, this keeps a 200-channel cycle inside its rate budget.
+const INTER_CHANNEL_DELAY: Duration = Duration::from_millis(400);
+const EMBED_RETRY_429_DELAYS: &[Duration] = &[
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+];
+
 /// Workspaces and bots checked in every cycle. The service silently skips
 /// any (workspace, bot) pair that does not have a `bot-token` secret
 /// stored, so adding or removing bots is a vault operation, not a code
@@ -169,10 +180,13 @@ async fn run_cycle(
 
             for ch in &channels {
                 let ch_id = ch["id"].as_str().unwrap_or("");
-                let ch_name = ch["name"].as_str().unwrap_or("");
                 if ch_id.is_empty() {
                     continue;
                 }
+                // DMs / MPDMs come back without a `name` field; fall back to
+                // the channel ID so log lines and payloads still identify
+                // the conversation.
+                let ch_name = ch["name"].as_str().filter(|s| !s.is_empty()).unwrap_or(ch_id);
                 stats.channels_visited += 1;
 
                 let wm_key = format!("{ws}.{ch_id}");
@@ -203,7 +217,7 @@ async fn run_cycle(
                 }
 
                 let texts: Vec<&str> = chunks.iter().map(|(_, t, _)| t.as_str()).collect();
-                let vectors = match embed.embed(&texts).await {
+                let vectors = match embed_with_retry(embed, &texts).await {
                     Ok(v) => v,
                     Err(e) => {
                         eprintln!("[slack-ingest] {ws}/{bot}/{ch_name}: embed: {e}");
@@ -230,11 +244,41 @@ async fn run_cycle(
                     "[slack-ingest] {ws}/{bot}/{ch_name}: +{} messages",
                     chunks.len()
                 );
+                tokio::time::sleep(INTER_CHANNEL_DELAY).await;
             }
         }
     }
 
     stats
+}
+
+async fn embed_with_retry(
+    embed: &EmbedClient,
+    texts: &[&str],
+) -> Result<Vec<Vec<f32>>, acc_qdrant::QdrantError> {
+    let mut last_err: Option<acc_qdrant::QdrantError> = None;
+    for (attempt, delay) in std::iter::once(&Duration::ZERO)
+        .chain(EMBED_RETRY_429_DELAYS.iter())
+        .enumerate()
+    {
+        if !delay.is_zero() {
+            tokio::time::sleep(*delay).await;
+        }
+        match embed.embed(texts).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let s = e.to_string();
+                if attempt < EMBED_RETRY_429_DELAYS.len() && s.contains("429") {
+                    last_err = Some(e);
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        acc_qdrant::QdrantError::Config("embed_with_retry exhausted".to_string())
+    }))
 }
 
 // ── Slack API helpers ─────────────────────────────────────────────────────────
